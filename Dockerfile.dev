@@ -1,0 +1,10 @@
+FROM node:20-bookworm-slim
+
+# Minimal tools for Nx/Nest/Angular workflows inside containers
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends git ca-certificates procps \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN corepack enable
+
+WORKDIR /workspace

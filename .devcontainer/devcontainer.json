@@ -1,0 +1,26 @@
+{
+  "name": "UAI Nivelacion",
+  "dockerComposeFile": [
+    "../docker-compose.dev.yml"
+  ],
+  "service": "api",
+  "workspaceFolder": "/workspace",
+  "runServices": [
+    "mysql",
+    "deps",
+    "api",
+    "web",
+    "adminer"
+  ],
+  "shutdownAction": "stopCompose",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "angular.ng-template",
+        "ms-azuretools.vscode-docker"
+      ]
+    }
+  }
+}
