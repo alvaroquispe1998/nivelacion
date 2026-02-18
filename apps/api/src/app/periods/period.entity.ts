@@ -17,7 +17,7 @@ export class PeriodEntity {
   @Column({ type: 'varchar', length: 120 })
   name!: string;
 
-  @Column({ type: 'varchar', length: 20, default: 'LEVELING' })
+  @Column({ type: 'varchar', length: 20, default: 'NIVELACION' })
   kind!: string;
 
   @Column({ type: 'varchar', length: 20, default: 'ACTIVE' })

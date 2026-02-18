@@ -11,8 +11,8 @@ export class CreatePeriodDto {
 
   @IsOptional()
   @IsString()
-  @IsIn(['LEVELING', 'SEMESTER'])
-  kind?: 'LEVELING' | 'SEMESTER';
+  @IsIn(['NIVELACION', 'REGULAR'])
+  kind?: 'NIVELACION' | 'REGULAR';
 
   @IsOptional()
   @IsDateString()

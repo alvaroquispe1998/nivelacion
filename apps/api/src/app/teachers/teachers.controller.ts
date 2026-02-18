@@ -40,7 +40,6 @@ export class TeachersController {
     const created = await this.teachersService.create({
       dni: dto.dni,
       fullName: dto.fullName,
-      password: dto.password,
     });
     return {
       id: created.id,
@@ -54,7 +53,6 @@ export class TeachersController {
     const updated = await this.teachersService.update(id, {
       dni: dto.dni,
       fullName: dto.fullName,
-      password: dto.password,
     });
     return {
       id: updated.id,

@@ -3,9 +3,8 @@ import type { AttendanceStatus, Role } from './enums';
 export type Uuid = string;
 
 export interface AuthLoginRequest {
-  dni: string;
-  codigoAlumno?: string;
-  password?: string;
+  usuario: string;
+  password: string;
 }
 
 export interface AuthUser {

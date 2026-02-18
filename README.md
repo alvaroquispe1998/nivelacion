@@ -19,12 +19,6 @@ docker compose -f docker-compose.dev.yml up --build -d
 docker compose -f docker-compose.dev.yml exec -T api pnpm nx run api:migrate
 ```
 
-3. Cargar datos demo (seed):
-
-```sh
-docker compose -f docker-compose.dev.yml exec -T api pnpm nx run api:seed
-```
-
 ## Migraciones de base de datos
 
 ### Docker (recomendado)
@@ -64,15 +58,26 @@ MySQL (desde Adminer o cliente):
 - User: `uai`
 - Pass: `uai_pass`
 
-## Credenciales demo
+## Credenciales iniciales
 
-- ADMIN: DNI `00000000`, password `admin123`
-- ALUMNO: DNI `10000001`, codigoAlumno `A001`
+- ADMIN:
+  - Usuario: `administrador`
+  - Password: `Admin@UAI19`
+
+## Reglas de login
+
+- Campo `usuario`:
+  - ALUMNO: `codigoAlumno`
+  - DOCENTE: `dni`
+  - ADMIN: `administrador`
+- Campo `password`:
+  - ALUMNO: su `dni`
+  - DOCENTE: su `dni`
+  - ADMIN: `Admin@UAI19`
 
 ## Comandos utiles
 
 - Migrar DB: `npx nx run api:migrate`
-- Seed DB: `npx nx run api:seed`
 - Build API: `npx nx run api:build --configuration=development`
 - Build Web: `npx nx run web:build --configuration=development`
 

@@ -8,7 +8,7 @@ interface AdminPeriod {
   id: string;
   code: string;
   name: string;
-  kind: 'LEVELING' | 'SEMESTER';
+  kind: 'NIVELACION' | 'REGULAR';
   status: 'ACTIVE' | 'PLANNED' | 'CLOSED' | string;
   startsAt: string | null;
   endsAt: string | null;
@@ -60,8 +60,8 @@ interface AdminPeriod {
             class="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
             formControlName="kind"
           >
-            <option value="LEVELING">LEVELING</option>
-            <option value="SEMESTER">SEMESTER</option>
+            <option value="NIVELACION">NIVELACION</option>
+            <option value="REGULAR">REGULAR</option>
           </select>
           <div class="grid grid-cols-2 gap-2">
             <label class="text-xs text-slate-600">
@@ -157,7 +157,7 @@ export class AdminPeriodsPage {
   form = this.fb.group({
     code: ['', [Validators.required, Validators.maxLength(40)]],
     name: ['', [Validators.required, Validators.maxLength(120)]],
-    kind: ['LEVELING' as 'LEVELING' | 'SEMESTER', [Validators.required]],
+    kind: ['NIVELACION' as 'NIVELACION' | 'REGULAR', [Validators.required]],
     startsAt: [''],
     endsAt: [''],
   });
@@ -198,12 +198,12 @@ export class AdminPeriodsPage {
         this.http.post('/api/admin/periods', {
           code: String(v.code ?? '').trim(),
           name: String(v.name ?? '').trim(),
-          kind: v.kind ?? 'LEVELING',
+          kind: v.kind ?? 'NIVELACION',
           startsAt: String(v.startsAt ?? '').trim() || null,
           endsAt: String(v.endsAt ?? '').trim() || null,
         })
       );
-      this.form.reset({ code: '', name: '', kind: 'LEVELING', startsAt: '', endsAt: '' });
+      this.form.reset({ code: '', name: '', kind: 'NIVELACION', startsAt: '', endsAt: '' });
       await this.load();
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo crear periodo';

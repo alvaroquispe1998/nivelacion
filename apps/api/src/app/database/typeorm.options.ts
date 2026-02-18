@@ -28,6 +28,9 @@ import { SectionCourseRefactorAndDocenteUser015Migration1762300000000 } from './
 import { CatalogsUuid016Migration1762400000000 } from './migrations/016-catalogs-uuid.migration';
 import { PeriodsAndSectionCourses017Migration1762500000000 } from './migrations/017-periods-and-section-courses.migration';
 import { UsersStudentProfileFields018Migration1762600000000 } from './migrations/018-users-student-profile-fields.migration';
+import { SeedDefaultAdmin019Migration1762700000000 } from './migrations/019-seed-default-admin.migration';
+import { RemoveLegacyDemoAdmin020Migration1762800000000 } from './migrations/020-remove-legacy-demo-admin.migration';
+import { PeriodKindSpanishValues021Migration1762900000000 } from './migrations/021-period-kind-spanish-values.migration';
 
 export const TYPEORM_ENTITIES = [
   UserEntity,
@@ -59,6 +62,9 @@ export const TYPEORM_MIGRATIONS = [
   CatalogsUuid016Migration1762400000000,
   PeriodsAndSectionCourses017Migration1762500000000,
   UsersStudentProfileFields018Migration1762600000000,
+  SeedDefaultAdmin019Migration1762700000000,
+  RemoveLegacyDemoAdmin020Migration1762800000000,
+  PeriodKindSpanishValues021Migration1762900000000,
 ];
 
 export function createDataSourceOptionsFromEnv(): DataSourceOptions {

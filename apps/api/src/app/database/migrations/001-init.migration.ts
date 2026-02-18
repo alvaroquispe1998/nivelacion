@@ -97,6 +97,22 @@ export class Init001Migration1760000000000 implements MigrationInterface {
         CONSTRAINT FK_attendance_records_studentId FOREIGN KEY (studentId) REFERENCES users(id) ON DELETE CASCADE
       ) ENGINE=InnoDB;
     `);
+
+    await queryRunner.query(`
+      INSERT INTO users (id, codigoAlumno, dni, fullName, role, passwordHash, createdAt, updatedAt)
+      SELECT
+        UUID(),
+        NULL,
+        'administrador',
+        'Administrador UAI',
+        'ADMIN',
+        'PLAIN:Admin@UAI19',
+        NOW(6),
+        NOW(6)
+      WHERE NOT EXISTS (
+        SELECT 1 FROM users WHERE dni = 'administrador'
+      );
+    `);
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {

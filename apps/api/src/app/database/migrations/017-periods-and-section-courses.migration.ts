@@ -12,7 +12,7 @@ export class PeriodsAndSectionCourses017Migration1762500000000
         id CHAR(36) NOT NULL,
         code VARCHAR(40) NOT NULL,
         name VARCHAR(120) NOT NULL,
-        kind VARCHAR(20) NOT NULL DEFAULT 'LEVELING',
+        kind VARCHAR(20) NOT NULL DEFAULT 'NIVELACION',
         status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
         startsAt DATE NULL,
         endsAt DATE NULL,
@@ -28,7 +28,7 @@ export class PeriodsAndSectionCourses017Migration1762500000000
     if (hasAnyPeriods === 0) {
       await queryRunner.query(`
         INSERT INTO periods (id, code, name, kind, status, startsAt, endsAt, createdAt, updatedAt)
-        VALUES (UUID(), 'LEGACY', 'LEGACY', 'LEVELING', 'ACTIVE', NULL, NULL, NOW(6), NOW(6));
+        VALUES (UUID(), 'LEGACY', 'LEGACY', 'NIVELACION', 'ACTIVE', NULL, NULL, NOW(6), NOW(6));
       `);
     }
 
@@ -60,7 +60,7 @@ export class PeriodsAndSectionCourses017Migration1762500000000
     if (!activePeriodId) {
       await queryRunner.query(`
         INSERT INTO periods (id, code, name, kind, status, startsAt, endsAt, createdAt, updatedAt)
-        VALUES (UUID(), 'DEFAULT', 'DEFAULT', 'LEVELING', 'ACTIVE', NULL, NULL, NOW(6), NOW(6));
+        VALUES (UUID(), 'DEFAULT', 'DEFAULT', 'NIVELACION', 'ACTIVE', NULL, NULL, NOW(6), NOW(6));
       `);
       const rows: Array<{ id: string }> = await queryRunner.query(`
         SELECT id FROM periods WHERE code = 'DEFAULT' LIMIT 1;

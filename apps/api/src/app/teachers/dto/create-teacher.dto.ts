@@ -9,9 +9,4 @@ export class CreateTeacherDto {
   @IsNotEmpty()
   @MaxLength(180)
   fullName!: string;
-
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(80)
-  password!: string;
 }

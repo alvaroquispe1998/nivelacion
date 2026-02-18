@@ -19,7 +19,7 @@ export class PeriodsService {
   async create(params: {
     code: string;
     name: string;
-    kind?: 'LEVELING' | 'SEMESTER';
+    kind?: 'NIVELACION' | 'REGULAR';
     startsAt?: string | null;
     endsAt?: string | null;
   }) {
@@ -38,7 +38,7 @@ export class PeriodsService {
     const period = this.periodsRepo.create({
       code,
       name,
-      kind: params.kind ?? 'LEVELING',
+      kind: params.kind ?? 'NIVELACION',
       status: active ? 'PLANNED' : 'ACTIVE',
       startsAt: params.startsAt ?? null,
       endsAt: params.endsAt ?? null,

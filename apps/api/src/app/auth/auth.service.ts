@@ -15,57 +15,58 @@ export class AuthService {
     private readonly jwtService: JwtService
   ) {}
 
-  async login(body: {
-    dni: string;
-    codigoAlumno?: string;
-    password?: string;
-  }) {
-    const { dni, codigoAlumno, password } = body;
+  async login(body: { usuario: string; password: string }) {
+    const usuario = String(body.usuario ?? '').trim();
+    const password = String(body.password ?? '');
 
-    const isStudentLogin = Boolean(codigoAlumno);
-    const isStaffLogin = Boolean(password);
-
-    if (isStudentLogin === isStaffLogin) {
-      throw new BadRequestException(
-        'Provide either codigoAlumno (student) or password (staff)'
-      );
+    if (!usuario || !password) {
+      throw new BadRequestException('usuario and password are required');
     }
 
-    if (isStudentLogin) {
-      const user = await this.usersService.findAlumnoByDniCodigo(
-        dni,
-        codigoAlumno!
-      );
-      if (!user) throw new UnauthorizedException('Invalid credentials');
-
-      const payload = {
-        sub: user.id,
-        role: user.role,
-        fullName: user.fullName,
-        dni: user.dni,
-      };
-      return {
-        accessToken: await this.jwtService.signAsync(payload),
-        user: { id: user.id, fullName: user.fullName, role: user.role },
-      };
+    const alumno = await this.usersService.findAlumnoByCodigoAlumno(usuario);
+    if (alumno) {
+      if (password !== alumno.dni) {
+        throw new UnauthorizedException('Invalid credentials');
+      }
+      return this.buildAuthResponse(alumno);
     }
 
-    const user = await this.usersService.findStaffByDni(dni);
-    if (!user?.passwordHash) throw new UnauthorizedException('Invalid credentials');
+    const user = await this.usersService.findStaffByDni(usuario);
+    if (!user) throw new UnauthorizedException('Invalid credentials');
 
-    const ok = await this.verifyPassword(user.id, user.passwordHash, password!);
+    if (user.role === Role.DOCENTE) {
+      if (password !== user.dni) {
+        throw new UnauthorizedException('Invalid credentials');
+      }
+      return this.buildAuthResponse(user);
+    }
+
+    if (
+      user.role !== Role.ADMIN ||
+      user.dni !== 'administrador' ||
+      !user.passwordHash
+    ) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    const ok = await this.verifyPassword(user.id, user.passwordHash, password);
     if (!ok) throw new UnauthorizedException('Invalid credentials');
 
+    return this.buildAuthResponse(user);
+  }
+
+  private async buildAuthResponse(user: {
+    id: string;
+    role: Role;
+    fullName: string;
+    dni: string;
+  }) {
     const payload = {
       sub: user.id,
       role: user.role,
       fullName: user.fullName,
       dni: user.dni,
     };
-    if (![Role.ADMIN, Role.DOCENTE].includes(user.role)) {
-      throw new UnauthorizedException('Invalid credentials');
-    }
-
     return {
       accessToken: await this.jwtService.signAsync(payload),
       user: { id: user.id, fullName: user.fullName, role: user.role },

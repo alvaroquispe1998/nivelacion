@@ -27,6 +27,12 @@ export class UsersService {
     });
   }
 
+  async findAlumnoByCodigoAlumno(codigoAlumno: string): Promise<UserEntity | null> {
+    return this.usersRepo.findOne({
+      where: { codigoAlumno, role: Role.ALUMNO },
+    });
+  }
+
   async findAdminByDni(dni: string): Promise<UserEntity | null> {
     return this.usersRepo.findOne({ where: { dni, role: Role.ADMIN } });
   }

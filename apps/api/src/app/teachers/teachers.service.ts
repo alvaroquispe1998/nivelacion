@@ -23,10 +23,9 @@ export class TeachersService {
     });
   }
 
-  async create(params: { dni: string; fullName: string; password: string }) {
+  async create(params: { dni: string; fullName: string }) {
     const dni = String(params.dni || '').trim();
     const fullName = String(params.fullName || '').trim();
-    const password = String(params.password || '');
     const existing = await this.usersRepo.findOne({ where: { dni } });
     if (existing) {
       throw new ConflictException('Teacher DNI already exists');
@@ -36,19 +35,18 @@ export class TeachersService {
       fullName,
       role: Role.DOCENTE,
       codigoAlumno: null,
-      passwordHash: await bcrypt.hash(password, 10),
+      passwordHash: await bcrypt.hash(dni, 10),
     });
     return this.usersRepo.save(created);
   }
 
-  async update(id: string, params: { dni?: string; fullName?: string; password?: string }) {
+  async update(id: string, params: { dni?: string; fullName?: string }) {
     const teacher = await this.getByIdOrThrow(id);
     const nextDni = params.dni !== undefined ? String(params.dni).trim() : teacher.dni;
     const nextFullName =
       params.fullName !== undefined
         ? String(params.fullName).trim()
         : teacher.fullName;
-    const nextPassword = params.password !== undefined ? String(params.password) : null;
 
     if (nextDni !== teacher.dni) {
       const duplicate = await this.usersRepo.findOne({ where: { dni: nextDni } });
@@ -56,12 +54,10 @@ export class TeachersService {
         throw new ConflictException('Teacher DNI already exists');
       }
       teacher.dni = nextDni;
+      teacher.passwordHash = await bcrypt.hash(nextDni, 10);
     }
 
     teacher.fullName = nextFullName;
-    if (nextPassword !== null && nextPassword.length > 0) {
-      teacher.passwordHash = await bcrypt.hash(nextPassword, 10);
-    }
     return this.usersRepo.save(teacher);
   }
 

@@ -10,9 +10,4 @@ export class UpdateTeacherDto {
   @IsString()
   @MaxLength(180)
   fullName?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(80)
-  password?: string;
 }
