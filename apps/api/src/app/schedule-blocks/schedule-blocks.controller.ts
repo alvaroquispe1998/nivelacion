@@ -27,16 +27,22 @@ export class ScheduleBlocksController {
   constructor(private readonly blocksService: ScheduleBlocksService) {}
 
   @Get()
-  async list(@Query('sectionId') sectionId?: string) {
+  async list(
+    @Query('sectionId') sectionId?: string,
+    @Query('courseName') courseName?: string
+  ) {
     if (!sectionId) return [];
-    const blocks = await this.blocksService.listBySection(sectionId);
+    const blocks = await this.blocksService.listBySection(sectionId, courseName);
     return blocks.map((b) => ({
       id: b.id,
       sectionId: b.section.id,
+      sectionCourseId: b.sectionCourseId,
       courseName: b.courseName,
       dayOfWeek: b.dayOfWeek,
       startTime: b.startTime,
       endTime: b.endTime,
+      startDate: b.startDate,
+      endDate: b.endDate,
       zoomUrl: b.zoomUrl,
       location: b.location,
     }));
@@ -46,20 +52,26 @@ export class ScheduleBlocksController {
   async create(@Body() dto: CreateScheduleBlockDto) {
     const block = await this.blocksService.create({
       sectionId: dto.sectionId,
+      sectionCourseId: dto.sectionCourseId ?? null,
       courseName: dto.courseName,
       dayOfWeek: dto.dayOfWeek,
       startTime: dto.startTime,
       endTime: dto.endTime,
+      startDate: dto.startDate ?? null,
+      endDate: dto.endDate ?? null,
       zoomUrl: dto.zoomUrl ?? null,
       location: dto.location ?? null,
     });
     return {
       id: block.id,
       sectionId: block.section.id,
+      sectionCourseId: block.sectionCourseId,
       courseName: block.courseName,
       dayOfWeek: block.dayOfWeek,
       startTime: block.startTime,
       endTime: block.endTime,
+      startDate: block.startDate,
+      endDate: block.endDate,
       zoomUrl: block.zoomUrl,
       location: block.location,
     };
@@ -72,16 +84,21 @@ export class ScheduleBlocksController {
       dayOfWeek: dto.dayOfWeek,
       startTime: dto.startTime,
       endTime: dto.endTime,
+      startDate: dto.startDate ?? null,
+      endDate: dto.endDate ?? null,
       zoomUrl: dto.zoomUrl ?? null,
       location: dto.location ?? null,
     });
     return {
       id: block.id,
       sectionId: block.section.id,
+      sectionCourseId: block.sectionCourseId,
       courseName: block.courseName,
       dayOfWeek: block.dayOfWeek,
       startTime: block.startTime,
       endTime: block.endTime,
+      startDate: block.startDate,
+      endDate: block.endDate,
       zoomUrl: block.zoomUrl,
       location: block.location,
     };
@@ -92,4 +109,3 @@ export class ScheduleBlocksController {
     return this.blocksService.remove(id);
   }
 }
-

@@ -51,15 +51,28 @@ export interface AdminSection {
   initialCapacity?: number;
   maxExtraCapacity?: number;
   isAutoLeveling?: boolean;
+  studentCount?: number;
+  teacherId?: Uuid | null;
+  teacherDni?: string | null;
+  teacherName?: string | null;
+}
+
+export interface AdminTeacher {
+  id: Uuid;
+  dni: string;
+  fullName: string;
 }
 
 export interface AdminScheduleBlock {
   id: Uuid;
   sectionId: Uuid;
+  sectionCourseId?: Uuid | null;
   courseName: string;
   dayOfWeek: number;
   startTime: string;
   endTime: string;
+  startDate?: string | null;
+  endDate?: string | null;
   zoomUrl?: string | null;
   location?: string | null;
 }
@@ -94,6 +107,13 @@ export interface LevelingSectionPreview {
   maxExtraCapacity: number;
   studentCount: number;
   courses: string[];
+  students: Array<{
+    dni: string;
+    codigoAlumno: string | null;
+    fullName: string;
+    careerName: string;
+    sectionCourses: string[];
+  }>;
 }
 
 export interface LevelingPlanResponse {
@@ -104,6 +124,18 @@ export interface LevelingPlanResponse {
     unknownCareers: string[];
   };
   needsByCourse: Record<string, number>;
+  programNeeds: {
+    campuses: string[];
+    modalities: string[];
+    rows: Array<{
+      careerName: string;
+      facultyGroup: 'FICA' | 'SALUD';
+      campusName: string;
+      sourceModality: 'PRESENCIAL' | 'VIRTUAL' | 'SIN DATO';
+      needsByCourse: Record<string, number>;
+      totalNeeds: number;
+    }>;
+  };
   summary: {
     hoursPerGroup: number;
     pricePerHour: number;
@@ -115,11 +147,28 @@ export interface LevelingPlanResponse {
         campusName: string;
         modality: string;
         courseGroups: Record<string, number>;
+        courseGroupSizes: Record<string, number[]>;
         totalGroups: number;
       }>;
       totalGroups: number;
       totalHours: number;
       totalPay4Weeks: number;
+    }>;
+  };
+  groupPlan: {
+    byFaculty: Array<{
+      facultyGroup: string;
+      rows: Array<{
+        campusName: string;
+        courses: Record<
+          string,
+          Array<{
+            id: string;
+            size: number;
+            modality: 'PRESENCIAL' | 'VIRTUAL';
+          }>
+        >;
+      }>;
     }>;
   };
   sections: LevelingSectionPreview[];
@@ -128,6 +177,11 @@ export interface LevelingPlanResponse {
     sectionsUpdated: number;
     studentsCreated: number;
     studentsUpdated: number;
+    sectionCoursesCreated?: number;
+    sectionCoursesOmitted?: number;
+    sectionStudentCoursesCreated?: number;
+    sectionStudentCoursesOmitted?: number;
     enrollmentsCreated: number;
+    enrollmentsOmitted?: number;
   };
 }

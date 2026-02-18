@@ -1,15 +1,12 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AttendanceRecordEntity } from '../attendance/attendance-record.entity';
-import { EnrollmentEntity } from '../enrollments/enrollment.entity';
 import { ScheduleBlockEntity } from '../schedule-blocks/schedule-block.entity';
 
 @Injectable()
 export class StudentService {
   constructor(
-    @InjectRepository(EnrollmentEntity)
-    private readonly enrollmentsRepo: Repository<EnrollmentEntity>,
     @InjectRepository(ScheduleBlockEntity)
     private readonly blocksRepo: Repository<ScheduleBlockEntity>,
     @InjectRepository(AttendanceRecordEntity)
@@ -17,37 +14,46 @@ export class StudentService {
   ) {}
 
   async getSchedule(studentId: string) {
-    const enrollments = await this.enrollmentsRepo.find({
-      where: { student: { id: studentId } },
-      relations: { section: true, student: true },
-    });
-
-    const sectionIds = enrollments.map((e) => e.section.id);
-    if (sectionIds.length === 0) return [];
+    const sectionCourseIds = await this.loadSectionCourseMembershipIdsByStudent(studentId);
+    if (sectionCourseIds.length === 0) return [];
 
     const blocks = await this.blocksRepo.find({
-      where: sectionIds.map((id) => ({ section: { id } })),
+      where: sectionCourseIds.map((sectionCourseId) => ({ sectionCourseId })),
       relations: { section: true },
       order: { dayOfWeek: 'ASC', startTime: 'ASC' },
     });
 
-    return blocks.map((b) => ({
-      dayOfWeek: b.dayOfWeek,
-      startTime: b.startTime,
-      endTime: b.endTime,
-      courseName: b.courseName,
-      sectionName: b.section.name,
-      zoomUrl: b.zoomUrl,
-      location: b.location,
-    }));
+    return blocks
+      .map((b) => ({
+        dayOfWeek: b.dayOfWeek,
+        startTime: b.startTime,
+        endTime: b.endTime,
+        courseName: b.courseName,
+        sectionName: b.section.name,
+        zoomUrl: b.zoomUrl,
+        location: b.location,
+      }));
   }
 
   async getAttendance(studentId: string) {
+    const activePeriodId = await this.loadActivePeriodIdOrThrow();
     const records = await this.recordsRepo
       .createQueryBuilder('r')
       .innerJoinAndSelect('r.attendanceSession', 's')
       .innerJoinAndSelect('s.scheduleBlock', 'b')
       .where('r.studentId = :studentId', { studentId })
+      .andWhere('b.sectionCourseId IS NOT NULL')
+      .andWhere(
+        `
+        EXISTS (
+          SELECT 1
+          FROM section_courses sc
+          WHERE sc.id = b.sectionCourseId
+            AND sc.periodId = :periodId
+        )
+        `,
+        { periodId: activePeriodId }
+      )
       .orderBy('s.sessionDate', 'DESC')
       .getMany();
 
@@ -56,5 +62,40 @@ export class StudentService {
       sessionDate: r.attendanceSession.sessionDate,
       status: r.status,
     }));
+  }
+
+  private async loadSectionCourseMembershipIdsByStudent(studentId: string) {
+    const activePeriodId = await this.loadActivePeriodIdOrThrow();
+    const rows: Array<{ sectionCourseId: string }> = await this.blocksRepo.manager.query(
+      `
+      SELECT DISTINCT ssc.sectionCourseId AS sectionCourseId
+      FROM section_student_courses ssc
+      INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
+      WHERE ssc.studentId = ?
+        AND ssc.sectionCourseId IS NOT NULL
+        AND sc.periodId = ?
+      `,
+      [studentId, activePeriodId]
+    );
+    return rows
+      .map((x) => String(x.sectionCourseId || '').trim())
+      .filter(Boolean);
+  }
+
+  private async loadActivePeriodIdOrThrow() {
+    const rows: Array<{ id: string }> = await this.blocksRepo.manager.query(
+      `
+      SELECT id
+      FROM periods
+      WHERE status = 'ACTIVE'
+      ORDER BY updatedAt DESC, createdAt DESC
+      LIMIT 1
+      `
+    );
+    const id = String(rows[0]?.id ?? '').trim();
+    if (!id) {
+      throw new BadRequestException('No active period configured');
+    }
+    return id;
   }
 }

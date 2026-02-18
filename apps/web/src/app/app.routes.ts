@@ -39,6 +39,33 @@ export const appRoutes: Route[] = [
           ),
       },
       {
+        path: 'teacher/schedule',
+        canActivate: [roleGuard],
+        data: { roles: [Role.DOCENTE] },
+        loadComponent: () =>
+          import('./pages/teacher-schedule.page').then(
+            (m) => m.TeacherSchedulePage
+          ),
+      },
+      {
+        path: 'teacher/attendance',
+        canActivate: [roleGuard],
+        data: { roles: [Role.DOCENTE] },
+        loadComponent: () =>
+          import('./pages/teacher-attendance.page').then(
+            (m) => m.TeacherAttendancePage
+          ),
+      },
+      {
+        path: 'teacher/attendance/:sectionCourseId',
+        canActivate: [roleGuard],
+        data: { roles: [Role.DOCENTE] },
+        loadComponent: () =>
+          import('./pages/teacher-section-attendance.page').then(
+            (m) => m.TeacherSectionAttendancePage
+          ),
+      },
+      {
         path: 'admin/sections',
         canActivate: [roleGuard],
         data: { roles: [Role.ADMIN] },
@@ -54,6 +81,33 @@ export const appRoutes: Route[] = [
         loadComponent: () =>
           import('./pages/admin-leveling.page').then(
             (m) => m.AdminLevelingPage
+          ),
+      },
+      {
+        path: 'admin/teachers',
+        canActivate: [roleGuard],
+        data: { roles: [Role.ADMIN] },
+        loadComponent: () =>
+          import('./pages/admin-teachers.page').then(
+            (m) => m.AdminTeachersPage
+          ),
+      },
+      {
+        path: 'admin/periods',
+        canActivate: [roleGuard],
+        data: { roles: [Role.ADMIN] },
+        loadComponent: () =>
+          import('./pages/admin-periods.page').then(
+            (m) => m.AdminPeriodsPage
+          ),
+      },
+      {
+        path: 'admin/export',
+        canActivate: [roleGuard],
+        data: { roles: [Role.ADMIN] },
+        loadComponent: () =>
+          import('./pages/admin-export-assigned.page').then(
+            (m) => m.AdminExportAssignedPage
           ),
       },
       {

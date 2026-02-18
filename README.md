@@ -10,13 +10,44 @@ Monorepo Nx:
 1. Iniciar servicios:
 
 ```sh
-docker compose -f docker-compose.dev.yml up -d --build
+docker compose -f docker-compose.dev.yml up --build -d
 ```
 
-2. Cargar datos demo (seeds):
+2. Ejecutar migraciones (manual, opcional):
+
+```sh
+docker compose -f docker-compose.dev.yml exec -T api pnpm nx run api:migrate
+```
+
+3. Cargar datos demo (seed):
 
 ```sh
 docker compose -f docker-compose.dev.yml exec -T api pnpm nx run api:seed
+```
+
+## Migraciones de base de datos
+
+### Docker (recomendado)
+
+- El servicio `api` arranca con `DB_RUN_MIGRATIONS=true`, por lo que las migraciones se ejecutan automaticamente al iniciar el backend.
+- Si quieres forzar ejecucion manual:
+
+```sh
+docker compose -f docker-compose.dev.yml exec -T api pnpm nx run api:migrate
+```
+
+### Local (sin Docker)
+
+1. Configura variables DB en tu entorno:
+   - `DB_HOST`
+   - `DB_PORT`
+   - `DB_USER`
+   - `DB_PASS`
+   - `DB_NAME`
+2. Ejecuta:
+
+```sh
+npx nx run api:migrate
 ```
 
 ## URLs (host)
@@ -38,13 +69,20 @@ MySQL (desde Adminer o cliente):
 - ADMIN: DNI `00000000`, password `admin123`
 - ALUMNO: DNI `10000001`, codigoAlumno `A001`
 
+## Comandos utiles
+
+- Migrar DB: `npx nx run api:migrate`
+- Seed DB: `npx nx run api:seed`
+- Build API: `npx nx run api:build --configuration=development`
+- Build Web: `npx nx run web:build --configuration=development`
+
 ## Notas Docker/Nx
 
 - `apps/web` usa proxy del dev-server: todas las llamadas van a `/api/...` (sin CORS).
 - `.nx` se aisla por contenedor via volumenes (`nx_api`, `nx_web`, `nx_deps`) para evitar locks compartidos.
 - El repo incluye tipos fallback en `types/` para evitar errores de IntelliSense cuando VSCode abre el proyecto sin `node_modules` local.
 
-## VSCode Recomendado
+## VSCode recomendado
 
 - Si quieres evitar por completo errores de tipos/modulos en host, abre el proyecto con Dev Containers.
 - Archivo incluido: `.devcontainer/devcontainer.json`.

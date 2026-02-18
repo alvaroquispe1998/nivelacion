@@ -23,7 +23,7 @@ export class AttendanceController {
     const session = await this.attendanceService.createSession({
       scheduleBlockId: dto.scheduleBlockId,
       sessionDate: dto.sessionDate,
-      createdByUserId: user.sub,
+      actorUserId: user.sub,
     });
     return {
       id: session.id,
@@ -46,7 +46,8 @@ export class AttendanceController {
   @Put(':id/records')
   update(
     @Param('id') id: string,
-    @Body() body: UpdateAttendanceRecordDto[]
+    @Body() body: UpdateAttendanceRecordDto[],
+    @CurrentUser() user: JwtUser
   ) {
     return this.attendanceService.updateRecords(
       id,
@@ -54,7 +55,8 @@ export class AttendanceController {
         studentId: x.studentId,
         status: x.status,
         notes: x.notes ?? null,
-      }))
+      })),
+      user.sub
     );
   }
 }

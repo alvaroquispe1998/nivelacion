@@ -7,8 +7,6 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { AttendanceStatus, Role } from '@uai/shared';
 import { Repository } from 'typeorm';
-import { EnrollmentEntity } from '../enrollments/enrollment.entity';
-import { EnrollmentsService } from '../enrollments/enrollments.service';
 import { ScheduleBlockEntity } from '../schedule-blocks/schedule-block.entity';
 import { UsersService } from '../users/users.service';
 import { AttendanceRecordEntity } from './attendance-record.entity';
@@ -23,16 +21,13 @@ export class AttendanceService {
     private readonly recordsRepo: Repository<AttendanceRecordEntity>,
     @InjectRepository(ScheduleBlockEntity)
     private readonly blocksRepo: Repository<ScheduleBlockEntity>,
-    @InjectRepository(EnrollmentEntity)
-    private readonly enrollmentsRepo: Repository<EnrollmentEntity>,
-    private readonly usersService: UsersService,
-    private readonly enrollmentsService: EnrollmentsService
+    private readonly usersService: UsersService
   ) {}
 
   async createSession(params: {
     scheduleBlockId: string;
     sessionDate: string;
-    createdByUserId: string;
+    actorUserId: string;
   }) {
     const block = await this.blocksRepo.findOne({
       where: { id: params.scheduleBlockId },
@@ -48,29 +43,35 @@ export class AttendanceService {
       throw new ConflictException('Attendance session already exists for this date');
     }
 
-    const createdBy = await this.usersService.getByIdOrThrow(params.createdByUserId);
-    if (createdBy.role !== Role.ADMIN) {
-      throw new BadRequestException('createdBy must be ADMIN');
+    const actor = await this.usersService.getByIdOrThrow(params.actorUserId);
+    if (![Role.ADMIN, Role.DOCENTE].includes(actor.role)) {
+      throw new BadRequestException('createdBy must be ADMIN or DOCENTE');
+    }
+    const sectionCourseId = await this.resolveSectionCourseIdForBlockOrThrow(block);
+    if (actor.role === Role.DOCENTE) {
+      await this.assertTeacherAssignedToSectionCourseOrThrow({
+        teacherId: actor.id,
+        sectionCourseId,
+      });
     }
 
     const session = this.sessionsRepo.create({
       scheduleBlock: block,
       sessionDate: params.sessionDate,
-      createdBy,
+      createdBy: actor,
     });
     await this.sessionsRepo.save(session);
 
-    const enrollments = await this.enrollmentsRepo.find({
-      where: { section: { id: block.section.id } },
-      relations: { student: true, section: true },
+    const studentIds = await this.loadStudentIdsBySectionCourse({
+      sectionCourseId,
     });
 
-    if (enrollments.length > 0) {
+    if (studentIds.length > 0) {
       await this.recordsRepo.save(
-        enrollments.map((e) =>
+        studentIds.map((studentId) =>
           this.recordsRepo.create({
             attendanceSession: session,
-            student: e.student,
+            student: { id: studentId } as any,
             status: AttendanceStatus.FALTO,
             notes: null,
           })
@@ -82,17 +83,34 @@ export class AttendanceService {
   }
 
   async listSessionsBySection(sectionId: string) {
-    const sessions = await this.sessionsRepo.find({
-      where: { scheduleBlock: { section: { id: sectionId } } },
-      relations: { scheduleBlock: { section: true } },
-      order: { sessionDate: 'DESC' },
-    });
+    const activePeriodId = await this.loadActivePeriodIdOrThrow();
+    const rows: Array<{
+      id: string;
+      scheduleBlockId: string;
+      sessionDate: string;
+      courseName: string;
+    }> = await this.blocksRepo.manager.query(
+      `
+      SELECT
+        ses.id AS id,
+        ses.scheduleBlockId AS scheduleBlockId,
+        ses.sessionDate AS sessionDate,
+        b.courseName AS courseName
+      FROM attendance_sessions ses
+      INNER JOIN schedule_blocks b ON b.id = ses.scheduleBlockId
+      INNER JOIN section_courses sc ON sc.id = b.sectionCourseId
+      WHERE b.sectionId = ?
+        AND sc.periodId = ?
+      ORDER BY ses.sessionDate DESC
+      `,
+      [sectionId, activePeriodId]
+    );
 
-    return sessions.map((s) => ({
-      id: s.id,
-      scheduleBlockId: s.scheduleBlock.id,
-      sessionDate: s.sessionDate,
-      courseName: s.scheduleBlock.courseName,
+    return rows.map((row) => ({
+      id: String(row.id),
+      scheduleBlockId: String(row.scheduleBlockId),
+      sessionDate: String(row.sessionDate),
+      courseName: String(row.courseName ?? ''),
     }));
   }
 
@@ -119,16 +137,30 @@ export class AttendanceService {
     }));
   }
 
-  async updateRecords(sessionId: string, items: Array<{ studentId: string; status: AttendanceStatus; notes?: string | null }>) {
+  async updateRecords(
+    sessionId: string,
+    items: Array<{ studentId: string; status: AttendanceStatus; notes?: string | null }>,
+    actorUserId: string
+  ) {
     const session = await this.getSessionOrThrow(sessionId);
-    const sectionId = session.scheduleBlock.section.id;
-
-    for (const it of items) {
-      await this.enrollmentsService.assertStudentInSectionOrThrow({
-        studentId: it.studentId,
-        sectionId,
+    const sectionCourseId = await this.resolveSectionCourseIdForBlockOrThrow(
+      session.scheduleBlock
+    );
+    const actor = await this.usersService.getByIdOrThrow(actorUserId);
+    if (![Role.ADMIN, Role.DOCENTE].includes(actor.role)) {
+      throw new BadRequestException('actor must be ADMIN or DOCENTE');
+    }
+    if (actor.role === Role.DOCENTE) {
+      await this.assertTeacherAssignedToSectionCourseOrThrow({
+        teacherId: actor.id,
+        sectionCourseId,
       });
     }
+    const studentIds = Array.from(new Set(items.map((x) => x.studentId).filter(Boolean)));
+    await this.assertStudentsInSectionCourseOrThrow({
+      sectionCourseId,
+      studentIds,
+    });
 
     for (const it of items) {
       const record = await this.recordsRepo.findOne({
@@ -136,11 +168,10 @@ export class AttendanceService {
         relations: { attendanceSession: true, student: true },
       });
       if (!record) {
-        const student = await this.usersService.getByIdOrThrow(it.studentId);
         await this.recordsRepo.save(
           this.recordsRepo.create({
             attendanceSession: session,
-            student,
+            student: { id: it.studentId } as any,
             status: it.status,
             notes: it.notes ?? null,
           })
@@ -155,5 +186,152 @@ export class AttendanceService {
 
     return { ok: true };
   }
-}
 
+  async listSessionsBySectionCourse(sectionCourseId: string) {
+    const sessions = await this.sessionsRepo.find({
+      where: { scheduleBlock: { sectionCourseId } },
+      relations: { scheduleBlock: true },
+      order: { sessionDate: 'DESC' },
+    });
+    return sessions.map((s) => ({
+      id: s.id,
+      scheduleBlockId: s.scheduleBlock.id,
+      sessionDate: s.sessionDate,
+      courseName: s.scheduleBlock.courseName,
+      sectionCourseId: s.scheduleBlock.sectionCourseId,
+    }));
+  }
+
+  async canTeacherManageSession(sessionId: string, teacherId: string) {
+    const session = await this.getSessionOrThrow(sessionId);
+    const sectionCourseId = await this.resolveSectionCourseIdForBlockOrThrow(
+      session.scheduleBlock
+    );
+    const rows: Array<{ c: number }> = await this.blocksRepo.manager.query(
+      `
+      SELECT COUNT(*) AS c
+      FROM section_course_teachers
+      WHERE teacherId = ?
+        AND sectionCourseId = ?
+      `
+      ,
+      [teacherId, sectionCourseId]
+    );
+    return Number(rows[0]?.c ?? 0) > 0;
+  }
+
+  private async resolveSectionCourseIdForBlockOrThrow(block: ScheduleBlockEntity) {
+    if (block.sectionCourseId) return String(block.sectionCourseId);
+    const sectionId = String(block.section?.id ?? '').trim();
+    if (!sectionId) {
+      throw new BadRequestException('Schedule block section not found');
+    }
+    const activePeriodId = await this.loadActivePeriodIdOrThrow();
+    const rows: Array<{ id: string; name: string }> = await this.blocksRepo.manager.query(
+      `
+      SELECT sc.id AS id, c.name AS name
+      FROM section_courses sc
+      INNER JOIN courses c ON c.id = sc.courseId
+      WHERE sc.sectionId = ?
+        AND sc.periodId = ?
+      `,
+      [sectionId, activePeriodId]
+    );
+    const blockKey = this.courseKey(block.courseName);
+    const matched = rows.find((row) => this.courseKey(row.name) === blockKey);
+    if (!matched?.id) {
+      throw new BadRequestException(
+        `Section-course relation not found for block ${block.id} (${block.courseName})`
+      );
+    }
+    return String(matched.id);
+  }
+
+  private async loadActivePeriodIdOrThrow() {
+    const rows: Array<{ id: string }> = await this.blocksRepo.manager.query(
+      `
+      SELECT id
+      FROM periods
+      WHERE status = 'ACTIVE'
+      ORDER BY updatedAt DESC, createdAt DESC
+      LIMIT 1
+      `
+    );
+    const id = String(rows[0]?.id ?? '').trim();
+    if (!id) {
+      throw new BadRequestException('No active period configured');
+    }
+    return id;
+  }
+
+  private async loadStudentIdsBySectionCourse(params: {
+    sectionCourseId: string;
+  }) {
+    const rows: Array<{ studentId: string }> = await this.blocksRepo.manager.query(
+      `
+      SELECT DISTINCT studentId
+      FROM section_student_courses
+      WHERE sectionCourseId = ?
+      `,
+      [params.sectionCourseId]
+    );
+    return rows.map((x) => String(x.studentId));
+  }
+
+  private async assertStudentsInSectionCourseOrThrow(params: {
+    sectionCourseId: string;
+    studentIds: string[];
+  }) {
+    if (params.studentIds.length === 0) return;
+    const uniqueStudentIds = Array.from(new Set(params.studentIds));
+    const placeholders = uniqueStudentIds.map(() => '?').join(', ');
+    const rows: Array<{ studentId: string }> = await this.blocksRepo.manager.query(
+      `
+      SELECT studentId
+      FROM section_student_courses
+      WHERE sectionCourseId = ?
+        AND studentId IN (${placeholders})
+      `,
+      [params.sectionCourseId, ...uniqueStudentIds]
+    );
+    const allowed = new Set(rows.map((x) => String(x.studentId)));
+    const missing = uniqueStudentIds.filter((id) => !allowed.has(id));
+    if (missing.length > 0) {
+      throw new BadRequestException(
+        `Students are not assigned to this section course: ${missing.join(', ')}`
+      );
+    }
+  }
+
+  private async assertTeacherAssignedToSectionCourseOrThrow(params: {
+    teacherId: string;
+    sectionCourseId: string;
+  }) {
+    const rows: Array<{ c: number }> = await this.blocksRepo.manager.query(
+      `
+      SELECT COUNT(*) AS c
+      FROM section_course_teachers
+      WHERE teacherId = ?
+        AND sectionCourseId = ?
+      `,
+      [params.teacherId, params.sectionCourseId]
+    );
+    if (Number(rows[0]?.c ?? 0) > 0) return;
+    throw new BadRequestException(
+      `Teacher ${params.teacherId} is not assigned to section-course ${params.sectionCourseId}`
+    );
+  }
+
+  private courseKey(value: string) {
+    return this.norm(value).replace(/[.,]/g, '').replace(/\s+/g, ' ').trim();
+  }
+
+  private norm(value: string) {
+    return String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toUpperCase();
+  }
+}

@@ -10,7 +10,7 @@ export const roleGuard: CanActivateFn = async (route: ActivatedRouteSnapshot) =>
   const roles = (route.data['roles'] as Role[] | undefined) ?? [];
   if (roles.length === 0) return true;
 
-  if (!auth.user && auth.token) {
+  if (auth.token) {
     await auth.loadMe();
   }
 
@@ -19,4 +19,3 @@ export const roleGuard: CanActivateFn = async (route: ActivatedRouteSnapshot) =>
 
   return router.createUrlTree(['/login']);
 };
-

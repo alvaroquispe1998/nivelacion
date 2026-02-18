@@ -7,7 +7,6 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { EnrollmentEntity } from '../enrollments/enrollment.entity';
 import { AttendanceRecordEntity } from '../attendance/attendance-record.entity';
 import { AttendanceSessionEntity } from '../attendance/attendance-session.entity';
 
@@ -25,6 +24,21 @@ export class UserEntity {
   @Column({ type: 'varchar', length: 200 })
   fullName!: string;
 
+  @Column({ type: 'varchar', length: 160, nullable: true })
+  names!: string | null;
+
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  paternalLastName!: string | null;
+
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  maternalLastName!: string | null;
+
+  @Column({ type: 'varchar', length: 200, nullable: true })
+  email!: string | null;
+
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  sex!: string | null;
+
   @Column({ type: 'enum', enum: Role })
   role!: Role;
 
@@ -37,13 +51,9 @@ export class UserEntity {
   @UpdateDateColumn()
   updatedAt!: Date;
 
-  @OneToMany(() => EnrollmentEntity, (e) => e.student)
-  enrollments!: EnrollmentEntity[];
-
   @OneToMany(() => AttendanceSessionEntity, (s) => s.createdBy)
   createdAttendanceSessions!: AttendanceSessionEntity[];
 
   @OneToMany(() => AttendanceRecordEntity, (r) => r.student)
   attendanceRecords!: AttendanceRecordEntity[];
 }
-

@@ -51,6 +51,7 @@ export class LevelingController {
       initialCapacity: dto.initialCapacity,
       maxExtraCapacity: dto.maxExtraCapacity,
       apply: dto.apply,
+      groupModalityOverrides: dto.groupModalityOverrides,
     });
   }
 }

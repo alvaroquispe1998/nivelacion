@@ -2,105 +2,93 @@ import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { ChangeDetectorRef, Component, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute } from '@angular/router';
 import { AttendanceStatus } from '@uai/shared';
 import type { AdminAttendanceRecord, AdminAttendanceSession, AdminScheduleBlock } from '@uai/shared';
-import { firstValueFrom } from 'rxjs';
+import { combineLatest, firstValueFrom } from 'rxjs';
 import type { Subscription } from 'rxjs';
+import { DAYS } from '../shared/days';
+
+const COURSE_CONTEXT_STORAGE_KEY = 'admin.sections.selectedCourseName';
+
+interface SectionStudentRow {
+  id: string;
+  dni: string;
+  codigoAlumno: string | null;
+  fullName: string;
+}
 
 @Component({
   standalone: true,
-  imports: [CommonModule, ReactiveFormsModule, FormsModule],
+  imports: [CommonModule, FormsModule],
   template: `
-    <div class="flex items-center justify-between">
-      <div>
-        <div class="text-xl font-semibold">Asistencia de seccion</div>
-        <div class="text-sm text-slate-600">Crear sesiones y marcar asistencia</div>
+    <div class="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5">
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div class="text-xl font-semibold">Asistencia de seccion</div>
+          <div class="text-sm text-slate-600">
+            Matriz por alumnos y semanas segun horario de curso.
+          </div>
+        </div>
+        <button
+          class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50"
+          (click)="loadAll()"
+        >
+          Refrescar
+        </button>
       </div>
-      <button
-        class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50"
-        (click)="loadAll()"
-      >
-        Refrescar
-      </button>
     </div>
 
     <div *ngIf="error" class="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
       {{ error }}
     </div>
 
-    <div class="mt-5 grid gap-4 lg:grid-cols-3">
-      <div class="rounded-2xl border border-slate-200 bg-white p-4">
-        <div class="text-sm font-semibold">Nueva sesion</div>
-        <form class="mt-3 space-y-2" [formGroup]="createForm" (ngSubmit)="createSession()">
+    <div class="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+      <div class="grid gap-3 lg:grid-cols-3">
+        <div class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+          <div class="text-[11px] uppercase tracking-wide text-slate-500">Curso</div>
+          <div class="text-sm font-semibold text-slate-900">{{ selectedCourseName || '-' }}</div>
+        </div>
+
+        <label class="block lg:col-span-2">
+          <div class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Horario asignado
+          </div>
           <select
             class="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
-            formControlName="scheduleBlockId"
+            [(ngModel)]="selectedBlockId"
+            (ngModelChange)="onBlockChange()"
+            [disabled]="filteredBlocks.length === 0"
           >
-            <option value="">Seleccionar bloque</option>
-            <option *ngFor="let b of blocks" [value]="b.id">
-              {{ b.courseName }} ({{ b.dayOfWeek }} {{ b.startTime }}-{{ b.endTime }})
+            <option value="">Seleccionar horario</option>
+            <option *ngFor="let b of filteredBlocks; trackBy: trackBlock" [value]="b.id">
+              {{ dayLabel(b.dayOfWeek) }} {{ b.startTime }}-{{ b.endTime }} |
+              {{ formatDateRange(b.startDate, b.endDate) }}
             </option>
           </select>
-          <input
-            class="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
-            formControlName="sessionDate"
-            placeholder="YYYY-MM-DD"
-          />
-          <button
-            class="w-full rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-            [disabled]="createForm.invalid || creating"
-          >
-            {{ creating ? 'Creando...' : 'Crear sesion' }}
-          </button>
-        </form>
+        </label>
       </div>
 
-      <div class="lg:col-span-2 rounded-2xl border border-slate-200 bg-white overflow-x-auto">
-        <table class="min-w-full text-sm">
-          <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600">
-            <tr>
-              <th class="px-4 py-3">Curso</th>
-              <th class="px-4 py-3">Fecha</th>
-              <th class="px-4 py-3">Accion</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr *ngFor="let s of sessions" class="border-t border-slate-100">
-              <td class="px-4 py-3 font-medium">{{ s.courseName }}</td>
-              <td class="px-4 py-3 text-slate-700">{{ s.sessionDate }}</td>
-              <td class="px-4 py-3">
-                <button
-                  class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
-                  (click)="selectSession(s)"
-                >
-                  Marcar
-                </button>
-              </td>
-            </tr>
-            <tr *ngIf="sessions.length===0" class="border-t border-slate-100">
-              <td class="px-4 py-6 text-slate-600" colspan="3">Sin sesiones</td>
-            </tr>
-          </tbody>
-        </table>
+      <div class="mt-3 text-xs text-slate-600" *ngIf="selectedBlock">
+        Curso {{ selectedBlock.courseName }} | Vigencia
+        {{ formatDateRange(selectedBlock.startDate, selectedBlock.endDate) }}
       </div>
     </div>
 
-    <div *ngIf="selectedSession" class="mt-6 rounded-2xl border border-slate-200 bg-white">
+    <div class="mt-4 rounded-2xl border border-slate-200 bg-white">
       <div class="flex items-center justify-between border-b border-slate-200 px-4 py-3">
         <div>
-          <div class="text-sm font-semibold">
-            {{ selectedSession.courseName }} | {{ selectedSession.sessionDate }}
+          <div class="text-sm font-semibold">Control semanal</div>
+          <div class="text-xs text-slate-600">
+            Alumnos: {{ students.length }} | Fechas: {{ weekDates.length }}
           </div>
-          <div class="text-xs text-slate-600">Registros: {{ records.length }}</div>
         </div>
         <button
           class="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
-          (click)="save()"
-          [disabled]="saving"
+          (click)="saveAll()"
+          [disabled]="saving || !selectedBlock || students.length===0 || weekDates.length===0"
         >
-          {{ saving ? 'Guardando...' : 'Guardar' }}
+          {{ saving ? 'Guardando...' : 'Guardar asistencia' }}
         </button>
       </div>
 
@@ -108,22 +96,55 @@ import type { Subscription } from 'rxjs';
         <table class="min-w-full text-sm">
           <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600">
             <tr>
-              <th class="px-4 py-3">Alumno</th>
-              <th class="px-4 py-3">Estado</th>
+              <th class="sticky left-0 z-10 border-r border-slate-200 bg-slate-50 px-4 py-3">
+                Alumno
+              </th>
+              <th class="border-r border-slate-200 bg-slate-50 px-3 py-3">
+                DNI
+              </th>
+              <th
+                *ngFor="let d of weekDates; trackBy: trackText"
+                class="min-w-[160px] border-r border-slate-200 px-3 py-3 text-center"
+              >
+                <div>{{ shortDayLabel(d) }}</div>
+                <div class="text-[11px] font-medium normal-case tracking-normal text-slate-500">
+                  {{ d }}
+                </div>
+              </th>
             </tr>
           </thead>
           <tbody>
-            <tr *ngFor="let r of records; let i = index" class="border-t border-slate-100">
-              <td class="px-4 py-3 font-medium">{{ r.fullName }}</td>
-              <td class="px-4 py-3">
+            <tr *ngFor="let s of students; trackBy: trackStudent" class="border-t border-slate-100">
+              <td class="sticky left-0 z-10 border-r border-slate-200 bg-white px-4 py-3 font-medium">
+                {{ s.fullName }}
+              </td>
+              <td class="border-r border-slate-200 bg-white px-3 py-3 text-slate-600">
+                {{ s.dni }}
+              </td>
+              <td
+                *ngFor="let d of weekDates; trackBy: trackText"
+                class="border-r border-slate-100 px-2 py-2"
+              >
                 <select
-                  class="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm"
-                  [(ngModel)]="records[i].status"
+                  class="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs"
+                  [ngModel]="getStatus(d, s.id)"
+                  (ngModelChange)="setStatus(d, s.id, $event)"
                   [ngModelOptions]="{ standalone: true }"
                 >
                   <option [ngValue]="AttendanceStatus.ASISTIO">ASISTIO</option>
                   <option [ngValue]="AttendanceStatus.FALTO">FALTO</option>
                 </select>
+              </td>
+            </tr>
+
+            <tr *ngIf="students.length===0" class="border-t border-slate-100">
+              <td class="px-4 py-6 text-slate-600" [attr.colspan]="weekDates.length + 2">
+                No hay alumnos para este curso en la seccion.
+              </td>
+            </tr>
+            <tr *ngIf="students.length>0 && weekDates.length===0" class="border-t border-slate-100">
+              <td class="px-4 py-6 text-slate-600" colspan="3">
+                El horario no tiene rango de vigencia ni sesiones creadas para calcular semanas.
               </td>
             </tr>
           </tbody>
@@ -135,52 +156,115 @@ import type { Subscription } from 'rxjs';
 export class AdminSectionAttendancePage {
   private readonly http = inject(HttpClient);
   private readonly route = inject(ActivatedRoute);
-  private readonly fb = inject(FormBuilder);
   private readonly cdr = inject(ChangeDetectorRef);
 
   readonly AttendanceStatus = AttendanceStatus;
+  readonly days = DAYS;
   sectionId = '';
   private routeSub?: Subscription;
 
   blocks: AdminScheduleBlock[] = [];
   sessions: AdminAttendanceSession[] = [];
+  students: SectionStudentRow[] = [];
 
-  selectedSession: AdminAttendanceSession | null = null;
-  records: AdminAttendanceRecord[] = [];
+  selectedCourseName = '';
+  contextCourseName = '';
+  selectedBlockId = '';
+  weekDates: string[] = [];
+
+  // [sessionDate][studentId] = status
+  statusMatrix: Record<string, Record<string, AttendanceStatus>> = {};
+  sessionsByDate = new Map<string, AdminAttendanceSession>();
 
   error: string | null = null;
-  creating = false;
   saving = false;
 
-  createForm = this.fb.group({
-    scheduleBlockId: ['', [Validators.required]],
-    sessionDate: ['', [Validators.required]],
-  });
+  get filteredBlocks() {
+    const course = this.selectedCourseName.trim();
+    if (!course) return [];
+    return this.blocks.filter((b) => this.courseKey(b.courseName) === this.courseKey(course));
+  }
+
+  get selectedBlock() {
+    return this.blocks.find((b) => b.id === this.selectedBlockId) ?? null;
+  }
 
   async ngOnInit() {
-    this.routeSub = this.route.paramMap.subscribe((params) => {
-      this.sectionId = String(params.get('id') ?? '');
-      void this.loadAll();
-    });
+    this.routeSub = combineLatest([this.route.paramMap, this.route.queryParamMap]).subscribe(
+      ([params, queryParams]) => {
+        this.sectionId = String(params.get('id') ?? '');
+        this.contextCourseName =
+          String(queryParams.get('courseName') ?? '').trim() || this.readStoredCourseName();
+        void this.loadAll();
+      }
+    );
   }
 
   ngOnDestroy() {
     this.routeSub?.unsubscribe();
   }
 
+  trackText(_: number, item: string) {
+    return item;
+  }
+
+  trackBlock(_: number, item: AdminScheduleBlock) {
+    return item.id;
+  }
+
+  trackStudent(_: number, item: SectionStudentRow) {
+    return item.id;
+  }
+
+  dayLabel(dow: number) {
+    return this.days.find((d) => d.dayOfWeek === dow)?.label ?? String(dow);
+  }
+
+  shortDayLabel(isoDate: string) {
+    const jsDow = new Date(`${isoDate}T00:00:00`).getDay();
+    const dow = jsDow === 0 ? 7 : jsDow;
+    return this.dayLabel(dow);
+  }
+
+  formatDateRange(startDate?: string | null, endDate?: string | null) {
+    if (startDate && endDate) return `${startDate} a ${endDate}`;
+    if (startDate) return `Desde ${startDate}`;
+    if (endDate) return `Hasta ${endDate}`;
+    return 'Sin rango';
+  }
+
   async loadAll() {
     this.error = null;
+    this.selectedBlockId = '';
+    this.weekDates = [];
+    this.statusMatrix = {};
+    this.sessionsByDate.clear();
+    this.students = [];
+
     try {
-      this.blocks = await firstValueFrom(
-        this.http.get<AdminScheduleBlock[]>(
-          `/api/admin/schedule-blocks?sectionId=${encodeURIComponent(this.sectionId)}`
-        )
-      );
-      this.sessions = await firstValueFrom(
-        this.http.get<AdminAttendanceSession[]>(
-          `/api/admin/attendance-sessions?sectionId=${encodeURIComponent(this.sectionId)}`
-        )
-      );
+      const [courses, blocks, sessions] = await Promise.all([
+        firstValueFrom(
+          this.http.get<string[]>(`/api/admin/sections/${encodeURIComponent(this.sectionId)}/courses`)
+        ),
+        firstValueFrom(
+          this.http.get<AdminScheduleBlock[]>(
+            `/api/admin/schedule-blocks?sectionId=${encodeURIComponent(this.sectionId)}`
+          )
+        ),
+        firstValueFrom(
+          this.http.get<AdminAttendanceSession[]>(
+            `/api/admin/attendance-sessions?sectionId=${encodeURIComponent(this.sectionId)}`
+          )
+        ),
+      ]);
+      this.selectedCourseName = this.resolveCourseContext(courses);
+      if (this.selectedCourseName) {
+        this.saveStoredCourseName(this.selectedCourseName);
+      }
+      this.blocks = blocks;
+      this.sessions = sessions;
+
+      await this.onCourseChange();
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo cargar asistencia';
     } finally {
@@ -188,62 +272,198 @@ export class AdminSectionAttendancePage {
     }
   }
 
-  async createSession() {
-    this.creating = true;
+  async onCourseChange() {
     this.error = null;
-    try {
-      const v = this.createForm.value;
-      await firstValueFrom(
-        this.http.post('/api/admin/attendance-sessions', {
-          scheduleBlockId: String(v.scheduleBlockId ?? ''),
-          sessionDate: String(v.sessionDate ?? ''),
-        })
-      );
-      await this.loadAll();
-    } catch (e: any) {
-      this.error = e?.error?.message ?? 'No se pudo crear sesion';
-    } finally {
-      this.creating = false;
-      this.cdr.detectChanges();
-    }
-  }
+    this.selectedBlockId = '';
+    this.weekDates = [];
+    this.statusMatrix = {};
+    this.sessionsByDate.clear();
+    this.students = [];
 
-  async selectSession(s: AdminAttendanceSession) {
-    this.selectedSession = s;
-    this.error = null;
+    const course = this.selectedCourseName.trim();
+    if (!course) {
+      this.cdr.detectChanges();
+      return;
+    }
+
     try {
-      this.records = await firstValueFrom(
-        this.http.get<AdminAttendanceRecord[]>(
-          `/api/admin/attendance-sessions/${s.id}/records`
+      this.students = await firstValueFrom(
+        this.http.get<SectionStudentRow[]>(
+          `/api/admin/sections/${encodeURIComponent(this.sectionId)}/students`,
+          { params: { courseName: course } }
         )
       );
+
+      const preferred = this.filteredBlocks[0];
+      if (preferred) {
+        this.selectedBlockId = preferred.id;
+      }
+      await this.onBlockChange();
     } catch (e: any) {
-      this.error = e?.error?.message ?? 'No se pudo cargar registros';
-      this.records = [];
+      this.error = e?.error?.message ?? 'No se pudo cargar alumnos del curso';
     } finally {
       this.cdr.detectChanges();
     }
   }
 
-  async save() {
-    if (!this.selectedSession) return;
+  async onBlockChange() {
+    this.error = null;
+    this.weekDates = [];
+    this.statusMatrix = {};
+    this.sessionsByDate.clear();
+
+    const block = this.selectedBlock;
+    if (!block) {
+      this.cdr.detectChanges();
+      return;
+    }
+
+    const blockSessions = this.sessions
+      .filter((s) => s.scheduleBlockId === block.id)
+      .slice()
+      .sort((a, b) => a.sessionDate.localeCompare(b.sessionDate));
+
+    this.weekDates = this.computeWeekDates(block, blockSessions);
+    for (const session of blockSessions) {
+      this.sessionsByDate.set(session.sessionDate, session);
+    }
+
+    try {
+      const recordsBySession = await Promise.all(
+        blockSessions.map((s) =>
+          firstValueFrom(
+            this.http.get<AdminAttendanceRecord[]>(
+              `/api/admin/attendance-sessions/${s.id}/records`
+            )
+          ).then((records) => ({ date: s.sessionDate, records }))
+        )
+      );
+
+      for (const item of recordsBySession) {
+        this.statusMatrix[item.date] = this.statusMatrix[item.date] ?? {};
+        for (const rec of item.records) {
+          this.statusMatrix[item.date][rec.studentId] = rec.status;
+        }
+      }
+    } catch (e: any) {
+      this.error = e?.error?.message ?? 'No se pudo cargar registros de sesiones';
+    } finally {
+      this.cdr.detectChanges();
+    }
+  }
+
+  getStatus(date: string, studentId: string) {
+    return this.statusMatrix[date]?.[studentId] ?? AttendanceStatus.FALTO;
+  }
+
+  setStatus(date: string, studentId: string, status: AttendanceStatus) {
+    this.statusMatrix[date] = this.statusMatrix[date] ?? {};
+    this.statusMatrix[date][studentId] = status;
+  }
+
+  async saveAll() {
+    const block = this.selectedBlock;
+    if (!block) return;
+    if (this.students.length === 0 || this.weekDates.length === 0) return;
+
     this.saving = true;
     this.error = null;
     try {
-      await firstValueFrom(
-        this.http.put(
-          `/api/admin/attendance-sessions/${this.selectedSession.id}/records`,
-          this.records.map((r) => ({
-            studentId: r.studentId,
-            status: r.status,
-          }))
-        )
-      );
+      for (const date of this.weekDates) {
+        let session = this.sessionsByDate.get(date);
+        if (!session) {
+          const created = await firstValueFrom(
+            this.http.post<{ id: string; scheduleBlockId: string; sessionDate: string }>(
+              '/api/admin/attendance-sessions',
+              {
+                scheduleBlockId: block.id,
+                sessionDate: date,
+              }
+            )
+          );
+          session = {
+            id: created.id,
+            scheduleBlockId: created.scheduleBlockId,
+            sessionDate: created.sessionDate,
+            courseName: block.courseName,
+          };
+          this.sessionsByDate.set(date, session);
+          this.sessions.push(session);
+        }
+
+        await firstValueFrom(
+          this.http.put(`/api/admin/attendance-sessions/${session.id}/records`, [
+            ...this.students.map((st) => ({
+              studentId: st.id,
+              status: this.getStatus(date, st.id),
+            })),
+          ])
+        );
+      }
     } catch (e: any) {
-      this.error = e?.error?.message ?? 'No se pudo guardar';
+      this.error = e?.error?.message ?? 'No se pudo guardar asistencia';
     } finally {
       this.saving = false;
       this.cdr.detectChanges();
     }
+  }
+
+  private computeWeekDates(block: AdminScheduleBlock, sessions: AdminAttendanceSession[]) {
+    const start = String(block.startDate ?? '').trim();
+    const end = String(block.endDate ?? '').trim();
+    if (start && end) {
+      const targetDow = Number(block.dayOfWeek || 1);
+      const dates: string[] = [];
+      let current = new Date(`${start}T00:00:00`);
+      const endDate = new Date(`${end}T00:00:00`);
+
+      const currentDow = current.getDay() === 0 ? 7 : current.getDay();
+      const delta = (targetDow - currentDow + 7) % 7;
+      current.setDate(current.getDate() + delta);
+
+      while (current <= endDate) {
+        dates.push(this.toIsoDate(current));
+        current = new Date(current.getFullYear(), current.getMonth(), current.getDate() + 7);
+      }
+      return dates;
+    }
+
+    return Array.from(new Set(sessions.map((x) => x.sessionDate))).sort((a, b) =>
+      a.localeCompare(b)
+    );
+  }
+
+  private toIsoDate(value: Date) {
+    const y = value.getFullYear();
+    const m = String(value.getMonth() + 1).padStart(2, '0');
+    const d = String(value.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  private courseKey(value: string) {
+    return String(value ?? '').trim().toLocaleLowerCase();
+  }
+
+  private resolveCourseContext(courses: string[]) {
+    const candidates = [this.contextCourseName, this.selectedCourseName]
+      .map((x) => String(x ?? '').trim())
+      .filter(Boolean);
+    for (const candidate of candidates) {
+      const matched = courses.find((c) => this.courseKey(c) === this.courseKey(candidate));
+      if (matched) return matched;
+    }
+    return courses[0] ?? '';
+  }
+
+  private readStoredCourseName() {
+    if (typeof window === 'undefined') return '';
+    return String(window.localStorage.getItem(COURSE_CONTEXT_STORAGE_KEY) ?? '').trim();
+  }
+
+  private saveStoredCourseName(courseName: string) {
+    if (typeof window === 'undefined') return;
+    const value = String(courseName ?? '').trim();
+    if (!value) return;
+    window.localStorage.setItem(COURSE_CONTEXT_STORAGE_KEY, value);
   }
 }

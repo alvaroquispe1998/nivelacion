@@ -1,5 +1,5 @@
 import { Transform, Type } from 'class-transformer';
-import { IsBoolean, IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 
 export class LevelingPlanDto {
   @IsOptional()
@@ -27,4 +27,8 @@ export class LevelingPlanDto {
   })
   @IsBoolean()
   apply?: boolean;
+
+  @IsOptional()
+  @IsString()
+  groupModalityOverrides?: string;
 }

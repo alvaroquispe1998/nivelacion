@@ -5,7 +5,7 @@ import { Router } from '@angular/router';
 import { Role } from '@uai/shared';
 import { AuthService } from '../core/auth/auth.service';
 
-type LoginMode = 'ALUMNO' | 'ADMIN';
+type LoginMode = 'ALUMNO' | 'STAFF';
 
 @Component({
   standalone: true,
@@ -36,15 +36,15 @@ type LoginMode = 'ALUMNO' | 'ADMIN';
             <button
               type="button"
               class="rounded-xl px-3 py-2 text-sm font-semibold border"
-              [class.bg-slate-900]="mode==='ADMIN'"
-              [class.text-white]="mode==='ADMIN'"
-              [class.border-slate-900]="mode==='ADMIN'"
-              [class.bg-white]="mode!=='ADMIN'"
-              [class.text-slate-900]="mode!=='ADMIN'"
-              [class.border-slate-200]="mode!=='ADMIN'"
-              (click)="setMode('ADMIN')"
+              [class.bg-slate-900]="mode==='STAFF'"
+              [class.text-white]="mode==='STAFF'"
+              [class.border-slate-900]="mode==='STAFF'"
+              [class.bg-white]="mode!=='STAFF'"
+              [class.text-slate-900]="mode!=='STAFF'"
+              [class.border-slate-200]="mode!=='STAFF'"
+              (click)="setMode('STAFF')"
             >
-              Admin
+              Personal
             </button>
           </div>
 
@@ -67,7 +67,7 @@ type LoginMode = 'ALUMNO' | 'ADMIN';
               />
             </label>
 
-            <label class="block" *ngIf="mode==='ADMIN'">
+            <label class="block" *ngIf="mode==='STAFF'">
               <span class="block text-xs font-semibold text-slate-700 mb-1">Password</span>
               <input
                 type="password"
@@ -146,13 +146,21 @@ export class LoginPage {
         const codigoAlumno = String(this.form.value.codigoAlumno ?? '').trim();
         const res = await this.auth.login({ dni, codigoAlumno });
         await this.router.navigateByUrl(
-          res.user.role === Role.ADMIN ? '/admin/sections' : '/student/schedule'
+          res.user.role === Role.ADMIN
+            ? '/admin/sections'
+            : res.user.role === Role.DOCENTE
+              ? '/teacher/schedule'
+              : '/student/schedule'
         );
       } else {
         const password = String(this.form.value.password ?? '');
         const res = await this.auth.login({ dni, password });
         await this.router.navigateByUrl(
-          res.user.role === Role.ADMIN ? '/admin/sections' : '/student/schedule'
+          res.user.role === Role.ADMIN
+            ? '/admin/sections'
+            : res.user.role === Role.DOCENTE
+              ? '/teacher/schedule'
+              : '/student/schedule'
         );
       }
     } catch (e: any) {

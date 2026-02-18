@@ -24,7 +24,10 @@ export class HomeRedirectPage {
       this.router.navigateByUrl('/student/schedule');
       return;
     }
+    if (role === Role.DOCENTE) {
+      this.router.navigateByUrl('/teacher/schedule');
+      return;
+    }
     this.router.navigateByUrl('/login');
   }
 }
-

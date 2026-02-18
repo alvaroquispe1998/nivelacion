@@ -2,12 +2,14 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  JoinColumn,
+  ManyToOne,
   OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { EnrollmentEntity } from '../enrollments/enrollment.entity';
 import { ScheduleBlockEntity } from '../schedule-blocks/schedule-block.entity';
+import { UserEntity } from '../users/user.entity';
 
 @Entity({ name: 'sections' })
 export class SectionEntity {
@@ -35,6 +37,13 @@ export class SectionEntity {
   @Column({ type: 'varchar', length: 20, nullable: true })
   modality!: string | null;
 
+  @ManyToOne(() => UserEntity, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
+  @JoinColumn({ name: 'teacherId' })
+  teacher!: UserEntity | null;
+
   @Column({ type: 'int', unsigned: true, default: 45 })
   initialCapacity!: number;
 
@@ -50,9 +59,6 @@ export class SectionEntity {
 
   @UpdateDateColumn()
   updatedAt!: Date;
-
-  @OneToMany(() => EnrollmentEntity, (e) => e.section)
-  enrollments!: EnrollmentEntity[];
 
   @OneToMany(() => ScheduleBlockEntity, (b) => b.section)
   scheduleBlocks!: ScheduleBlockEntity[];

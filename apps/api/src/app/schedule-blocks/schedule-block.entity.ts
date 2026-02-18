@@ -21,6 +21,9 @@ export class ScheduleBlockEntity {
   @JoinColumn({ name: 'sectionId' })
   section!: SectionEntity;
 
+  @Column({ type: 'char', length: 36, nullable: true })
+  sectionCourseId!: string | null;
+
   @Column({ type: 'varchar', length: 200 })
   courseName!: string;
 
@@ -32,6 +35,12 @@ export class ScheduleBlockEntity {
 
   @Column({ type: 'char', length: 5 })
   endTime!: string; // HH:mm
+
+  @Column({ type: 'date', nullable: true })
+  startDate!: string | null; // YYYY-MM-DD
+
+  @Column({ type: 'date', nullable: true })
+  endDate!: string | null; // YYYY-MM-DD
 
   @Column({ type: 'varchar', length: 500, nullable: true })
   zoomUrl!: string | null;
@@ -45,4 +54,3 @@ export class ScheduleBlockEntity {
   @OneToMany(() => AttendanceSessionEntity, (s) => s.scheduleBlock)
   attendanceSessions!: AttendanceSessionEntity[];
 }
-

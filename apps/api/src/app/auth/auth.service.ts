@@ -23,11 +23,11 @@ export class AuthService {
     const { dni, codigoAlumno, password } = body;
 
     const isStudentLogin = Boolean(codigoAlumno);
-    const isAdminLogin = Boolean(password);
+    const isStaffLogin = Boolean(password);
 
-    if (isStudentLogin === isAdminLogin) {
+    if (isStudentLogin === isStaffLogin) {
       throw new BadRequestException(
-        'Provide either codigoAlumno (student) or password (admin)'
+        'Provide either codigoAlumno (student) or password (staff)'
       );
     }
 
@@ -50,10 +50,10 @@ export class AuthService {
       };
     }
 
-    const user = await this.usersService.findAdminByDni(dni);
+    const user = await this.usersService.findStaffByDni(dni);
     if (!user?.passwordHash) throw new UnauthorizedException('Invalid credentials');
 
-    const ok = await bcrypt.compare(password!, user.passwordHash);
+    const ok = await this.verifyPassword(user.id, user.passwordHash, password!);
     if (!ok) throw new UnauthorizedException('Invalid credentials');
 
     const payload = {
@@ -62,7 +62,7 @@ export class AuthService {
       fullName: user.fullName,
       dni: user.dni,
     };
-    if (user.role !== Role.ADMIN) {
+    if (![Role.ADMIN, Role.DOCENTE].includes(user.role)) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -71,5 +71,20 @@ export class AuthService {
       user: { id: user.id, fullName: user.fullName, role: user.role },
     };
   }
-}
 
+  private async verifyPassword(
+    userId: string,
+    passwordHash: string,
+    plainPassword: string
+  ) {
+    if (passwordHash.startsWith('PLAIN:')) {
+      const expected = passwordHash.slice('PLAIN:'.length);
+      if (plainPassword !== expected) return false;
+      const user = await this.usersService.getByIdOrThrow(userId);
+      user.passwordHash = await bcrypt.hash(plainPassword, 10);
+      await this.usersService.save(user);
+      return true;
+    }
+    return bcrypt.compare(plainPassword, passwordHash);
+  }
+}

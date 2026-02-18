@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Role } from '@uai/shared';
+import { In } from 'typeorm';
 import { Repository } from 'typeorm';
 import { UserEntity } from './user.entity';
 
@@ -30,8 +31,17 @@ export class UsersService {
     return this.usersRepo.findOne({ where: { dni, role: Role.ADMIN } });
   }
 
+  async findStaffByDni(dni: string): Promise<UserEntity | null> {
+    return this.usersRepo.findOne({
+      where: { dni, role: In([Role.ADMIN, Role.DOCENTE]) },
+    });
+  }
+
   async findAlumnoByDni(dni: string): Promise<UserEntity | null> {
     return this.usersRepo.findOne({ where: { dni, role: Role.ALUMNO } });
   }
-}
 
+  async save(user: UserEntity) {
+    return this.usersRepo.save(user);
+  }
+}
