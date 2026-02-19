@@ -925,6 +925,7 @@ export class LevelingService {
         courseName: string;
         facultyGroup: string | null;
         campusName: string | null;
+        modality: string | null;
         initialCapacity: number;
         maxExtraCapacity: number;
         hasTeacher: number;
@@ -939,6 +940,7 @@ export class LevelingService {
           c.name AS courseName,
           s.facultyGroup AS facultyGroup,
           s.campusName AS campusName,
+          s.modality AS modality,
           s.initialCapacity AS initialCapacity,
           s.maxExtraCapacity AS maxExtraCapacity,
           CASE
@@ -1073,6 +1075,7 @@ export class LevelingService {
         courseName: string;
         facultyGroup: string | null;
         campusName: string | null;
+        modality: string | null;
         initialCapacity: number;
         maxExtraCapacity: number;
         assignedCount: number;
@@ -1094,6 +1097,7 @@ export class LevelingService {
           courseName: String(row.courseName ?? ''),
           facultyGroup: row.facultyGroup ? String(row.facultyGroup) : null,
           campusName: row.campusName ? String(row.campusName) : null,
+          modality: row.modality ? String(row.modality).toUpperCase().trim() : null,
           initialCapacity: Number(row.initialCapacity ?? 45),
           maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
           assignedCount: 0,
@@ -1129,6 +1133,8 @@ export class LevelingService {
       });
 
       const assignedBlocksByStudent = new Map<string, ScheduleBlockWindow[]>();
+      // Tracks the modality locked for each student after their first assignment
+      const modalityByStudent = new Map<string, string>();
       const rowsToInsert: Array<{
         id: string;
         sectionCourseId: string;
@@ -1169,14 +1175,38 @@ export class LevelingService {
           continue;
         }
 
-        const studentBlocks = getStudentBlocks(String(demand.studentId));
+        const studentId = String(demand.studentId);
+        const lockedModality = modalityByStudent.get(studentId) ?? null;
+        const studentBlocks = getStudentBlocks(studentId);
+
+        // Filter candidates: capacity OK + no schedule conflict + modality lock
         const available = demand.candidates.filter((candidate) => {
           if (this.isCapacityBlocked(candidate)) return false;
-          return !this.hasScheduleOverlap(studentBlocks, candidate.blocks);
+          if (this.hasScheduleOverlap(studentBlocks, candidate.blocks)) return false;
+          // Modality lock: once a student has an assigned modality, only match it
+          if (lockedModality !== null && candidate.modality !== null) {
+            const isPresencial = (m: string) => m.includes('PRESENCIAL');
+            const isVirtual = (m: string) => m.includes('VIRTUAL');
+            const lockedIsPresencial = isPresencial(lockedModality);
+            const lockedIsVirtual = isVirtual(lockedModality);
+            const candidateIsPresencial = isPresencial(candidate.modality);
+            const candidateIsVirtual = isVirtual(candidate.modality);
+            // Block mixing: if student is presencial, skip virtual candidates and vice-versa
+            if (lockedIsPresencial && candidateIsVirtual) return false;
+            if (lockedIsVirtual && candidateIsPresencial) return false;
+          }
+          return true;
         });
 
         if (available.length === 0) {
+          // Determine the best reason for non-assignment
+          const candidatesIgnoringModality = demand.candidates.filter((candidate) => {
+            if (this.isCapacityBlocked(candidate)) return false;
+            return !this.hasScheduleOverlap(studentBlocks, candidate.blocks);
+          });
+          const blockedByModality = lockedModality !== null && candidatesIgnoringModality.length > 0;
           const blockedByCapacity =
+            !blockedByModality &&
             demand.candidates.every((candidate) => this.isCapacityBlocked(candidate)) &&
             demand.candidates.length > 0;
           unassigned.push({
@@ -1187,17 +1217,22 @@ export class LevelingService {
             courseName: String(demand.courseName ?? ''),
             facultyGroup: demand.facultyGroup ? String(demand.facultyGroup) : null,
             campusName: demand.campusName ? String(demand.campusName) : null,
-            reason: blockedByCapacity
-              ? 'No hay capacidad disponible en las secciones-curso candidatas'
-              : 'Cruce de horario con cursos ya asignados',
+            reason: blockedByModality
+              ? `Alumno bloqueado en modalidad ${lockedModality} y no hay secciones de ese tipo disponibles`
+              : blockedByCapacity
+                ? 'No hay capacidad disponible en las secciones-curso candidatas'
+                : 'Cruce de horario con cursos ya asignados',
           });
           continue;
         }
 
+        // Fill-first: prioritize sections with HIGHEST occupancy ratio (fill one before moving to next)
         available.sort((a, b) => {
           const ratioA = this.capacityRatio(a);
           const ratioB = this.capacityRatio(b);
-          if (ratioA !== ratioB) return ratioA - ratioB;
+          // Higher ratio = more occupied = fill it first
+          if (Math.abs(ratioA - ratioB) > 0.001) return ratioB - ratioA;
+          // Tie-break: section code alphabetically (deterministic order)
           const codeA = this.scopeKey(a.sectionCode ?? a.sectionName);
           const codeB = this.scopeKey(b.sectionCode ?? b.sectionName);
           if (codeA !== codeB) return codeA.localeCompare(codeB);
@@ -1214,6 +1249,11 @@ export class LevelingService {
         });
         selected.assignedCount += 1;
         studentBlocks.push(...selected.blocks);
+
+        // Lock modality for this student after first assignment
+        if (selected.modality !== null && !modalityByStudent.has(studentId)) {
+          modalityByStudent.set(studentId, selected.modality);
+        }
       }
 
       await this.bulkInsertSectionStudentCoursesIgnore(manager, rowsToInsert);
@@ -3515,6 +3555,7 @@ export class LevelingService {
       courseName: string;
       facultyGroup: string | null;
       campusName: string | null;
+      modality: string | null;
       initialCapacity: number;
       maxExtraCapacity: number;
     }>;
@@ -3558,6 +3599,7 @@ export class LevelingService {
       courseName: string;
       facultyGroup: string | null;
       campusName: string | null;
+      modality: string | null;
       initialCapacity: number;
       maxExtraCapacity: number;
       assignedCount: number;
@@ -3579,6 +3621,7 @@ export class LevelingService {
         courseName: String(row.courseName ?? ''),
         facultyGroup: row.facultyGroup ? String(row.facultyGroup) : null,
         campusName: row.campusName ? String(row.campusName) : null,
+        modality: row.modality ? String(row.modality).toUpperCase().trim() : null,
         initialCapacity: Number(row.initialCapacity ?? 45),
         maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
         assignedCount: 0,
@@ -3614,6 +3657,8 @@ export class LevelingService {
     });
 
     const assignedBlocksByStudent = new Map<string, ScheduleBlockWindow[]>();
+    // Tracks the modality locked for each student after their first assignment
+    const modalityByStudent = new Map<string, string>();
     const rowsToInsert: Array<{
       id: string;
       sectionCourseId: string;
@@ -3672,14 +3717,37 @@ export class LevelingService {
         continue;
       }
 
+      const lockedModality = modalityByStudent.get(studentId) ?? null;
       const studentBlocks = getStudentBlocks(studentId);
+
+      // Filter candidates: capacity OK + no schedule conflict + modality lock
       const available = demand.candidates.filter((candidate) => {
         if (this.isCapacityBlocked(candidate)) return false;
-        return !this.hasScheduleOverlap(studentBlocks, candidate.blocks);
+        if (this.hasScheduleOverlap(studentBlocks, candidate.blocks)) return false;
+        // Modality lock: once a student has an assigned modality, only match it
+        if (lockedModality !== null && candidate.modality !== null) {
+          const isPresencial = (m: string) => m.includes('PRESENCIAL');
+          const isVirtual = (m: string) => m.includes('VIRTUAL');
+          const lockedIsPresencial = isPresencial(lockedModality);
+          const lockedIsVirtual = isVirtual(lockedModality);
+          const candidateIsPresencial = isPresencial(candidate.modality);
+          const candidateIsVirtual = isVirtual(candidate.modality);
+          // Block mixing: if student is presencial, skip virtual candidates and vice-versa
+          if (lockedIsPresencial && candidateIsVirtual) return false;
+          if (lockedIsVirtual && candidateIsPresencial) return false;
+        }
+        return true;
       });
 
       if (available.length === 0) {
+        // Determine the best reason for non-assignment
+        const candidatesIgnoringModality = demand.candidates.filter((candidate) => {
+          if (this.isCapacityBlocked(candidate)) return false;
+          return !this.hasScheduleOverlap(studentBlocks, candidate.blocks);
+        });
+        const blockedByModality = lockedModality !== null && candidatesIgnoringModality.length > 0;
         const blockedByCapacity =
+          !blockedByModality &&
           demand.candidates.every((candidate) => this.isCapacityBlocked(candidate)) &&
           demand.candidates.length > 0;
         unassigned.push({
@@ -3690,17 +3758,22 @@ export class LevelingService {
           courseName: String(demand.courseName ?? ''),
           facultyGroup: demand.facultyGroup ? String(demand.facultyGroup) : null,
           campusName: demand.campusName ? String(demand.campusName) : null,
-          reason: blockedByCapacity
-            ? 'No hay capacidad disponible en las secciones-curso candidatas'
-            : 'Cruce de horario con cursos ya asignados',
+          reason: blockedByModality
+            ? `Alumno bloqueado en modalidad ${lockedModality} y no hay secciones de ese tipo disponibles`
+            : blockedByCapacity
+              ? 'No hay capacidad disponible en las secciones-curso candidatas'
+              : 'Cruce de horario con cursos ya asignados',
         });
         continue;
       }
 
+      // Fill-first: prioritize sections with HIGHEST occupancy ratio (fill one before moving to next)
       available.sort((a, b) => {
         const ratioA = this.capacityRatio(a);
         const ratioB = this.capacityRatio(b);
-        if (ratioA !== ratioB) return ratioA - ratioB;
+        // Higher ratio = more occupied = fill it first
+        if (Math.abs(ratioA - ratioB) > 0.001) return ratioB - ratioA;
+        // Tie-break: section code alphabetically (deterministic order)
         const codeA = this.scopeKey(a.sectionCode ?? a.sectionName);
         const codeB = this.scopeKey(b.sectionCode ?? b.sectionName);
         if (codeA !== codeB) return codeA.localeCompare(codeB);
@@ -3717,6 +3790,11 @@ export class LevelingService {
       });
       selected.assignedCount += 1;
       studentBlocks.push(...selected.blocks);
+
+      // Lock modality for this student after first assignment
+      if (selected.modality !== null && !modalityByStudent.has(studentId)) {
+        modalityByStudent.set(studentId, selected.modality);
+      }
 
       if (!studentsBySectionCourse.has(selected.sectionCourseId)) {
         studentsBySectionCourse.set(selected.sectionCourseId, []);
