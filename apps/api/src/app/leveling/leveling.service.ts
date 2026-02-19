@@ -225,9 +225,9 @@ export class LevelingService {
     }
 
     // 2. Latest leveling run for active period (most recently updated, non-archived)
-    const runRows: Array<{ id: string; status: string }> = await this.dataSource.query(
+    const runRows: Array<{ id: string; status: string; periodId: string }> = await this.dataSource.query(
       `
-      SELECT id, status
+      SELECT id, status, periodId
       FROM leveling_runs
       WHERE periodId = ?
         AND status != 'ARCHIVED'
@@ -247,7 +247,15 @@ export class LevelingService {
     }
 
     // 3. Metrics: sections, section-courses, schedule coverage, teacher coverage, assigned
-    const [sectionRows, sectionCourseRows, scheduledRows, teacherRows, assignedRows, demandRows] =
+    const [
+      sectionRows,
+      sectionCourseRows,
+      scheduledRows,
+      teacherRows,
+      assignedRows,
+      demandRows,
+      facultyRows,
+    ] =
       await Promise.all([
         this.dataSource.query<Array<{ c: number }>>(
           `SELECT COUNT(*) AS c FROM sections WHERE levelingRunId = ?`,
@@ -257,41 +265,89 @@ export class LevelingService {
           `SELECT COUNT(*) AS c
          FROM section_courses sc
          INNER JOIN sections s ON s.id = sc.sectionId
-         WHERE s.levelingRunId = ?`,
-          [run.id]
+         WHERE s.levelingRunId = ?
+           AND sc.periodId = ?`,
+          [run.id, run.periodId]
         ),
         this.dataSource.query<Array<{ c: number }>>(
           `SELECT COUNT(DISTINCT sc.id) AS c
          FROM section_courses sc
          INNER JOIN sections s ON s.id = sc.sectionId
          INNER JOIN schedule_blocks sb ON sb.sectionCourseId = sc.id
-         WHERE s.levelingRunId = ?`,
-          [run.id]
+         WHERE s.levelingRunId = ?
+           AND sc.periodId = ?`,
+          [run.id, run.periodId]
         ),
         this.dataSource.query<Array<{ c: number }>>(
           `SELECT COUNT(DISTINCT sc.id) AS c
          FROM section_courses sc
          INNER JOIN sections s ON s.id = sc.sectionId
-         WHERE s.levelingRunId = ? AND s.teacherId IS NOT NULL`,
-          [run.id]
+         LEFT JOIN section_course_teachers sct ON sct.sectionCourseId = sc.id
+         WHERE s.levelingRunId = ?
+           AND sc.periodId = ?
+           AND (s.teacherId IS NOT NULL OR sct.teacherId IS NOT NULL)`,
+          [run.id, run.periodId]
         ),
         this.dataSource.query<Array<{ c: number }>>(
           `SELECT COUNT(*) AS c
          FROM section_student_courses ssc
          INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
          INNER JOIN sections s ON s.id = sc.sectionId
-         WHERE s.levelingRunId = ?`,
-          [run.id]
+         WHERE s.levelingRunId = ?
+           AND sc.periodId = ?`,
+          [run.id, run.periodId]
         ),
         this.dataSource.query<Array<{ c: number }>>(
           `SELECT COUNT(*) AS c FROM leveling_run_student_course_demands WHERE runId = ?`,
           [run.id]
+        ),
+        this.dataSource.query<
+          Array<{
+            facultyGroup: string | null;
+            totalSectionCourses: number;
+            withSchedule: number;
+            withTeacher: number;
+          }>
+        >(
+          `
+          SELECT
+            s.facultyGroup AS facultyGroup,
+            COUNT(DISTINCT sc.id) AS totalSectionCourses,
+            COUNT(DISTINCT IF(sb.id IS NOT NULL, sc.id, NULL)) AS withSchedule,
+            COUNT(
+              DISTINCT IF(s.teacherId IS NOT NULL OR sct.teacherId IS NOT NULL, sc.id, NULL)
+            ) AS withTeacher
+          FROM section_courses sc
+          INNER JOIN sections s ON s.id = sc.sectionId
+          LEFT JOIN schedule_blocks sb ON sb.sectionCourseId = sc.id
+          LEFT JOIN section_course_teachers sct ON sct.sectionCourseId = sc.id
+          WHERE s.levelingRunId = ?
+            AND sc.periodId = ?
+          GROUP BY s.facultyGroup
+          `,
+          [run.id, run.periodId]
         ),
       ]);
 
     const totalSectionCourses = Number(sectionCourseRows[0]?.c ?? 0);
     const withSchedule = Number(scheduledRows[0]?.c ?? 0);
     const withTeacher = Number(teacherRows[0]?.c ?? 0);
+    const faculties = facultyRows.map((row) => {
+      const total = Number(row.totalSectionCourses ?? 0);
+      const withScheduleCount = Number(row.withSchedule ?? 0);
+      const withTeacherCount = Number(row.withTeacher ?? 0);
+      return {
+        facultyGroup: String(row.facultyGroup ?? '').trim() || 'SIN_FACULTAD',
+        totalSectionCourses: total,
+        withSchedule: withScheduleCount,
+        withTeacher: withTeacherCount,
+        ready:
+          total > 0 &&
+          withScheduleCount === total &&
+          withTeacherCount === total,
+      };
+    });
+    const readyFaculties = faculties.filter((row) => row.ready).length;
 
     return {
       activePeriod: { id: activePeriod.id, code: activePeriod.code, name: activePeriod.name },
@@ -311,6 +367,8 @@ export class LevelingService {
           withoutTeacher: Math.max(0, totalSectionCourses - withTeacher),
           allComplete: totalSectionCourses > 0 && withTeacher === totalSectionCourses,
         },
+        faculties,
+        readyFaculties,
       },
     };
   }
@@ -604,6 +662,7 @@ export class LevelingService {
       sectionId: string;
       courseId: string;
       courseName: string;
+      hasTeacher: number;
       scheduleBlocksCount: number;
       assignedStudents: number;
     }> = await this.dataSource.query(
@@ -613,10 +672,21 @@ export class LevelingService {
         sc.sectionId AS sectionId,
         sc.courseId AS courseId,
         c.name AS courseName,
+        CASE
+          WHEN s.teacherId IS NOT NULL THEN 1
+          WHEN EXISTS (
+            SELECT 1
+            FROM section_course_teachers sct
+            WHERE sct.sectionCourseId = sc.id
+              AND sct.teacherId IS NOT NULL
+          ) THEN 1
+          ELSE 0
+        END AS hasTeacher,
         COUNT(DISTINCT sb.id) AS scheduleBlocksCount,
         COUNT(DISTINCT ssc.studentId) AS assignedStudents
       FROM section_courses sc
       INNER JOIN courses c ON c.id = sc.courseId
+      INNER JOIN sections s ON s.id = sc.sectionId
       LEFT JOIN schedule_blocks sb ON sb.sectionCourseId = sc.id
       LEFT JOIN section_student_courses ssc ON ssc.sectionCourseId = sc.id
       WHERE sc.sectionId IN (${placeholders})
@@ -625,7 +695,8 @@ export class LevelingService {
         sc.id,
         sc.sectionId,
         sc.courseId,
-        c.name
+        c.name,
+        s.teacherId
       ORDER BY c.name ASC
       `,
       [...sectionIds, run.periodId]
@@ -657,6 +728,7 @@ export class LevelingService {
         courseId: String(courseRow.courseId),
         courseName: String(courseRow.courseName ?? ''),
         hasSchedule: Number(courseRow.scheduleBlocksCount ?? 0) > 0,
+        hasTeacher: Number(courseRow.hasTeacher ?? 0) > 0,
         scheduleBlocksCount: Number(courseRow.scheduleBlocksCount ?? 0),
         assignedStudents: Number(courseRow.assignedStudents ?? 0),
       })),
@@ -839,7 +911,7 @@ export class LevelingService {
     return this.dataSource.transaction(async (manager) => {
       const run = await this.getRunOrThrow(runId, manager);
       if (run.status === 'ARCHIVED') {
-        throw new BadRequestException('Cannot matriculate an archived leveling run');
+        throw new BadRequestException('No se puede matricular una corrida archivada');
       }
 
       const targetFaculty = facultyGroup ? String(facultyGroup).trim() : null;
@@ -855,6 +927,7 @@ export class LevelingService {
         campusName: string | null;
         initialCapacity: number;
         maxExtraCapacity: number;
+        hasTeacher: number;
       }> = await manager.query(
         `
         SELECT
@@ -867,7 +940,17 @@ export class LevelingService {
           s.facultyGroup AS facultyGroup,
           s.campusName AS campusName,
           s.initialCapacity AS initialCapacity,
-          s.maxExtraCapacity AS maxExtraCapacity
+          s.maxExtraCapacity AS maxExtraCapacity,
+          CASE
+            WHEN s.teacherId IS NOT NULL THEN 1
+            WHEN EXISTS (
+              SELECT 1
+              FROM section_course_teachers sct
+              WHERE sct.sectionCourseId = sc.id
+                AND sct.teacherId IS NOT NULL
+            ) THEN 1
+            ELSE 0
+          END AS hasTeacher
         FROM section_courses sc
         INNER JOIN sections s ON s.id = sc.sectionId
         INNER JOIN courses c ON c.id = sc.courseId
@@ -884,8 +967,8 @@ export class LevelingService {
       if (sectionCourseRows.length === 0) {
         throw new BadRequestException(
           targetFaculty
-            ? `Run has no section-courses for faculty ${targetFaculty}`
-            : 'Run has no section-courses to matriculate'
+            ? `No hay secciones-curso para la facultad ${targetFaculty}`
+            : 'No hay secciones-curso para ejecutar matrícula'
         );
       }
 
@@ -934,7 +1017,18 @@ export class LevelingService {
       );
       if (withoutSchedule.length > 0) {
         throw new BadRequestException(
-          `Each section-course requires at least 1 schedule block before matriculate. Missing: ${withoutSchedule
+          `Cada sección-curso requiere al menos 1 bloque horario antes de matricular. Faltan: ${withoutSchedule
+            .map((x) => `${x.sectionCode ?? x.sectionName} - ${x.courseName}`)
+            .join(', ')}`
+        );
+      }
+
+      const withoutTeacher = sectionCourseRows.filter(
+        (row) => Number(row.hasTeacher ?? 0) === 0
+      );
+      if (withoutTeacher.length > 0) {
+        throw new BadRequestException(
+          `Cada sección-curso requiere docente asignado antes de matricular. Faltan: ${withoutTeacher
             .map((x) => `${x.sectionCode ?? x.sectionName} - ${x.courseName}`)
             .join(', ')}`
         );
@@ -963,8 +1057,8 @@ export class LevelingService {
       if (demands.length === 0) {
         throw new BadRequestException(
           targetFaculty
-            ? `Run has no pending student-course demands for faculty ${targetFaculty}`
-            : 'Run has no pending student-course demands'
+            ? `No hay demandas pendientes alumno-curso para la facultad ${targetFaculty}`
+            : 'No hay demandas pendientes alumno-curso para matricular'
         );
       }
 
@@ -1070,7 +1164,7 @@ export class LevelingService {
             courseName: String(demand.courseName ?? ''),
             facultyGroup: demand.facultyGroup ? String(demand.facultyGroup) : null,
             campusName: demand.campusName ? String(demand.campusName) : null,
-            reason: 'No section-course candidate found for this course',
+            reason: 'No se encontró sección-curso candidata para este curso',
           });
           continue;
         }
@@ -1094,8 +1188,8 @@ export class LevelingService {
             facultyGroup: demand.facultyGroup ? String(demand.facultyGroup) : null,
             campusName: demand.campusName ? String(demand.campusName) : null,
             reason: blockedByCapacity
-              ? 'No available capacity in candidate section-courses'
-              : 'Schedule conflict with already assigned courses',
+              ? 'No hay capacidad disponible en las secciones-curso candidatas'
+              : 'Cruce de horario con cursos ya asignados',
           });
           continue;
         }
@@ -1193,6 +1287,216 @@ export class LevelingService {
         conflictsFoundAfterAssign,
       };
     });
+  }
+
+  async getRunMatriculationPreview(runId: string, facultyGroup?: string) {
+    const run = await this.getRunOrThrow(runId);
+    const targetFaculty = String(facultyGroup ?? '').trim() || null;
+
+    const { sectionCourseRows, blocksBySectionCourse } =
+      await this.loadMatriculationPreviewContext({
+        runId: run.id,
+        periodId: run.periodId,
+      });
+    if (sectionCourseRows.length === 0) {
+      throw new BadRequestException('No hay secciones-curso configuradas para esta corrida');
+    }
+
+    const faculties = this.buildMatriculationFacultyStatuses(
+      sectionCourseRows,
+      blocksBySectionCourse
+    );
+    const readyFacultyGroups = faculties
+      .filter((row) => row.ready)
+      .map((row) => row.facultyGroup);
+
+    if (!targetFaculty) {
+      return {
+        runId: run.id,
+        status: run.status as LevelingRunStatus,
+        selectedFacultyGroup: null,
+        faculties,
+        readyFacultyGroups,
+        canMatriculateSelectedFaculty: false,
+        assignedCount: 0,
+        sections: [],
+        summaryBySectionCourse: [],
+        unassigned: [],
+        conflicts: [],
+      };
+    }
+
+    const scopedRows = sectionCourseRows.filter(
+      (row) => this.scopeKey(row.facultyGroup) === this.scopeKey(targetFaculty)
+    );
+    if (scopedRows.length === 0) {
+      throw new BadRequestException(
+        `No hay secciones-curso para la facultad ${targetFaculty}`
+      );
+    }
+
+    const canMatriculateSelectedFaculty = readyFacultyGroups.some(
+      (item) => this.scopeKey(item) === this.scopeKey(targetFaculty)
+    );
+
+    let assignedCount = 0;
+    let summaryBySectionCourse = scopedRows.map((row) => ({
+      sectionCourseId: String(row.sectionCourseId),
+      sectionId: String(row.sectionId),
+      sectionCode: row.sectionCode ? String(row.sectionCode) : null,
+      sectionName: String(row.sectionName ?? ''),
+      courseId: String(row.courseId),
+      courseName: String(row.courseName ?? ''),
+      assignedCount: 0,
+      initialCapacity: Number(row.initialCapacity ?? 45),
+      maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
+    }));
+    let unassigned: Array<{
+      studentId: string;
+      studentCode: string | null;
+      studentName: string;
+      courseId: string;
+      courseName: string;
+      facultyGroup: string | null;
+      campusName: string | null;
+      reason: string;
+    }> = [];
+    let conflicts: Array<{
+      studentId: string;
+      studentCode: string | null;
+      studentName: string;
+      dayOfWeek: number;
+      blockA: {
+        blockId: string;
+        sectionCourseId: string;
+        sectionId: string;
+        sectionCode: string | null;
+        sectionName: string;
+        courseId: string;
+        courseName: string;
+        startTime: string;
+        endTime: string;
+        startDate: string | null;
+        endDate: string | null;
+      };
+      blockB: {
+        blockId: string;
+        sectionCourseId: string;
+        sectionId: string;
+        sectionCode: string | null;
+        sectionName: string;
+        courseId: string;
+        courseName: string;
+        startTime: string;
+        endTime: string;
+        startDate: string | null;
+        endDate: string | null;
+      };
+    }> = [];
+    const studentsBySectionCourse = new Map<
+      string,
+      Array<{ studentId: string; studentCode: string | null; studentName: string }>
+    >();
+
+    if (canMatriculateSelectedFaculty) {
+      const simulation = await this.simulateMatriculationAssignments({
+        runId: run.id,
+        facultyGroup: targetFaculty,
+        sectionCourseRows: scopedRows,
+        blocksBySectionCourse,
+      });
+      assignedCount = simulation.assignedCount;
+      summaryBySectionCourse = simulation.summaryBySectionCourse;
+      unassigned = simulation.unassigned;
+      conflicts = simulation.conflicts;
+      for (const [key, value] of simulation.studentsBySectionCourse.entries()) {
+        studentsBySectionCourse.set(key, value.slice());
+      }
+    }
+
+    const summaryBySectionCourseId = new Map(
+      summaryBySectionCourse.map((row) => [String(row.sectionCourseId), row])
+    );
+
+    const sectionsById = new Map<string, any>();
+    for (const row of scopedRows) {
+      const sectionId = String(row.sectionId);
+      if (!sectionsById.has(sectionId)) {
+        sectionsById.set(sectionId, {
+          sectionId,
+          sectionCode: row.sectionCode ? String(row.sectionCode) : null,
+          sectionName: String(row.sectionName ?? ''),
+          facultyGroup: row.facultyGroup ? String(row.facultyGroup) : null,
+          facultyName: row.facultyName ? String(row.facultyName) : null,
+          campusName: row.campusName ? String(row.campusName) : null,
+          modality: row.modality ? String(row.modality) : null,
+          initialCapacity: Number(row.initialCapacity ?? 45),
+          maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
+          teacherId: row.teacherId ? String(row.teacherId) : null,
+          teacherName: row.teacherName ? String(row.teacherName) : null,
+          sectionCourses: [],
+        });
+      }
+
+      const summary = summaryBySectionCourseId.get(String(row.sectionCourseId));
+      const students = (
+        studentsBySectionCourse.get(String(row.sectionCourseId)) ?? []
+      ).slice();
+      students.sort((a, b) => {
+        const nameCmp = this.scopeKey(a.studentName).localeCompare(
+          this.scopeKey(b.studentName)
+        );
+        if (nameCmp !== 0) return nameCmp;
+        return this.scopeKey(a.studentCode).localeCompare(this.scopeKey(b.studentCode));
+      });
+
+      sectionsById.get(sectionId).sectionCourses.push({
+        sectionCourseId: String(row.sectionCourseId),
+        sectionId,
+        sectionCode: row.sectionCode ? String(row.sectionCode) : null,
+        sectionName: String(row.sectionName ?? ''),
+        courseId: String(row.courseId),
+        courseName: String(row.courseName ?? ''),
+        teacherId: row.teacherId ? String(row.teacherId) : null,
+        teacherName: row.teacherName ? String(row.teacherName) : null,
+        initialCapacity: Number(row.initialCapacity ?? 45),
+        maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
+        hasSchedule:
+          (blocksBySectionCourse.get(String(row.sectionCourseId)) ?? []).length > 0,
+        hasTeacher: Number(row.hasTeacher ?? 0) > 0,
+        assignedCount: Number(summary?.assignedCount ?? 0),
+        students,
+      });
+    }
+
+    const sections = Array.from(sectionsById.values())
+      .map((section) => ({
+        ...section,
+        sectionCourses: section.sectionCourses.sort((a: any, b: any) =>
+          this.scopeKey(a.courseName).localeCompare(this.scopeKey(b.courseName))
+        ),
+      }))
+      .sort((a, b) => {
+        const codeCmp = this.scopeKey(a.sectionCode ?? a.sectionName).localeCompare(
+          this.scopeKey(b.sectionCode ?? b.sectionName)
+        );
+        if (codeCmp !== 0) return codeCmp;
+        return this.scopeKey(a.sectionName).localeCompare(this.scopeKey(b.sectionName));
+      });
+
+    return {
+      runId: run.id,
+      status: run.status as LevelingRunStatus,
+      selectedFacultyGroup: targetFaculty,
+      faculties,
+      readyFacultyGroups,
+      canMatriculateSelectedFaculty,
+      assignedCount,
+      sections,
+      summaryBySectionCourse,
+      unassigned,
+      conflicts,
+    };
   }
 
   async listRunScheduleConflicts(params: {
@@ -3049,6 +3353,565 @@ export class LevelingService {
       }
     }
     return `${base}-${randomUUID().slice(0, 8).toUpperCase()}`;
+  }
+
+  private async loadMatriculationPreviewContext(params: {
+    runId: string;
+    periodId: string;
+  }) {
+    const sectionCourseRows: Array<{
+      sectionCourseId: string;
+      sectionId: string;
+      sectionCode: string | null;
+      sectionName: string;
+      courseId: string;
+      courseName: string;
+      facultyGroup: string | null;
+      facultyName: string | null;
+      campusName: string | null;
+      modality: string | null;
+      initialCapacity: number;
+      maxExtraCapacity: number;
+      teacherId: string | null;
+      teacherName: string | null;
+      hasTeacher: number;
+    }> = await this.dataSource.query(
+      `
+      SELECT
+        sc.id AS sectionCourseId,
+        sc.sectionId AS sectionId,
+        s.code AS sectionCode,
+        s.name AS sectionName,
+        sc.courseId AS courseId,
+        c.name AS courseName,
+        s.facultyGroup AS facultyGroup,
+        s.facultyName AS facultyName,
+        s.campusName AS campusName,
+        s.modality AS modality,
+        s.initialCapacity AS initialCapacity,
+        s.maxExtraCapacity AS maxExtraCapacity,
+        COALESCE(tc.id, ts.id) AS teacherId,
+        COALESCE(tc.fullName, ts.fullName) AS teacherName,
+        CASE
+          WHEN COALESCE(tc.id, ts.id) IS NOT NULL THEN 1
+          ELSE 0
+        END AS hasTeacher
+      FROM section_courses sc
+      INNER JOIN sections s ON s.id = sc.sectionId
+      INNER JOIN courses c ON c.id = sc.courseId
+      LEFT JOIN section_course_teachers sct ON sct.sectionCourseId = sc.id
+      LEFT JOIN users tc ON tc.id = sct.teacherId
+      LEFT JOIN users ts ON ts.id = s.teacherId
+      WHERE s.levelingRunId = ?
+        AND sc.periodId = ?
+      ORDER BY
+        s.code ASC,
+        s.name ASC,
+        c.name ASC
+      `,
+      [params.runId, params.periodId]
+    );
+
+    const sectionCourseIds = sectionCourseRows.map((x) => String(x.sectionCourseId));
+    const blocksBySectionCourse = new Map<string, ScheduleBlockWindow[]>();
+    if (sectionCourseIds.length > 0) {
+      const placeholders = sectionCourseIds.map(() => '?').join(', ');
+      const blockRows: Array<{
+        sectionCourseId: string;
+        dayOfWeek: number;
+        startTime: string;
+        endTime: string;
+        startDate: string | null;
+        endDate: string | null;
+      }> = await this.dataSource.query(
+        `
+        SELECT
+          sb.sectionCourseId AS sectionCourseId,
+          sb.dayOfWeek AS dayOfWeek,
+          sb.startTime AS startTime,
+          sb.endTime AS endTime,
+          sb.startDate AS startDate,
+          sb.endDate AS endDate
+        FROM schedule_blocks sb
+        WHERE sb.sectionCourseId IN (${placeholders})
+        ORDER BY sb.dayOfWeek ASC, sb.startTime ASC
+        `,
+        sectionCourseIds
+      );
+      for (const row of blockRows) {
+        const key = String(row.sectionCourseId);
+        if (!blocksBySectionCourse.has(key)) {
+          blocksBySectionCourse.set(key, []);
+        }
+        blocksBySectionCourse.get(key)!.push({
+          dayOfWeek: Number(row.dayOfWeek ?? 0),
+          startTime: String(row.startTime ?? ''),
+          endTime: String(row.endTime ?? ''),
+          startDate: this.toIsoDateOnly(row.startDate),
+          endDate: this.toIsoDateOnly(row.endDate),
+        });
+      }
+    }
+
+    return {
+      sectionCourseRows,
+      blocksBySectionCourse,
+    };
+  }
+
+  private buildMatriculationFacultyStatuses(
+    sectionCourseRows: Array<{
+      sectionCourseId: string;
+      facultyGroup: string | null;
+      hasTeacher: number;
+    }>,
+    blocksBySectionCourse: Map<string, ScheduleBlockWindow[]>
+  ) {
+    const byFaculty = new Map<
+      string,
+      { facultyGroup: string; totalSectionCourses: number; withSchedule: number; withTeacher: number }
+    >();
+
+    for (const row of sectionCourseRows) {
+      const facultyGroup = this.scopeKey(row.facultyGroup) || 'SIN_FACULTAD';
+      if (!byFaculty.has(facultyGroup)) {
+        byFaculty.set(facultyGroup, {
+          facultyGroup,
+          totalSectionCourses: 0,
+          withSchedule: 0,
+          withTeacher: 0,
+        });
+      }
+      const acc = byFaculty.get(facultyGroup)!;
+      acc.totalSectionCourses += 1;
+      if ((blocksBySectionCourse.get(String(row.sectionCourseId)) ?? []).length > 0) {
+        acc.withSchedule += 1;
+      }
+      if (Number(row.hasTeacher ?? 0) > 0) {
+        acc.withTeacher += 1;
+      }
+    }
+
+    return Array.from(byFaculty.values())
+      .map((item) => ({
+        ...item,
+        ready:
+          item.totalSectionCourses > 0 &&
+          item.withSchedule === item.totalSectionCourses &&
+          item.withTeacher === item.totalSectionCourses,
+      }))
+      .sort((a, b) => a.facultyGroup.localeCompare(b.facultyGroup));
+  }
+
+  private async simulateMatriculationAssignments(params: {
+    runId: string;
+    facultyGroup: string | null;
+    sectionCourseRows: Array<{
+      sectionCourseId: string;
+      sectionId: string;
+      sectionCode: string | null;
+      sectionName: string;
+      courseId: string;
+      courseName: string;
+      facultyGroup: string | null;
+      campusName: string | null;
+      initialCapacity: number;
+      maxExtraCapacity: number;
+    }>;
+    blocksBySectionCourse: Map<string, ScheduleBlockWindow[]>;
+  }) {
+    const demands: StudentDemandItem[] = await this.dataSource.query(
+      `
+      SELECT
+        d.studentId AS studentId,
+        u.codigoAlumno AS studentCode,
+        u.fullName AS studentName,
+        d.courseId AS courseId,
+        c.name AS courseName,
+        d.facultyGroup AS facultyGroup,
+        d.campusName AS campusName
+      FROM leveling_run_student_course_demands d
+      INNER JOIN users u ON u.id = d.studentId
+      INNER JOIN courses c ON c.id = d.courseId
+      WHERE d.runId = ?
+        AND d.required = 1
+        ${params.facultyGroup ? 'AND d.facultyGroup = ?' : ''}
+      ORDER BY u.fullName ASC, c.name ASC
+      `,
+      [params.runId, ...(params.facultyGroup ? [params.facultyGroup] : [])]
+    );
+
+    if (demands.length === 0) {
+      throw new BadRequestException(
+        params.facultyGroup
+          ? `No hay demandas pendientes alumno-curso para la facultad ${params.facultyGroup}`
+          : 'No hay demandas pendientes alumno-curso para matricular'
+      );
+    }
+
+    type Candidate = {
+      sectionCourseId: string;
+      sectionId: string;
+      sectionCode: string | null;
+      sectionName: string;
+      courseId: string;
+      courseName: string;
+      facultyGroup: string | null;
+      campusName: string | null;
+      initialCapacity: number;
+      maxExtraCapacity: number;
+      assignedCount: number;
+      blocks: ScheduleBlockWindow[];
+    };
+
+    const candidatesByCourse = new Map<string, Candidate[]>();
+    for (const row of params.sectionCourseRows) {
+      const key = String(row.courseId);
+      if (!candidatesByCourse.has(key)) {
+        candidatesByCourse.set(key, []);
+      }
+      candidatesByCourse.get(key)!.push({
+        sectionCourseId: String(row.sectionCourseId),
+        sectionId: String(row.sectionId),
+        sectionCode: row.sectionCode ? String(row.sectionCode) : null,
+        sectionName: String(row.sectionName ?? ''),
+        courseId: String(row.courseId),
+        courseName: String(row.courseName ?? ''),
+        facultyGroup: row.facultyGroup ? String(row.facultyGroup) : null,
+        campusName: row.campusName ? String(row.campusName) : null,
+        initialCapacity: Number(row.initialCapacity ?? 45),
+        maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
+        assignedCount: 0,
+        blocks: params.blocksBySectionCourse.get(String(row.sectionCourseId)) ?? [],
+      });
+    }
+
+    const demandWithCandidates = demands.map((demand) => {
+      const sameScope = (candidatesByCourse.get(String(demand.courseId)) ?? []).filter(
+        (candidate) =>
+          this.scopeKey(candidate.facultyGroup) === this.scopeKey(demand.facultyGroup) &&
+          this.scopeKey(candidate.campusName) === this.scopeKey(demand.campusName)
+      );
+      const allCourseCandidates = candidatesByCourse.get(String(demand.courseId)) ?? [];
+      const candidates = sameScope.length > 0 ? sameScope : allCourseCandidates;
+      return {
+        ...demand,
+        candidates,
+      };
+    });
+
+    demandWithCandidates.sort((a, b) => {
+      if (a.candidates.length !== b.candidates.length) {
+        return a.candidates.length - b.candidates.length;
+      }
+      const sa = this.scopeKey(a.facultyGroup) + this.scopeKey(a.campusName);
+      const sb = this.scopeKey(b.facultyGroup) + this.scopeKey(b.campusName);
+      if (sa !== sb) return sa.localeCompare(sb);
+      const na = this.scopeKey(a.studentName);
+      const nb = this.scopeKey(b.studentName);
+      if (na !== nb) return na.localeCompare(nb);
+      return this.scopeKey(a.courseName).localeCompare(this.scopeKey(b.courseName));
+    });
+
+    const assignedBlocksByStudent = new Map<string, ScheduleBlockWindow[]>();
+    const rowsToInsert: Array<{
+      id: string;
+      sectionCourseId: string;
+      sectionId: string;
+      courseId: string;
+      studentId: string;
+    }> = [];
+    const unassigned: Array<{
+      studentId: string;
+      studentCode: string | null;
+      studentName: string;
+      courseId: string;
+      courseName: string;
+      facultyGroup: string | null;
+      campusName: string | null;
+      reason: string;
+    }> = [];
+
+    const studentDirectory = new Map<
+      string,
+      { studentId: string; studentCode: string | null; studentName: string }
+    >();
+    const studentsBySectionCourse = new Map<
+      string,
+      Array<{ studentId: string; studentCode: string | null; studentName: string }>
+    >();
+
+    const getStudentBlocks = (studentId: string) => {
+      if (!assignedBlocksByStudent.has(studentId)) {
+        assignedBlocksByStudent.set(studentId, []);
+      }
+      return assignedBlocksByStudent.get(studentId)!;
+    };
+
+    for (const demand of demandWithCandidates) {
+      const studentId = String(demand.studentId);
+      if (!studentDirectory.has(studentId)) {
+        studentDirectory.set(studentId, {
+          studentId,
+          studentCode: demand.studentCode ? String(demand.studentCode) : null,
+          studentName: String(demand.studentName ?? ''),
+        });
+      }
+
+      if (demand.candidates.length === 0) {
+        unassigned.push({
+          studentId,
+          studentCode: demand.studentCode ? String(demand.studentCode) : null,
+          studentName: String(demand.studentName ?? ''),
+          courseId: String(demand.courseId),
+          courseName: String(demand.courseName ?? ''),
+          facultyGroup: demand.facultyGroup ? String(demand.facultyGroup) : null,
+          campusName: demand.campusName ? String(demand.campusName) : null,
+          reason: 'No se encontró sección-curso candidata para este curso',
+        });
+        continue;
+      }
+
+      const studentBlocks = getStudentBlocks(studentId);
+      const available = demand.candidates.filter((candidate) => {
+        if (this.isCapacityBlocked(candidate)) return false;
+        return !this.hasScheduleOverlap(studentBlocks, candidate.blocks);
+      });
+
+      if (available.length === 0) {
+        const blockedByCapacity =
+          demand.candidates.every((candidate) => this.isCapacityBlocked(candidate)) &&
+          demand.candidates.length > 0;
+        unassigned.push({
+          studentId,
+          studentCode: demand.studentCode ? String(demand.studentCode) : null,
+          studentName: String(demand.studentName ?? ''),
+          courseId: String(demand.courseId),
+          courseName: String(demand.courseName ?? ''),
+          facultyGroup: demand.facultyGroup ? String(demand.facultyGroup) : null,
+          campusName: demand.campusName ? String(demand.campusName) : null,
+          reason: blockedByCapacity
+            ? 'No hay capacidad disponible en las secciones-curso candidatas'
+            : 'Cruce de horario con cursos ya asignados',
+        });
+        continue;
+      }
+
+      available.sort((a, b) => {
+        const ratioA = this.capacityRatio(a);
+        const ratioB = this.capacityRatio(b);
+        if (ratioA !== ratioB) return ratioA - ratioB;
+        const codeA = this.scopeKey(a.sectionCode ?? a.sectionName);
+        const codeB = this.scopeKey(b.sectionCode ?? b.sectionName);
+        if (codeA !== codeB) return codeA.localeCompare(codeB);
+        return this.scopeKey(a.courseName).localeCompare(this.scopeKey(b.courseName));
+      });
+      const selected = available[0];
+
+      rowsToInsert.push({
+        id: randomUUID(),
+        sectionCourseId: selected.sectionCourseId,
+        sectionId: selected.sectionId,
+        courseId: selected.courseId,
+        studentId,
+      });
+      selected.assignedCount += 1;
+      studentBlocks.push(...selected.blocks);
+
+      if (!studentsBySectionCourse.has(selected.sectionCourseId)) {
+        studentsBySectionCourse.set(selected.sectionCourseId, []);
+      }
+      studentsBySectionCourse.get(selected.sectionCourseId)!.push({
+        studentId,
+        studentCode: demand.studentCode ? String(demand.studentCode) : null,
+        studentName: String(demand.studentName ?? ''),
+      });
+    }
+
+    for (const rows of studentsBySectionCourse.values()) {
+      rows.sort((a, b) => {
+        const nameCmp = this.scopeKey(a.studentName).localeCompare(
+          this.scopeKey(b.studentName)
+        );
+        if (nameCmp !== 0) return nameCmp;
+        return this.scopeKey(a.studentCode).localeCompare(this.scopeKey(b.studentCode));
+      });
+    }
+
+    const summaryBySectionCourse = params.sectionCourseRows.map((row) => {
+      const candidate = (candidatesByCourse.get(String(row.courseId)) ?? []).find(
+        (x) => x.sectionCourseId === String(row.sectionCourseId)
+      );
+      return {
+        sectionCourseId: String(row.sectionCourseId),
+        sectionId: String(row.sectionId),
+        sectionCode: row.sectionCode ? String(row.sectionCode) : null,
+        sectionName: String(row.sectionName ?? ''),
+        courseId: String(row.courseId),
+        courseName: String(row.courseName ?? ''),
+        assignedCount: Number(candidate?.assignedCount ?? 0),
+        initialCapacity: Number(row.initialCapacity ?? 45),
+        maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
+      };
+    });
+
+    return {
+      assignedCount: rowsToInsert.length,
+      rowsToInsert,
+      unassigned,
+      summaryBySectionCourse,
+      studentsBySectionCourse,
+      conflicts: this.buildSimulatedMatriculationConflicts({
+        rowsToInsert,
+        sectionCourseRows: params.sectionCourseRows,
+        blocksBySectionCourse: params.blocksBySectionCourse,
+        studentDirectory,
+      }),
+    };
+  }
+
+  private buildSimulatedMatriculationConflicts(params: {
+    rowsToInsert: Array<{
+      sectionCourseId: string;
+      studentId: string;
+    }>;
+    sectionCourseRows: Array<{
+      sectionCourseId: string;
+      sectionId: string;
+      sectionCode: string | null;
+      sectionName: string;
+      courseId: string;
+      courseName: string;
+    }>;
+    blocksBySectionCourse: Map<string, ScheduleBlockWindow[]>;
+    studentDirectory: Map<
+      string,
+      { studentId: string; studentCode: string | null; studentName: string }
+    >;
+  }) {
+    const sectionCourseById = new Map(
+      params.sectionCourseRows.map((row) => [String(row.sectionCourseId), row])
+    );
+    const assignedByStudent = new Map<string, string[]>();
+    for (const row of params.rowsToInsert) {
+      const studentId = String(row.studentId);
+      if (!assignedByStudent.has(studentId)) {
+        assignedByStudent.set(studentId, []);
+      }
+      assignedByStudent.get(studentId)!.push(String(row.sectionCourseId));
+    }
+
+    const seen = new Set<string>();
+    const conflicts: Array<{
+      studentId: string;
+      studentCode: string | null;
+      studentName: string;
+      dayOfWeek: number;
+      blockA: {
+        blockId: string;
+        sectionCourseId: string;
+        sectionId: string;
+        sectionCode: string | null;
+        sectionName: string;
+        courseId: string;
+        courseName: string;
+        startTime: string;
+        endTime: string;
+        startDate: string | null;
+        endDate: string | null;
+      };
+      blockB: {
+        blockId: string;
+        sectionCourseId: string;
+        sectionId: string;
+        sectionCode: string | null;
+        sectionName: string;
+        courseId: string;
+        courseName: string;
+        startTime: string;
+        endTime: string;
+        startDate: string | null;
+        endDate: string | null;
+      };
+    }> = [];
+
+    for (const [studentId, sectionCourseIds] of assignedByStudent.entries()) {
+      if (sectionCourseIds.length < 2) continue;
+      for (let i = 0; i < sectionCourseIds.length; i += 1) {
+        for (let j = i + 1; j < sectionCourseIds.length; j += 1) {
+          const aId = String(sectionCourseIds[i]);
+          const bId = String(sectionCourseIds[j]);
+          const metaA = sectionCourseById.get(aId);
+          const metaB = sectionCourseById.get(bId);
+          if (!metaA || !metaB) continue;
+
+          const blocksA = params.blocksBySectionCourse.get(aId) ?? [];
+          const blocksB = params.blocksBySectionCourse.get(bId) ?? [];
+          for (const blockA of blocksA) {
+            for (const blockB of blocksB) {
+              if (!this.blocksOverlap(blockA, blockB)) continue;
+              const key =
+                `${studentId}|${aId}|${bId}|${blockA.dayOfWeek}|${blockA.startTime}|${blockA.endTime}|` +
+                `${blockA.startDate ?? ''}|${blockA.endDate ?? ''}|${blockB.startTime}|${blockB.endTime}|` +
+                `${blockB.startDate ?? ''}|${blockB.endDate ?? ''}`;
+              if (seen.has(key)) continue;
+              seen.add(key);
+
+              const student = params.studentDirectory.get(studentId) ?? {
+                studentId,
+                studentCode: null,
+                studentName: '',
+              };
+              conflicts.push({
+                studentId,
+                studentCode: student.studentCode,
+                studentName: student.studentName,
+                dayOfWeek: Number(blockA.dayOfWeek ?? 0),
+                blockA: {
+                  blockId: `${aId}:${blockA.dayOfWeek}:${blockA.startTime}:${blockA.endTime}:${blockA.startDate ?? ''}:${blockA.endDate ?? ''
+                    }`,
+                  sectionCourseId: aId,
+                  sectionId: String(metaA.sectionId),
+                  sectionCode: metaA.sectionCode ? String(metaA.sectionCode) : null,
+                  sectionName: String(metaA.sectionName ?? ''),
+                  courseId: String(metaA.courseId),
+                  courseName: String(metaA.courseName ?? ''),
+                  startTime: String(blockA.startTime ?? ''),
+                  endTime: String(blockA.endTime ?? ''),
+                  startDate: blockA.startDate,
+                  endDate: blockA.endDate,
+                },
+                blockB: {
+                  blockId: `${bId}:${blockB.dayOfWeek}:${blockB.startTime}:${blockB.endTime}:${blockB.startDate ?? ''}:${blockB.endDate ?? ''
+                    }`,
+                  sectionCourseId: bId,
+                  sectionId: String(metaB.sectionId),
+                  sectionCode: metaB.sectionCode ? String(metaB.sectionCode) : null,
+                  sectionName: String(metaB.sectionName ?? ''),
+                  courseId: String(metaB.courseId),
+                  courseName: String(metaB.courseName ?? ''),
+                  startTime: String(blockB.startTime ?? ''),
+                  endTime: String(blockB.endTime ?? ''),
+                  startDate: blockB.startDate,
+                  endDate: blockB.endDate,
+                },
+              });
+            }
+          }
+        }
+      }
+    }
+
+    return conflicts.sort((a, b) => {
+      const studentCmp = this.scopeKey(a.studentName).localeCompare(
+        this.scopeKey(b.studentName)
+      );
+      if (studentCmp !== 0) return studentCmp;
+      const codeCmp = this.scopeKey(a.studentCode).localeCompare(this.scopeKey(b.studentCode));
+      if (codeCmp !== 0) return codeCmp;
+      if (a.dayOfWeek !== b.dayOfWeek) return a.dayOfWeek - b.dayOfWeek;
+      return this.scopeKey(a.blockA.startTime).localeCompare(this.scopeKey(b.blockA.startTime));
+    });
   }
 
   private defaultFacultyName(facultyGroup: string) {

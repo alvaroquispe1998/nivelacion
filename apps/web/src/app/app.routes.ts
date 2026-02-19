@@ -76,7 +76,7 @@ export const appRoutes: Route[] = [
           ),
       },
       {
-        // Step 1a — no extra requirement beyond being admin
+        // Step 1a - no extra requirement beyond being admin
         path: 'admin/periods',
         canActivate: [roleGuard],
         data: { roles: [Role.ADMIN] },
@@ -86,7 +86,7 @@ export const appRoutes: Route[] = [
           ),
       },
       {
-        // Step 1b — requires active period
+        // Step 1b - requires active period
         path: 'admin/leveling',
         canActivate: [roleGuard, workflowStepGuard],
         data: { roles: [Role.ADMIN], workflowStep: 'leveling' },
@@ -96,7 +96,7 @@ export const appRoutes: Route[] = [
           ),
       },
       {
-        // Step 2 — requires leveling run to exist (applied)
+        // Step 2 - requires leveling run to exist (applied)
         path: 'admin/sections',
         canActivate: [roleGuard, workflowStepGuard],
         data: { roles: [Role.ADMIN], workflowStep: 'sections' },
@@ -115,17 +115,17 @@ export const appRoutes: Route[] = [
           ),
       },
       {
-        // Step 3 — requires run status = MATRICULATED
+        // Step 3 - preview/execute matricula by faculty
         path: 'admin/matricula',
         canActivate: [roleGuard, workflowStepGuard],
         data: { roles: [Role.ADMIN], workflowStep: 'matricula' },
         loadComponent: () =>
-          import('./pages/admin-export-assigned.page').then(
-            (m) => m.AdminExportAssignedPage
+          import('./pages/admin-matricula.page').then(
+            (m) => m.AdminMatriculaPage
           ),
       },
       {
-        // Step 4a — requires assigned students > 0
+        // Step 4a - requires assigned students > 0
         path: 'admin/export',
         canActivate: [roleGuard, workflowStepGuard],
         data: { roles: [Role.ADMIN], workflowStep: 'export' },

@@ -65,7 +65,14 @@ export class SectionsService {
     facultyGroup: string;
     campusName: string;
     courseName: string;
-  }): Promise<Array<{ section: SectionEntity; studentCount: number }>> {
+  }): Promise<
+    Array<{
+      section: SectionEntity;
+      studentCount: number;
+      scheduleSummary: string | null;
+      hasSchedule: boolean;
+    }>
+  > {
     const activePeriodId = await this.periodsService.getActivePeriodIdOrThrow();
     const facultyGroup = params.facultyGroup.trim();
     const campusName = params.campusName.trim();
@@ -97,6 +104,8 @@ export class SectionsService {
       teacherDni: string | null;
       teacherName: string | null;
       studentCount: number;
+      scheduleSummary: string | null;
+      scheduleBlocksCount: number;
     }> = await this.sectionsRepo.manager.query(
       `
       SELECT
@@ -116,7 +125,27 @@ export class SectionsService {
         COALESCE(tc.id, ts.id) AS teacherId,
         COALESCE(tc.dni, ts.dni) AS teacherDni,
         COALESCE(tc.fullName, ts.fullName) AS teacherName,
-        COUNT(DISTINCT ssc.studentId) AS studentCount
+        COUNT(DISTINCT ssc.studentId) AS studentCount,
+        COUNT(DISTINCT sb.id) AS scheduleBlocksCount,
+        GROUP_CONCAT(
+          DISTINCT CONCAT(
+            CASE sb.dayOfWeek
+              WHEN 1 THEN 'Lun '
+              WHEN 2 THEN 'Mar '
+              WHEN 3 THEN 'Mie '
+              WHEN 4 THEN 'Jue '
+              WHEN 5 THEN 'Vie '
+              WHEN 6 THEN 'Sab '
+              WHEN 7 THEN 'Dom '
+              ELSE ''
+            END,
+            LEFT(COALESCE(sb.startTime, ''), 5),
+            '-',
+            LEFT(COALESCE(sb.endTime, ''), 5)
+          )
+          ORDER BY sb.dayOfWeek ASC, sb.startTime ASC
+          SEPARATOR ' | '
+        ) AS scheduleSummary
       FROM sections s
       INNER JOIN section_courses scf
         ON scf.sectionId = s.id
@@ -128,6 +157,8 @@ export class SectionsService {
         ON tc.id = sct.teacherId
       LEFT JOIN users ts
         ON ts.id = s.teacherId
+      LEFT JOIN schedule_blocks sb
+        ON sb.sectionCourseId = scf.id
       LEFT JOIN section_student_courses ssc
         ON ssc.sectionCourseId = scf.id
       WHERE s.facultyGroup = ?
@@ -201,6 +232,8 @@ export class SectionsService {
           : null,
       }),
       studentCount: Number(row.studentCount || 0),
+      scheduleSummary: row.scheduleSummary ? String(row.scheduleSummary) : null,
+      hasSchedule: Number(row.scheduleBlocksCount ?? 0) > 0,
     }));
   }
 

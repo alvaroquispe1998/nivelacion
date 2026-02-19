@@ -108,6 +108,7 @@ interface SectionStudentRow {
               <th class="px-4 py-3">Facultad</th>
               <th class="px-4 py-3">Sede</th>
               <th class="px-4 py-3">Modalidad</th>
+              <th class="px-4 py-3">Horario</th>
               <th class="px-4 py-3">Docente</th>
               <th class="px-4 py-3" *ngIf="viewMode === 'students'">Alumnos</th>
               <th class="px-4 py-3">Detalle</th>
@@ -122,6 +123,20 @@ interface SectionStudentRow {
               </td>
               <td class="px-4 py-3">{{ s.campusName || '-' }}</td>
               <td class="px-4 py-3">{{ s.modality || '-' }}</td>
+              <td class="px-4 py-3 text-xs">
+                <span
+                  *ngIf="s.hasSchedule"
+                  class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700"
+                >
+                  ✓
+                </span>
+                <span
+                  *ngIf="!s.hasSchedule"
+                  class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500"
+                >
+                  -
+                </span>
+              </td>
               <td class="px-4 py-3 text-xs">
                 <div>{{ s.teacherName || '-' }}</div>
                 <div class="text-slate-500" *ngIf="s.teacherDni">{{ s.teacherDni }}</div>
@@ -156,7 +171,9 @@ interface SectionStudentRow {
               </td>
             </tr>
             <tr *ngIf="sections.length === 0 && hasMandatoryFilters" class="border-t border-slate-100">
-              <td class="px-4 py-5 text-slate-500" colspan="7">Sin secciones para el filtro seleccionado.</td>
+              <td class="px-4 py-5 text-slate-500" [attr.colspan]="viewMode === 'students' ? 8 : 7">
+                Sin secciones para el filtro seleccionado.
+              </td>
             </tr>
           </tbody>
         </table>

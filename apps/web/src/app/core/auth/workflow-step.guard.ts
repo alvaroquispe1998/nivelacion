@@ -6,7 +6,7 @@
  *   1. Periodos       → needs: active period              (always accessible if admin)
  *   2. Nivelación     → needs: active period              → redirect /admin/periods
  *   3. Horarios       → needs: leveling run applied       → redirect /admin/leveling
- *   4. Matrícula      → needs: run status = MATRICULATED  → redirect /admin/sections
+ *   4. Matrícula      → needs: run exists (preview/apply from this step)
  *   5. Exportar       → needs: assigned students > 0      → redirect /admin/matricula
  *   6. Alumnos/Sección→ needs: assigned students > 0      → redirect /admin/matricula
  *
@@ -37,6 +37,7 @@ interface RunSummary {
         demands: number;
         schedules: { withSchedule: number; withoutSchedule: number; allComplete: boolean };
         teachers: { withTeacher: number; withoutTeacher: number; allComplete: boolean };
+        readyFaculties?: number;
     } | null;
 }
 
@@ -68,13 +69,15 @@ const STEP_REQUIREMENTS: Record<StepKey, StepRequirement> = {
         },
     },
 
-    /** Step 3 – Matrícula: needs run to be in MATRICULATED status */
+    /** Step 3 – Matrícula: allow as soon as a run exists */
     matricula: {
-        description: 'Debe ejecutar la matrícula desde la página de Nivelación primero.',
+        description:
+            'Debes tener al menos una facultad lista (horarios y docentes completos) antes de acceder a Matrícula.',
         blockedRedirectTo: (s) => {
             if (!s.activePeriod) return '/admin/periods';
             if (!s.run) return '/admin/leveling';
-            if (s.run.status !== 'MATRICULATED') return '/admin/leveling';
+            const readyFaculties = Number(s.metrics?.readyFaculties ?? 0);
+            if (readyFaculties <= 0 && s.run.status !== 'MATRICULATED') return '/admin/sections';
             return null;
         },
     },
@@ -85,7 +88,7 @@ const STEP_REQUIREMENTS: Record<StepKey, StepRequirement> = {
         blockedRedirectTo: (s) => {
             if (!s.activePeriod) return '/admin/periods';
             if (!s.run) return '/admin/leveling';
-            if (s.run.status !== 'MATRICULATED') return '/admin/leveling';
+            if (s.run.status !== 'MATRICULATED') return '/admin/matricula';
             if (!s.metrics || s.metrics.assigned === 0) return '/admin/matricula';
             return null;
         },
@@ -97,7 +100,7 @@ const STEP_REQUIREMENTS: Record<StepKey, StepRequirement> = {
         blockedRedirectTo: (s) => {
             if (!s.activePeriod) return '/admin/periods';
             if (!s.run) return '/admin/leveling';
-            if (s.run.status !== 'MATRICULATED') return '/admin/leveling';
+            if (s.run.status !== 'MATRICULATED') return '/admin/matricula';
             if (!s.metrics || s.metrics.assigned === 0) return '/admin/matricula';
             return null;
         },

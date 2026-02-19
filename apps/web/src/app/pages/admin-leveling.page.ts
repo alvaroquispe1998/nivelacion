@@ -1279,7 +1279,7 @@ export class AdminLevelingPage {
     const ficaSections = this.runSections.filter((s) => s.facultyGroup === 'FICA');
     if (ficaSections.length === 0) return false;
     return ficaSections.every((s) =>
-      s.sectionCourses.every((sc) => sc.hasSchedule)
+      s.sectionCourses.every((sc) => sc.hasSchedule && Boolean(sc.hasTeacher))
     );
   }
 
@@ -1288,7 +1288,7 @@ export class AdminLevelingPage {
     const saludSections = this.runSections.filter((s) => s.facultyGroup === 'SALUD');
     if (saludSections.length === 0) return false;
     return saludSections.every((s) =>
-      s.sectionCourses.every((sc) => sc.hasSchedule)
+      s.sectionCourses.every((sc) => sc.hasSchedule && Boolean(sc.hasTeacher))
     );
   }
 

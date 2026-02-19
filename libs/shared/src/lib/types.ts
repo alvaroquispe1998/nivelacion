@@ -55,6 +55,8 @@ export interface AdminSection {
   teacherId?: Uuid | null;
   teacherDni?: string | null;
   teacherName?: string | null;
+  scheduleSummary?: string | null;
+  hasSchedule?: boolean;
 }
 
 export interface AdminTeacher {
@@ -272,6 +274,7 @@ export interface LevelingRunSectionCourseView {
   courseId: Uuid;
   courseName: string;
   hasSchedule: boolean;
+  hasTeacher?: boolean;
   scheduleBlocksCount: number;
   assignedStudents: number;
 }
@@ -341,4 +344,64 @@ export interface LevelingRunConflictItem {
   dayOfWeek: number;
   blockA: AdminScheduleConflictBlock;
   blockB: AdminScheduleConflictBlock;
+}
+
+export interface LevelingMatriculationFacultyStatus {
+  facultyGroup: string;
+  totalSectionCourses: number;
+  withSchedule: number;
+  withTeacher: number;
+  ready: boolean;
+}
+
+export interface LevelingMatriculationPreviewStudent {
+  studentId: Uuid;
+  studentCode?: string | null;
+  studentName: string;
+}
+
+export interface LevelingMatriculationPreviewSectionCourse {
+  sectionCourseId: Uuid;
+  sectionId: Uuid;
+  sectionCode?: string | null;
+  sectionName: string;
+  courseId: Uuid;
+  courseName: string;
+  teacherId?: Uuid | null;
+  teacherName?: string | null;
+  initialCapacity: number;
+  maxExtraCapacity: number;
+  hasSchedule: boolean;
+  hasTeacher: boolean;
+  assignedCount: number;
+  students: LevelingMatriculationPreviewStudent[];
+}
+
+export interface LevelingMatriculationPreviewSection {
+  sectionId: Uuid;
+  sectionCode?: string | null;
+  sectionName: string;
+  facultyGroup?: string | null;
+  facultyName?: string | null;
+  campusName?: string | null;
+  modality?: string | null;
+  initialCapacity: number;
+  maxExtraCapacity: number;
+  teacherId?: Uuid | null;
+  teacherName?: string | null;
+  sectionCourses: LevelingMatriculationPreviewSectionCourse[];
+}
+
+export interface LevelingMatriculationPreviewResponse {
+  runId: Uuid;
+  status: LevelingRunStatus;
+  selectedFacultyGroup?: string | null;
+  faculties: LevelingMatriculationFacultyStatus[];
+  readyFacultyGroups: string[];
+  canMatriculateSelectedFaculty: boolean;
+  assignedCount: number;
+  sections: LevelingMatriculationPreviewSection[];
+  summaryBySectionCourse: LevelingMatriculationSectionSummaryItem[];
+  unassigned: LevelingMatriculationUnassignedItem[];
+  conflicts: LevelingRunConflictItem[];
 }

@@ -498,7 +498,7 @@ export class AdminDashboardPage implements OnInit {
                     : 'in-progress',
             metric: d.matricula.assignedCount !== null ? String(d.matricula.assignedCount) : null,
             metricLabel: 'Alumnos matriculados',
-            route: '/admin/leveling',
+            route: '/admin/matricula',
             cta: 'Ejecutar Matrícula',
             blockReason: !hasNivelacion
                 ? 'Debes aplicar la estructura y configurar todos los horarios antes de matricular.'

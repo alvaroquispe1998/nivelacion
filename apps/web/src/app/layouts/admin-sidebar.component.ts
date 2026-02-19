@@ -137,10 +137,10 @@ export const ADMIN_SIDEBAR_GROUPS: SidebarGroup[] = [
     step: 3,
     items: [
       {
-        label: 'Resultados Matrícula',
+        label: 'Matrícula',
         route: '/admin/matricula',
         icon: ICON.academic,
-        tooltip: 'Ver resultados de matrícula',
+        tooltip: 'Matrícula',
       },
     ],
   },
@@ -538,12 +538,9 @@ export class AdminSidebarComponent implements OnInit {
       disable('/admin/sections');
     }
 
-    // Step 3: Matricula requires run.status == 'MATRICULATED' OR partial assignment
-    // We allow access if status is MATRICULATED OR if there are already assigned students (partial run)
-    const hasAssignments = s.metrics?.assigned > 0;
-    const isMatriculated = s.run?.status === 'MATRICULATED';
-
-    if (!s.activePeriod || !s.run || (!isMatriculated && !hasAssignments)) {
+    // Step 3: Matricula requires at least one ready faculty (except already matriculated runs)
+    const readyFaculties = Number(s.metrics?.readyFaculties ?? 0);
+    if (!s.activePeriod || !s.run || (readyFaculties <= 0 && s.run.status !== 'MATRICULATED')) {
       disable('/admin/matricula');
     }
 

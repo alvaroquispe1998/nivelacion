@@ -57,7 +57,12 @@ export class SectionsController {
         })
       : await this.sectionsService.list();
 
-    return rows.map(({ section: s, studentCount }) => ({
+    return rows.map((row) => {
+      const s = row.section;
+      const studentCount = row.studentCount;
+      const scheduleSummary = (row as { scheduleSummary?: string | null }).scheduleSummary ?? null;
+      const hasSchedule = Boolean((row as { hasSchedule?: boolean }).hasSchedule);
+      return {
       id: s.id,
       name: s.name,
       code: s.code,
@@ -73,7 +78,10 @@ export class SectionsController {
       teacherDni: s.teacher?.dni ?? null,
       teacherName: s.teacher?.fullName ?? null,
       studentCount,
-    }));
+      scheduleSummary,
+      hasSchedule,
+      };
+    });
   }
 
   @Get('filters/faculties')

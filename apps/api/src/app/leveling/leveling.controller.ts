@@ -101,6 +101,14 @@ export class LevelingController {
     return this.levelingService.matriculateRun(runId, body?.facultyGroup);
   }
 
+  @Get('runs/:runId/matriculate-preview')
+  getRunMatriculationPreview(
+    @Param('runId') runId: string,
+    @Query('facultyGroup') facultyGroup?: string
+  ) {
+    return this.levelingService.getRunMatriculationPreview(runId, facultyGroup);
+  }
+
   @Get('runs/:runId/conflicts')
   listRunConflicts(
     @Param('runId') runId: string,
