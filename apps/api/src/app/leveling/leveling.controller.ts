@@ -29,11 +29,16 @@ import { LevelingService } from './leveling.service';
 @Roles(Role.ADMIN)
 @Controller('admin/leveling')
 export class LevelingController {
-  constructor(private readonly levelingService: LevelingService) {}
+  constructor(private readonly levelingService: LevelingService) { }
 
   @Get('config')
   getConfig() {
     return this.levelingService.getConfig();
+  }
+
+  @Get('active-run-summary')
+  getActiveRunSummary() {
+    return this.levelingService.getActiveRunSummary();
   }
 
   @Put('config')

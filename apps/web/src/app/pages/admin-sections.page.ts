@@ -2,7 +2,7 @@ import { CommonModule } from '@angular/common';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { ChangeDetectorRef, Component, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { RouterLink } from '@angular/router';
+import { ActivatedRoute, RouterLink } from '@angular/router';
 import type { AdminSection, AdminTeacher } from '@uai/shared';
 import { firstValueFrom } from 'rxjs';
 
@@ -25,8 +25,12 @@ interface SectionStudentRow {
   template: `
     <div class="flex items-center justify-between">
       <div>
-        <div class="text-xl font-semibold">Secciones</div>
-        <div class="text-sm text-slate-600">Gestion de secciones</div>
+        <div class="text-xl font-semibold">
+          {{ viewMode === 'students' ? 'Alumnos por Sección' : 'Horarios y Docentes' }}
+        </div>
+        <div class="text-sm text-slate-600">
+          {{ viewMode === 'students' ? 'Listado de alumnos por sección' : 'Gestión de horarios y asignación de docentes' }}
+        </div>
       </div>
       <button
         class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50"
@@ -105,7 +109,7 @@ interface SectionStudentRow {
               <th class="px-4 py-3">Sede</th>
               <th class="px-4 py-3">Modalidad</th>
               <th class="px-4 py-3">Docente</th>
-              <th class="px-4 py-3">Alumnos</th>
+              <th class="px-4 py-3" *ngIf="viewMode === 'students'">Alumnos</th>
               <th class="px-4 py-3">Detalle</th>
             </tr>
           </thead>
@@ -122,7 +126,7 @@ interface SectionStudentRow {
                 <div>{{ s.teacherName || '-' }}</div>
                 <div class="text-slate-500" *ngIf="s.teacherDni">{{ s.teacherDni }}</div>
               </td>
-              <td class="px-4 py-3 font-medium">{{ s.studentCount || 0 }}</td>
+              <td class="px-4 py-3 font-medium" *ngIf="viewMode === 'students'">{{ s.studentCount || 0 }}</td>
               <td class="px-4 py-3 text-xs">
                 <div class="flex flex-wrap gap-2">
                   <button
@@ -130,6 +134,7 @@ interface SectionStudentRow {
                     class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50 disabled:opacity-60"
                     (click)="openStudentsModal(s)"
                     [disabled]="loadingStudentsSectionId === s.id || !courseFilter"
+                    *ngIf="viewMode === 'students'"
                   >
                     {{ loadingStudentsSectionId === s.id ? 'Cargando...' : 'Ver alumnos' }}
                   </button>
@@ -274,6 +279,7 @@ interface SectionStudentRow {
 export class AdminSectionsPage {
   private readonly http = inject(HttpClient);
   private readonly cdr = inject(ChangeDetectorRef);
+  private readonly route = inject(ActivatedRoute);
 
   sections: AdminSection[] = [];
   teachers: AdminTeacher[] = [];
@@ -299,8 +305,13 @@ export class AdminSectionsPage {
     return Boolean(this.facultyFilter && this.campusFilter && this.courseFilter);
   }
 
+  viewMode: 'schedule' | 'students' = 'schedule';
+
   async ngOnInit() {
-    await this.reloadAll();
+    this.route.queryParams.subscribe((params) => {
+      this.viewMode = params['view'] === 'students' ? 'students' : 'schedule';
+      this.reloadAll();
+    });
   }
 
   trackSection(_: number, item: AdminSection) {

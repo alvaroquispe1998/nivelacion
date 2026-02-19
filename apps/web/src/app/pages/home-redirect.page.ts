@@ -17,7 +17,7 @@ export class HomeRedirectPage {
     }
     const role = this.auth.user?.role;
     if (role === Role.ADMIN) {
-      this.router.navigateByUrl('/admin/sections');
+      this.router.navigateByUrl('/admin/dashboard');
       return;
     }
     if (role === Role.ALUMNO) {

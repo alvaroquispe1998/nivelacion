@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Delete, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Role } from '@uai/shared';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -13,7 +13,7 @@ import { PeriodsService } from './periods.service';
 @Roles(Role.ADMIN)
 @Controller('admin/periods')
 export class PeriodsController {
-  constructor(private readonly periodsService: PeriodsService) {}
+  constructor(private readonly periodsService: PeriodsService) { }
 
   @Get()
   async list() {
@@ -63,6 +63,11 @@ export class PeriodsController {
       startsAt: row.startsAt,
       endsAt: row.endsAt,
     };
+  }
+
+  @Delete(':id/data')
+  async clearData(@Param('id') id: string) {
+    return this.periodsService.clearData(id);
   }
 }
 

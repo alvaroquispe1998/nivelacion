@@ -23,7 +23,7 @@ export class SectionsService {
     @InjectRepository(SectionCourseTeacherEntity)
     private readonly sectionCourseTeachersRepo: Repository<SectionCourseTeacherEntity>,
     private readonly periodsService: PeriodsService
-  ) {}
+  ) { }
 
   async list(): Promise<Array<{ section: SectionEntity; studentCount: number }>> {
     const activePeriodId = await this.periodsService.getActivePeriodIdOrThrow();
@@ -128,7 +128,7 @@ export class SectionsService {
         ON tc.id = sct.teacherId
       LEFT JOIN users ts
         ON ts.id = s.teacherId
-      INNER JOIN section_student_courses ssc
+      LEFT JOIN section_student_courses ssc
         ON ssc.sectionCourseId = scf.id
       WHERE s.facultyGroup = ?
         AND (
@@ -155,7 +155,6 @@ export class SectionsService {
         ts.id,
         ts.dni,
         ts.fullName
-      HAVING COUNT(DISTINCT ssc.studentId) > 0
       ORDER BY
         CASE
           WHEN UPPER(COALESCE(s.modality, '')) LIKE '%PRESENCIAL%' THEN 0
@@ -192,13 +191,13 @@ export class SectionsService {
         updatedAt: row.updatedAt,
         teacher: row.teacherId
           ? this.usersRepo.create({
-              id: row.teacherId,
-              dni: row.teacherDni ?? '',
-              fullName: row.teacherName ?? '',
-              role: Role.DOCENTE,
-              codigoAlumno: null,
-              passwordHash: null,
-            })
+            id: row.teacherId,
+            dni: row.teacherDni ?? '',
+            fullName: row.teacherName ?? '',
+            role: Role.DOCENTE,
+            codigoAlumno: null,
+            passwordHash: null,
+          })
           : null,
       }),
       studentCount: Number(row.studentCount || 0),
@@ -591,7 +590,6 @@ export class SectionsService {
       SELECT DISTINCT s.facultyGroup AS facultyGroup
       FROM sections s
       INNER JOIN section_courses sc ON sc.sectionId = s.id
-      INNER JOIN section_student_courses ssc ON ssc.sectionCourseId = sc.id
       WHERE sc.periodId = ?
         AND s.facultyGroup IS NOT NULL
         AND s.facultyGroup <> ''
@@ -612,7 +610,6 @@ export class SectionsService {
       SELECT DISTINCT s.campusName AS campusName
       FROM sections s
       INNER JOIN section_courses sc ON sc.sectionId = s.id
-      INNER JOIN section_student_courses ssc ON ssc.sectionCourseId = sc.id
       WHERE sc.periodId = ?
         AND s.facultyGroup = ?
         AND s.campusName IS NOT NULL
@@ -626,7 +623,6 @@ export class SectionsService {
       SELECT 1 AS hasVirtual
       FROM sections s
       INNER JOIN section_courses sc ON sc.sectionId = s.id
-      INNER JOIN section_student_courses ssc ON ssc.sectionCourseId = sc.id
       WHERE sc.periodId = ?
         AND s.facultyGroup = ?
         AND UPPER(COALESCE(s.modality, '')) LIKE '%VIRTUAL%'
@@ -659,7 +655,6 @@ export class SectionsService {
       FROM sections s
       INNER JOIN section_courses sc ON sc.sectionId = s.id
       INNER JOIN courses c ON c.id = sc.courseId
-      INNER JOIN section_student_courses ssc ON ssc.sectionCourseId = sc.id
       WHERE sc.periodId = ?
         AND s.facultyGroup = ?
         AND (
@@ -1397,7 +1392,7 @@ export class SectionsService {
     const activePeriodId = await this.periodsService.getActivePeriodIdOrThrow();
     const rows: Array<{ id: string; sectionId: string; courseId: string }> =
       await this.sectionsRepo.manager.query(
-      `
+        `
       SELECT id, sectionId, courseId
       FROM section_courses
       WHERE sectionId = ?
@@ -1405,8 +1400,8 @@ export class SectionsService {
         AND periodId = ?
       LIMIT 1
       `,
-      [sectionId, courseId, activePeriodId]
-    );
+        [sectionId, courseId, activePeriodId]
+      );
     const row = rows[0];
     const id = String(row?.id ?? '').trim();
     if (!id) return null;

@@ -1,5 +1,6 @@
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
+import { Router, RouterLink } from '@angular/router';
 import { ChangeDetectorRef, Component, inject } from '@angular/core';
 import { FormBuilder, FormsModule, ReactiveFormsModule, Validators } from '@angular/forms';
 import type {
@@ -36,7 +37,7 @@ const PREFERRED_COURSE_ORDER = [
 
 @Component({
   standalone: true,
-  imports: [CommonModule, FormsModule, ReactiveFormsModule],
+  imports: [CommonModule, FormsModule, ReactiveFormsModule, RouterLink],
   template: `
     <div class="flex items-center justify-between">
       <div>
@@ -164,20 +165,40 @@ const PREFERRED_COURSE_ORDER = [
 
           <div
             *ngIf="result.applied"
-            class="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800"
+            class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-900"
           >
-            <div class="font-semibold">Estructura aplicada</div>
-            <div class="mt-1">
-              Run: {{ result.applied.runId }} |
-              Estado: {{ result.applied.runStatus }} |
-              Secciones creadas: {{ result.applied.sectionsCreated }} |
-              actualizadas: {{ result.applied.sectionsUpdated }} |
-              demandas creadas: {{ result.applied.demandsCreated }}
+            <div class="flex items-center gap-2 mb-3">
+              <div class="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></div>
+              <div class="font-semibold text-sm">Estructura Generada Exitosamente</div>
             </div>
-            <div class="mt-1">
-              seccion-curso creadas: {{ result.applied.sectionCoursesCreated }} |
-              omitidas: {{ result.applied.sectionCoursesOmitted }} |
-              demandas omitidas: {{ result.applied.demandsOmitted }}
+            
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
+              <div class="bg-white/60 rounded-lg p-2 border border-emerald-100/50">
+                <div class="text-emerald-700/70 font-medium">Secciones</div>
+                <div class="text-lg font-bold text-emerald-800">{{ result.applied.sectionsCreated + result.applied.sectionsUpdated }}</div>
+              </div>
+              <div class="bg-white/60 rounded-lg p-2 border border-emerald-100/50">
+                <div class="text-emerald-700/70 font-medium">Cursos-Sección</div>
+                <div class="text-lg font-bold text-emerald-800">{{ result.applied.sectionCoursesCreated }}</div>
+              </div>
+              <div class="bg-white/60 rounded-lg p-2 border border-emerald-100/50">
+                <div class="text-emerald-700/70 font-medium">Demandas Alumnos</div>
+                <div class="text-lg font-bold text-emerald-800">{{ result.applied.demandsCreated }}</div>
+              </div>
+              <div class="bg-white/60 rounded-lg p-2 border border-emerald-100/50">
+                <div class="text-emerald-700/70 font-medium">Omitidos</div>
+                <div class="text-lg font-bold text-emerald-800">{{ result.applied.sectionCoursesOmitted + result.applied.demandsOmitted }}</div>
+              </div>
+            </div>
+
+            <div class="mt-4">
+              <div class="flex justify-between text-[10px] font-medium text-emerald-700 mb-1">
+                <span>Proceso completado</span>
+                <span>100%</span>
+              </div>
+              <div class="h-2 w-full rounded-full bg-emerald-200 overflow-hidden">
+                <div class="h-full bg-gradient-to-r from-emerald-500 to-teal-400 w-full animate-pulse"></div>
+              </div>
             </div>
           </div>
         </div>
@@ -460,8 +481,7 @@ const PREFERRED_COURSE_ORDER = [
                 <th class="px-4 py-3">Facultad</th>
                 <th class="px-4 py-3">Sede</th>
                 <th class="px-4 py-3">Modalidad</th>
-                <th class="px-4 py-3">Alumnos</th>
-                <th class="px-4 py-3">Detalle</th>
+                <th class="px-4 py-3">Cursos</th>
               </tr>
             </thead>
             <tbody>
@@ -473,19 +493,12 @@ const PREFERRED_COURSE_ORDER = [
                 </td>
                 <td class="px-4 py-3">{{ row.section.campusName }}</td>
                 <td class="px-4 py-3">{{ row.section.modality }}</td>
-                <td class="px-4 py-3 font-medium">{{ row.studentCount }}</td>
-                <td class="px-4 py-3 text-xs">
-                  <button
-                    type="button"
-                    class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                    (click)="openStudentsModal(row.section, row.students)"
-                  >
-                    Ver alumnos
-                  </button>
+                <td class="px-4 py-3 text-xs text-slate-600">
+                  {{ (sectionCourseFilter !== 'ALL' ? [sectionCourseFilter] : (row.section.courses ?? [])).join(', ') || '-' }}
                 </td>
               </tr>
               <tr *ngIf="filteredSectionRows.length === 0" class="border-t border-slate-100">
-                <td colspan="6" class="px-4 py-4 text-sm text-slate-500">
+                <td colspan="5" class="px-4 py-4 text-sm text-slate-500">
                   Sin secciones para el filtro seleccionado.
                 </td>
               </tr>
@@ -493,344 +506,54 @@ const PREFERRED_COURSE_ORDER = [
           </table>
         </div>
       </details>
-    </div>
-
-    <div *ngIf="runId" class="mt-5 rounded-2xl border border-slate-200 bg-white p-4">
-      <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <div class="text-lg font-semibold">Matricula (Schedule-Aware)</div>
-          <div class="text-xs text-slate-600">
-            Run: <span class="font-mono">{{ runId }}</span>
-            <span *ngIf="runDetails"> | Estado: <b>{{ runDetails.status }}</b></span>
-          </div>
-        </div>
-        <div class="flex items-center gap-2">
-          <button
-            type="button"
-            class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold hover:bg-slate-50 disabled:opacity-60"
-            [disabled]="loadingRunSections || !runId"
-            (click)="runId && loadRunContext(runId)"
-          >
-            {{ loadingRunSections ? 'Actualizando...' : 'Refrescar matricula' }}
-          </button>
-          <button
-            type="button"
-            class="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
-            [disabled]="!canMatriculateRun"
-            (click)="matriculateRun()"
-          >
-            {{ runningMatriculation ? 'Matriculando...' : 'Matricular' }}
-          </button>
-        </div>
+    <div *ngIf="runId" class="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+      <div class="flex items-center gap-2">
+        <svg class="h-5 w-5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <div class="text-sm font-semibold text-emerald-800">Estructura aplicada — Run ID: <span class="font-mono text-xs">{{ runId }}</span></div>
+      </div>
+      <div class="mt-2 text-xs text-emerald-700 leading-relaxed">
+        Los pasos siguientes son:
+        <ol class="mt-1 list-decimal list-inside space-y-1">
+          <li>Ve a <a routerLink="/admin/sections" class="underline font-semibold cursor-pointer">Horarios y Docentes</a> para asignar horarios y docentes a cada sección-curso.</li>
+          <li>Una vez listos todos los horarios, regresa aquí para <b>Ejecutar Matrícula</b>.</li>
+        </ol>
       </div>
 
-      <div *ngIf="runDetails" class="mt-3 grid gap-2 sm:grid-cols-4">
-        <div class="rounded-xl bg-slate-50 p-3 text-xs">
-          <div class="text-slate-600">Secciones</div>
-          <div class="font-semibold">{{ runDetails.metrics.sections }}</div>
-        </div>
-        <div class="rounded-xl bg-slate-50 p-3 text-xs">
-          <div class="text-slate-600">Seccion-curso</div>
-          <div class="font-semibold">{{ runDetails.metrics.sectionCourses }}</div>
-        </div>
-        <div class="rounded-xl bg-slate-50 p-3 text-xs">
-          <div class="text-slate-600">Demandas</div>
-          <div class="font-semibold">{{ runDetails.metrics.demands }}</div>
-        </div>
-        <div class="rounded-xl bg-slate-50 p-3 text-xs">
-          <div class="text-slate-600">Matriculados</div>
-          <div class="font-semibold">{{ runDetails.metrics.assigned }}</div>
+      <div class="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
+        <button
+          class="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          [disabled]="!canMatriculateRun || runningMatriculation"
+          (click)="matriculateRun()"
+        >
+          {{ runningMatriculation ? 'Procesando...' : 'Ejecutar Matrícula Automática' }}
+        </button>
+        <div *ngIf="!canMatriculateRun" class="text-xs text-red-600 font-medium">
+          Completa los horarios de todas las secciones para habilitar.
         </div>
       </div>
-
-      <div *ngIf="!canMatriculateRun && runSectionCourseCount > 0" class="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-        Debes completar horario en todas las secciones-curso para habilitar matricula.
-      </div>
-
-      <div class="mt-4 grid gap-2 sm:grid-cols-2">
-        <label class="text-xs text-slate-700">
-          Facultad
-          <select
-            class="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
-            [(ngModel)]="runFacultyFilter"
-            [ngModelOptions]="{ standalone: true }"
-          >
-            <option value="ALL">Todas</option>
-            <option *ngFor="let value of runFacultyOptions" [value]="value">{{ value }}</option>
-          </select>
-        </label>
-        <label class="text-xs text-slate-700">
-          Sede
-          <select
-            class="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
-            [(ngModel)]="runCampusFilter"
-            [ngModelOptions]="{ standalone: true }"
-          >
-            <option value="ALL">Todas</option>
-            <option *ngFor="let value of runCampusOptions" [value]="value">{{ value }}</option>
-          </select>
-        </label>
-      </div>
-
-      <div class="mt-3 overflow-x-auto">
-        <table class="min-w-full text-xs">
-          <thead class="bg-slate-50 text-left uppercase tracking-wide text-slate-600">
-            <tr>
-              <th class="px-3 py-2">Seccion</th>
-              <th class="px-3 py-2">Contexto</th>
-              <th class="px-3 py-2">Aforo</th>
-              <th class="px-3 py-2">Cursos / Horarios</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr *ngFor="let section of filteredRunSections; trackBy: trackRunSection" class="border-t border-slate-100 align-top">
-              <td class="px-3 py-2">
-                <div class="font-semibold">{{ section.code || section.name }}</div>
-                <div class="text-[11px] text-slate-500">
-                  {{ section.isAutoLeveling ? 'AUTO' : 'MANUAL' }}
-                </div>
-              </td>
-              <td class="px-3 py-2">
-                <div>{{ section.facultyGroup || '-' }}</div>
-                <div>{{ section.campusName || '-' }}</div>
-                <div>{{ section.modality || '-' }}</div>
-              </td>
-              <td class="px-3 py-2">
-                <div class="grid grid-cols-2 gap-1">
-                  <input
-                    type="number"
-                    min="1"
-                    class="w-full rounded border border-slate-300 px-2 py-1"
-                    [(ngModel)]="section.initialCapacity"
-                    [ngModelOptions]="{ standalone: true }"
-                  />
-                  <input
-                    type="number"
-                    min="0"
-                    class="w-full rounded border border-slate-300 px-2 py-1"
-                    [(ngModel)]="section.maxExtraCapacity"
-                    [ngModelOptions]="{ standalone: true }"
-                  />
-                </div>
-                <button
-                  type="button"
-                  class="mt-1 rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold hover:bg-slate-50 disabled:opacity-60"
-                  [disabled]="savingCapacityBySectionId.has(section.sectionId)"
-                  (click)="saveRunSectionCapacity(section)"
-                >
-                  Guardar aforo
-                </button>
-              </td>
-              <td class="px-3 py-2">
-                <div *ngFor="let sectionCourse of section.sectionCourses; trackBy: trackRunSectionCourse" class="mb-2 rounded border border-slate-200 p-2">
-                  <div class="flex flex-wrap items-center gap-2">
-                    <span class="font-semibold">{{ sectionCourse.courseName }}</span>
-                    <span
-                      class="rounded px-2 py-0.5 text-[10px] font-semibold"
-                      [ngClass]="
-                        sectionCourse.hasSchedule
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : 'bg-amber-100 text-amber-800'
-                      "
-                    >
-                      {{ sectionCourse.hasSchedule ? 'CON HORARIO' : 'SIN HORARIO' }}
-                    </span>
-                    <span class="text-[11px] text-slate-500">
-                      Bloques: {{ sectionCourse.scheduleBlocksCount }} | Asignados: {{ sectionCourse.assignedStudents }}
-                    </span>
-                  </div>
-                  <div class="mt-2 flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      class="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold hover:bg-slate-50"
-                      (click)="openRunSectionSchedule(section.sectionId, sectionCourse.courseName)"
-                    >
-                      Editar horario
-                    </button>
-                    <button
-                      *ngIf="!section.isAutoLeveling"
-                      type="button"
-                      class="rounded border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-60"
-                      [disabled]="
-                        deletingManualSectionCourseId === sectionCourse.sectionCourseId ||
-                        sectionCourse.assignedStudents > 0
-                      "
-                      (click)="deleteManualSectionCourse(section, sectionCourse)"
-                    >
-                      Eliminar manual
-                    </button>
-                  </div>
-                </div>
-              </td>
-            </tr>
-            <tr *ngIf="filteredRunSections.length === 0">
-              <td class="px-3 py-3 text-slate-500" colspan="4">Sin secciones para el filtro seleccionado.</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      <div class="mt-4 rounded-xl border border-slate-200 p-3">
-        <div class="text-sm font-semibold">Crear seccion-curso manual</div>
-        <form class="mt-2 grid gap-2 sm:grid-cols-4" [formGroup]="manualSectionCourseForm" (ngSubmit)="createManualSectionCourse()">
-          <input class="rounded border border-slate-300 px-2 py-1 text-xs" formControlName="facultyGroup" placeholder="Facultad (FICA/SALUD)" />
-          <input class="rounded border border-slate-300 px-2 py-1 text-xs" formControlName="campusName" placeholder="Sede" />
-          <input class="rounded border border-slate-300 px-2 py-1 text-xs" formControlName="modality" placeholder="Modalidad" />
-          <input class="rounded border border-slate-300 px-2 py-1 text-xs" formControlName="courseName" placeholder="Curso" />
-          <input class="rounded border border-slate-300 px-2 py-1 text-xs" type="number" min="1" formControlName="initialCapacity" placeholder="Aforo inicial" />
-          <input class="rounded border border-slate-300 px-2 py-1 text-xs" type="number" min="0" formControlName="maxExtraCapacity" placeholder="Aforo extra" />
-          <input class="rounded border border-slate-300 px-2 py-1 text-xs sm:col-span-2" formControlName="facultyName" placeholder="Nombre facultad (opcional)" />
-          <button
-            class="rounded bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60 sm:col-span-4"
-            [disabled]="manualSectionCourseForm.invalid || creatingManualSectionCourse"
-          >
-            {{ creatingManualSectionCourse ? 'Creando...' : 'Crear seccion-curso manual' }}
-          </button>
-        </form>
-      </div>
-
-      <div *ngIf="matriculationResult" class="mt-4 rounded-xl border border-slate-200 p-3">
-        <div class="text-sm font-semibold">Resultado de matricula</div>
-        <div class="mt-1 text-xs text-slate-600">
-          Estado run: {{ matriculationResult.status }} | Asignados: {{ matriculationResult.assignedCount }} |
-          No asignados: {{ matriculationResult.unassigned.length }} |
-          Cruces detectados: {{ matriculationResult.conflictsFoundAfterAssign }}
-        </div>
-        <div *ngIf="matriculationResult.unassigned.length > 0" class="mt-3 overflow-x-auto">
-          <table class="min-w-full text-xs">
-            <thead class="bg-slate-50 text-left uppercase tracking-wide text-slate-600">
-              <tr>
-                <th class="px-2 py-1">Codigo</th>
-                <th class="px-2 py-1">Alumno</th>
-                <th class="px-2 py-1">Curso</th>
-                <th class="px-2 py-1">Motivo</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr *ngFor="let row of matriculationResult.unassigned" class="border-t border-slate-100">
-                <td class="px-2 py-1">{{ studentCode(row.studentCode) }}</td>
-                <td class="px-2 py-1">{{ row.studentName }}</td>
-                <td class="px-2 py-1">{{ row.courseName }}</td>
-                <td class="px-2 py-1">{{ row.reason }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="mt-4 rounded-xl border border-slate-200 p-3">
-        <div class="text-sm font-semibold">Validar cruces</div>
-        <div class="mt-2 grid gap-2 sm:grid-cols-3">
-          <input
-            class="rounded border border-slate-300 px-2 py-1 text-xs"
-            placeholder="Facultad (opcional)"
-            [(ngModel)]="runConflictsFacultyFilter"
-            [ngModelOptions]="{ standalone: true }"
-          />
-          <input
-            class="rounded border border-slate-300 px-2 py-1 text-xs"
-            placeholder="Sede (opcional)"
-            [(ngModel)]="runConflictsCampusFilter"
-            [ngModelOptions]="{ standalone: true }"
-          />
-          <button
-            type="button"
-            class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50 disabled:opacity-60"
-            [disabled]="runConflictLoading"
-            (click)="loadRunConflicts()"
-          >
-            {{ runConflictLoading ? 'Validando...' : 'Buscar cruces' }}
-          </button>
-        </div>
-        <div class="mt-3 overflow-x-auto">
-          <table class="min-w-full text-xs">
-            <thead class="bg-slate-50 text-left uppercase tracking-wide text-slate-600">
-              <tr>
-                <th class="px-2 py-1">Codigo</th>
-                <th class="px-2 py-1">Alumno</th>
-                <th class="px-2 py-1">Dia</th>
-                <th class="px-2 py-1">Cruce A</th>
-                <th class="px-2 py-1">Cruce B</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr *ngFor="let row of runConflictRows; trackBy: trackRunConflict" class="border-t border-slate-100">
-                <td class="px-2 py-1">{{ studentCode(row.studentCode) }}</td>
-                <td class="px-2 py-1">{{ row.studentName }}</td>
-                <td class="px-2 py-1">{{ dayLabel(row.dayOfWeek) }}</td>
-                <td class="px-2 py-1">
-                  {{ row.blockA.sectionCode || row.blockA.sectionName }} / {{ row.blockA.courseName }} /
-                  {{ row.blockA.startTime }}-{{ row.blockA.endTime }}
-                </td>
-                <td class="px-2 py-1">
-                  {{ row.blockB.sectionCode || row.blockB.sectionName }} / {{ row.blockB.courseName }} /
-                  {{ row.blockB.startTime }}-{{ row.blockB.endTime }}
-                </td>
-              </tr>
-              <tr *ngIf="!runConflictLoading && runConflictRows.length === 0">
-                <td class="px-2 py-3 text-slate-500" colspan="5">Sin cruces detectados.</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
       </div>
     </div>
 
-    <div
-      *ngIf="studentsModalSection"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
-      (click)="closeStudentsModal()"
-    >
-      <div
-        class="w-full max-w-4xl rounded-2xl border border-slate-200 bg-white shadow-2xl"
-        (click)="$event.stopPropagation()"
-      >
-        <div class="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-          <div>
-            <div class="text-sm font-semibold text-slate-900">
-              Alumnos de seccion {{ studentsModalSection.code }}
-            </div>
-            <div class="text-xs text-slate-600">
-              {{ studentsModalSection.facultyGroup }} | {{ studentsModalSection.campusName }} |
-              {{ studentsModalSection.modality }} | {{ studentsModalStudents.length }} alumnos
-            </div>
-          </div>
+    <!-- Confirmation Modal -->
+    <div *ngIf="confirmState.isOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+      <div class="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl transform transition-all">
+        <h3 class="text-lg font-semibold text-slate-900">{{ confirmState.title }}</h3>
+        <p class="mt-2 text-sm text-slate-600 leading-relaxed">{{ confirmState.message }}</p>
+        <div class="mt-6 flex justify-end gap-3">
           <button
-            type="button"
-            class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-            (click)="closeStudentsModal()"
+            class="rounded-xl px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 transition-colors"
+            (click)="confirmState.isOpen = false"
           >
-            Cerrar
+            Cancelar
           </button>
-        </div>
-
-        <div class="max-h-[70vh] overflow-auto p-5">
-          <table class="min-w-full text-sm">
-            <thead class="sticky top-0 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600">
-              <tr>
-                <th class="px-3 py-2">Codigo alumno</th>
-                <th class="px-3 py-2">Alumno</th>
-                <th class="px-3 py-2">Carrera</th>
-                <th class="px-3 py-2">Curso(s)</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                *ngFor="let st of studentsModalStudents; trackBy: trackStudent"
-                class="border-t border-slate-100"
-              >
-                <td class="px-3 py-2 font-mono text-xs">{{ studentCode(st.codigoAlumno) }}</td>
-                <td class="px-3 py-2">{{ st.fullName }}</td>
-                <td class="px-3 py-2 text-xs">{{ st.careerName }}</td>
-                <td class="px-3 py-2 text-xs">
-                  {{ st.sectionCourses.length ? st.sectionCourses.join(', ') : '-' }}
-                </td>
-              </tr>
-              <tr *ngIf="studentsModalStudents.length === 0">
-                <td class="px-3 py-4 text-slate-500" colspan="4">Sin alumnos</td>
-              </tr>
-            </tbody>
-          </table>
+          <button
+            class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 transition-colors shadow-lg shadow-slate-900/20"
+            (click)="confirmState.onConfirm()"
+          >
+            {{ confirmState.confirmLabel }}
+          </button>
         </div>
       </div>
     </div>
@@ -840,6 +563,7 @@ export class AdminLevelingPage {
   private readonly http = inject(HttpClient);
   private readonly fb = inject(FormBuilder);
   private readonly cdr = inject(ChangeDetectorRef);
+  private readonly router = inject(Router);
 
   error: string | null = null;
   result: LevelingPlanResponse | null = null;
@@ -870,6 +594,14 @@ export class AdminLevelingPage {
   runningMatriculation = false;
   matriculationResult: LevelingMatriculationResult | null = null;
 
+  confirmState = {
+    isOpen: false,
+    title: '',
+    message: '',
+    confirmLabel: 'Confirmar',
+    onConfirm: () => { },
+  };
+
   savingConfig = false;
   running = false;
 
@@ -890,6 +622,29 @@ export class AdminLevelingPage {
 
   async ngOnInit() {
     await this.loadConfig();
+    this.checkActiveRun();
+  }
+
+  askConfirmation(title: string, message: string, onConfirm: () => void) {
+    this.confirmState = {
+      isOpen: true,
+      title,
+      message,
+      confirmLabel: 'Continuar',
+      onConfirm: () => {
+        this.confirmState.isOpen = false;
+        onConfirm();
+      },
+    };
+  }
+
+  async checkActiveRun() {
+    try {
+      const s = await firstValueFrom(this.http.get<any>('/api/admin/leveling/active-run-summary'));
+      if (s?.run?.id) {
+        await this.loadRunContext(s.run.id);
+      }
+    } catch { }
   }
 
   trackCourse(_: number, item: CourseColumn) {
@@ -941,7 +696,7 @@ export class AdminLevelingPage {
   }
 
   trackRunConflict(_: number, item: LevelingRunConflictItem) {
-    return `${item.studentId}:${item.blockA.blockId}:${item.blockB.blockId}`;
+    return `${item.studentId}:${item.blockA.blockId}:${item.blockB.blockId} `;
   }
 
   dayLabel(dayOfWeek: number) {
@@ -1294,12 +1049,17 @@ export class AdminLevelingPage {
       return;
     }
     if (apply) {
-      const ok = window.confirm(
-        'Se aplicara la estructura (usuarios/secciones/seccion-curso) sin matricular alumnos. Deseas continuar?'
+      this.askConfirmation(
+        'Confirmar aplicacion de estructura',
+        'Se aplicara la estructura (usuarios/secciones/seccion-curso) sin matricular alumnos. Deseas continuar?',
+        () => this.executeRunPlan(apply, useCurrentGroupOverrides)
       );
-      if (!ok) return;
+      return;
     }
+    this.executeRunPlan(apply, useCurrentGroupOverrides);
+  }
 
+  async executeRunPlan(apply: boolean, useCurrentGroupOverrides: boolean) {
     this.running = true;
     this.error = null;
     try {
@@ -1309,7 +1069,7 @@ export class AdminLevelingPage {
 
       const value = this.configForm.getRawValue();
       const formData = new FormData();
-      formData.append('file', this.selectedFile);
+      formData.append('file', this.selectedFile!);
       formData.append('initialCapacity', String(Number(value.initialCapacity)));
       formData.append('maxExtraCapacity', String(Number(value.maxExtraCapacity)));
       formData.append('apply', apply ? 'true' : 'false');
@@ -1396,9 +1156,9 @@ export class AdminLevelingPage {
   }
 
   openRunSectionSchedule(sectionId: string, courseName: string) {
-    const sid = encodeURIComponent(sectionId);
-    const course = encodeURIComponent(courseName);
-    window.location.href = `/admin/sections/${sid}/schedule?courseName=${course}`;
+    this.router.navigate(['/admin/sections', sectionId, 'schedule'], {
+      queryParams: { courseName },
+    });
   }
 
   async saveRunSectionCapacity(section: LevelingRunSectionView) {
@@ -1466,11 +1226,18 @@ export class AdminLevelingPage {
       this.cdr.detectChanges();
       return;
     }
-    const ok = window.confirm(
-      `Eliminar ${section.code || section.name} - ${sectionCourse.courseName}?`
-    );
-    if (!ok) return;
 
+    this.askConfirmation(
+      'Eliminar seccion manual',
+      `Eliminar ${section.code || section.name} - ${sectionCourse.courseName}?`,
+      () => this.executeDeleteManualSectionCourse(sectionCourse)
+    );
+  }
+
+  async executeDeleteManualSectionCourse(
+    sectionCourse: LevelingRunSectionView['sectionCourses'][number]
+  ) {
+    if (!this.runId) return;
     this.deletingManualSectionCourseId = sectionCourse.sectionCourseId;
     this.error = null;
     try {
@@ -1492,11 +1259,15 @@ export class AdminLevelingPage {
 
   async matriculateRun() {
     if (!this.runId || !this.canMatriculateRun || this.runningMatriculation) return;
-    const ok = window.confirm(
-      'Se ejecutara la matricula automatica schedule-aware. Continuar?'
+    this.askConfirmation(
+      'Ejecutar Matricula',
+      'Se ejecutara la matricula automatica schedule-aware. Continuar?',
+      () => this.executeMatriculateRun()
     );
-    if (!ok) return;
+  }
 
+  async executeMatriculateRun() {
+    if (!this.runId) return;
     this.runningMatriculation = true;
     this.error = null;
     try {
@@ -1529,8 +1300,7 @@ export class AdminLevelingPage {
       const suffix = query.toString();
       this.runConflictRows = await firstValueFrom(
         this.http.get<LevelingRunConflictItem[]>(
-          `/api/admin/leveling/runs/${encodeURIComponent(this.runId)}/conflicts${
-            suffix ? `?${suffix}` : ''
+          `/api/admin/leveling/runs/${encodeURIComponent(this.runId)}/conflicts${suffix ? `?${suffix}` : ''
           }`
         )
       );

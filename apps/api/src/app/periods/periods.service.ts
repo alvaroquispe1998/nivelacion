@@ -8,7 +8,7 @@ export class PeriodsService {
   constructor(
     @InjectRepository(PeriodEntity)
     private readonly periodsRepo: Repository<PeriodEntity>
-  ) {}
+  ) { }
 
   async list() {
     return this.periodsRepo.find({
@@ -59,6 +59,92 @@ export class PeriodsService {
 
     target.status = 'ACTIVE';
     return this.periodsRepo.save(target);
+  }
+
+  async clearData(id: string) {
+    const period = await this.periodsRepo.findOne({ where: { id } });
+    if (!period) throw new NotFoundException('Period not found');
+
+    await this.periodsRepo.manager.transaction(async (manager) => {
+      // 1. Delete student enrollments
+      await manager.query(
+        `
+        DELETE ssc
+        FROM section_student_courses ssc
+        INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
+        WHERE sc.periodId = ?
+        `,
+        [id]
+      );
+
+      // 2. Delete course teachers
+      await manager.query(
+        `
+        DELETE sct
+        FROM section_course_teachers sct
+        INNER JOIN section_courses sc ON sc.id = sct.sectionCourseId
+        WHERE sc.periodId = ?
+        `,
+        [id]
+      );
+
+      // 3. Delete schedule blocks
+      await manager.query(
+        `
+        DELETE sb
+        FROM schedule_blocks sb
+        INNER JOIN section_courses sc ON sc.id = sb.sectionCourseId
+        WHERE sc.periodId = ?
+        `,
+        [id]
+      );
+
+      // 4. Delete leveling runs demands
+      await manager.query(
+        `
+        DELETE lrd
+        FROM leveling_run_demands lrd
+        INNER JOIN leveling_runs lr ON lr.id = lrd.runId
+        WHERE lr.periodId = ?
+        `,
+        [id]
+      );
+
+      // 5. Delete sections (only those tied to a leveling run of this period)
+      // Note: section_courses for these are handled next, or cascading?
+      // Wait, section_courses has periodId. Sections has levelingRunId -> periodId.
+
+      // Delete section courses first
+      await manager.query(
+        `
+        DELETE FROM section_courses
+        WHERE periodId = ?
+        `,
+        [id]
+      );
+
+      // 6. Delete sections
+      await manager.query(
+        `
+        DELETE s
+        FROM sections s
+        INNER JOIN leveling_runs lr ON lr.id = s.levelingRunId
+        WHERE lr.periodId = ?
+        `,
+        [id]
+      );
+
+      // 7. Delete leveling runs
+      await manager.query(
+        `
+        DELETE FROM leveling_runs
+        WHERE periodId = ?
+        `,
+        [id]
+      );
+    });
+
+    return { ok: true };
   }
 
   async getActivePeriodOrThrow() {

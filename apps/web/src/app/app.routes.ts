@@ -2,6 +2,7 @@ import { Route } from '@angular/router';
 import { Role } from '@uai/shared';
 import { authGuard } from './core/auth/auth.guard';
 import { roleGuard } from './core/auth/role.guard';
+import { workflowStepGuard } from './core/auth/workflow-step.guard';
 
 export const appRoutes: Route[] = [
   {
@@ -66,21 +67,42 @@ export const appRoutes: Route[] = [
           ),
       },
       {
-        path: 'admin/sections',
+        path: 'admin/dashboard',
         canActivate: [roleGuard],
         data: { roles: [Role.ADMIN] },
         loadComponent: () =>
-          import('./pages/admin-sections.page').then(
-            (m) => m.AdminSectionsPage
+          import('./pages/admin-dashboard.page').then(
+            (m) => m.AdminDashboardPage
           ),
       },
       {
-        path: 'admin/leveling',
+        // Step 1a — no extra requirement beyond being admin
+        path: 'admin/periods',
         canActivate: [roleGuard],
         data: { roles: [Role.ADMIN] },
         loadComponent: () =>
+          import('./pages/admin-periods.page').then(
+            (m) => m.AdminPeriodsPage
+          ),
+      },
+      {
+        // Step 1b — requires active period
+        path: 'admin/leveling',
+        canActivate: [roleGuard, workflowStepGuard],
+        data: { roles: [Role.ADMIN], workflowStep: 'leveling' },
+        loadComponent: () =>
           import('./pages/admin-leveling.page').then(
             (m) => m.AdminLevelingPage
+          ),
+      },
+      {
+        // Step 2 — requires leveling run to exist (applied)
+        path: 'admin/sections',
+        canActivate: [roleGuard, workflowStepGuard],
+        data: { roles: [Role.ADMIN], workflowStep: 'sections' },
+        loadComponent: () =>
+          import('./pages/admin-sections.page').then(
+            (m) => m.AdminSectionsPage
           ),
       },
       {
@@ -93,18 +115,20 @@ export const appRoutes: Route[] = [
           ),
       },
       {
-        path: 'admin/periods',
-        canActivate: [roleGuard],
-        data: { roles: [Role.ADMIN] },
+        // Step 3 — requires run status = MATRICULATED
+        path: 'admin/matricula',
+        canActivate: [roleGuard, workflowStepGuard],
+        data: { roles: [Role.ADMIN], workflowStep: 'matricula' },
         loadComponent: () =>
-          import('./pages/admin-periods.page').then(
-            (m) => m.AdminPeriodsPage
+          import('./pages/admin-export-assigned.page').then(
+            (m) => m.AdminExportAssignedPage
           ),
       },
       {
+        // Step 4a — requires assigned students > 0
         path: 'admin/export',
-        canActivate: [roleGuard],
-        data: { roles: [Role.ADMIN] },
+        canActivate: [roleGuard, workflowStepGuard],
+        data: { roles: [Role.ADMIN], workflowStep: 'export' },
         loadComponent: () =>
           import('./pages/admin-export-assigned.page').then(
             (m) => m.AdminExportAssignedPage

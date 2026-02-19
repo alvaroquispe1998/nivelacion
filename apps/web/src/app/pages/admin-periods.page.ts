@@ -133,6 +133,13 @@ interface AdminPeriod {
                         : 'Activar'
                   }}
                 </button>
+                <button
+                  class="ml-2 rounded-lg border border-red-200 bg-red-50 text-red-700 px-3 py-1.5 text-xs font-semibold hover:bg-red-100 disabled:opacity-60"
+                  [disabled]="clearingId === p.id"
+                  (click)="clearData(p.id)"
+                >
+                  {{ clearingId === p.id ? '...' : 'Borrar' }}
+                </button>
               </td>
             </tr>
             <tr *ngIf="periods.length === 0" class="border-t border-slate-100">
@@ -153,6 +160,7 @@ export class AdminPeriodsPage {
   error: string | null = null;
   loadingCreate = false;
   activatingId: string | null = null;
+  clearingId: string | null = null;
 
   form = this.fb.group({
     code: ['', [Validators.required, Validators.maxLength(40)]],
@@ -226,6 +234,29 @@ export class AdminPeriodsPage {
       this.error = e?.error?.message ?? 'No se pudo activar periodo';
     } finally {
       this.activatingId = null;
+      this.cdr.detectChanges();
+    }
+  }
+
+  async clearData(id: string) {
+    if (
+      !confirm(
+        '¿Estás seguro de ELIMINAR TODOS LOS DATOS (secciones, alumnos, horarios) de este periodo? Esta acción no se puede deshacer.'
+      )
+    ) {
+      return;
+    }
+    this.clearingId = id;
+    this.error = null;
+    try {
+      await firstValueFrom(
+        this.http.delete(`/api/admin/periods/${encodeURIComponent(id)}/data`)
+      );
+      alert('Datos eliminados correctamente.');
+    } catch (e: any) {
+      this.error = e?.error?.message ?? 'No se pudo eliminar datos del periodo';
+    } finally {
+      this.clearingId = null;
       this.cdr.detectChanges();
     }
   }

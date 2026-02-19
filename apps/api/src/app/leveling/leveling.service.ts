@@ -29,7 +29,7 @@ const PREFERRED_COURSE_ORDER = [
   'CIENCIA, TECNOLOGIA Y AMBIENTE',
   'CIENCIAS SOCIALES',
 ] as const;
-const FIRST_COURSE_COLUMN_INDEX = 11; // L
+const FIRST_COURSE_COLUMN_INDEX = 14; // O
 
 const FICA_NAME = 'INGENIERIA, CIENCIAS Y HUMANIDADES';
 const SALUD_NAME = 'CIENCIAS DE LA SALUD';
@@ -182,12 +182,14 @@ interface ExcelColumns {
   modalityIdx: number | null;
   conditionIdx: number | null;
   needsLevelingIdx: number | null;
+  programLevelingIdx: number | null;
+  examDateIdx: number | null;
   courseColumns: Array<{ idx: number; courseName: CourseName }>;
 }
 
 @Injectable()
 export class LevelingService {
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(private readonly dataSource: DataSource) { }
 
   async getConfig() {
     const rows = await this.dataSource.query(
@@ -199,6 +201,117 @@ export class LevelingService {
     return {
       initialCapacity: Number(rows[0].initialCapacity ?? 45),
       maxExtraCapacity: Number(rows[0].maxExtraCapacity ?? 0),
+    };
+  }
+
+  /**
+   * Dashboard summary: returns active period + latest leveling run metrics
+   * in a single call to drive the admin sequential progress panel.
+   */
+  async getActiveRunSummary() {
+    // 1. Active period
+    const periodRows: Array<{ id: string; code: string; name: string; kind: string }> =
+      await this.dataSource.query(
+        `SELECT id, code, name, kind FROM periods WHERE status = 'ACTIVE' LIMIT 1`
+      );
+    const activePeriod = periodRows[0] ?? null;
+
+    if (!activePeriod) {
+      return {
+        activePeriod: null,
+        run: null,
+        metrics: null,
+      };
+    }
+
+    // 2. Latest leveling run for active period (most recently updated, non-archived)
+    const runRows: Array<{ id: string; status: string }> = await this.dataSource.query(
+      `
+      SELECT id, status
+      FROM leveling_runs
+      WHERE periodId = ?
+        AND status != 'ARCHIVED'
+      ORDER BY updatedAt DESC
+      LIMIT 1
+      `,
+      [activePeriod.id]
+    );
+    const run = runRows[0] ?? null;
+
+    if (!run) {
+      return {
+        activePeriod: { id: activePeriod.id, code: activePeriod.code, name: activePeriod.name },
+        run: null,
+        metrics: null,
+      };
+    }
+
+    // 3. Metrics: sections, section-courses, schedule coverage, teacher coverage, assigned
+    const [sectionRows, sectionCourseRows, scheduledRows, teacherRows, assignedRows, demandRows] =
+      await Promise.all([
+        this.dataSource.query<Array<{ c: number }>>(
+          `SELECT COUNT(*) AS c FROM sections WHERE levelingRunId = ?`,
+          [run.id]
+        ),
+        this.dataSource.query<Array<{ c: number }>>(
+          `SELECT COUNT(*) AS c
+         FROM section_courses sc
+         INNER JOIN sections s ON s.id = sc.sectionId
+         WHERE s.levelingRunId = ?`,
+          [run.id]
+        ),
+        this.dataSource.query<Array<{ c: number }>>(
+          `SELECT COUNT(DISTINCT sc.id) AS c
+         FROM section_courses sc
+         INNER JOIN sections s ON s.id = sc.sectionId
+         INNER JOIN schedule_blocks sb ON sb.sectionCourseId = sc.id
+         WHERE s.levelingRunId = ?`,
+          [run.id]
+        ),
+        this.dataSource.query<Array<{ c: number }>>(
+          `SELECT COUNT(DISTINCT sc.id) AS c
+         FROM section_courses sc
+         INNER JOIN sections s ON s.id = sc.sectionId
+         WHERE s.levelingRunId = ? AND s.teacherId IS NOT NULL`,
+          [run.id]
+        ),
+        this.dataSource.query<Array<{ c: number }>>(
+          `SELECT COUNT(*) AS c
+         FROM section_student_courses ssc
+         INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
+         INNER JOIN sections s ON s.id = sc.sectionId
+         WHERE s.levelingRunId = ?`,
+          [run.id]
+        ),
+        this.dataSource.query<Array<{ c: number }>>(
+          `SELECT COUNT(*) AS c FROM leveling_run_student_course_demands WHERE runId = ?`,
+          [run.id]
+        ),
+      ]);
+
+    const totalSectionCourses = Number(sectionCourseRows[0]?.c ?? 0);
+    const withSchedule = Number(scheduledRows[0]?.c ?? 0);
+    const withTeacher = Number(teacherRows[0]?.c ?? 0);
+
+    return {
+      activePeriod: { id: activePeriod.id, code: activePeriod.code, name: activePeriod.name },
+      run: { id: run.id, status: run.status },
+      metrics: {
+        sections: Number(sectionRows[0]?.c ?? 0),
+        sectionCourses: totalSectionCourses,
+        demands: Number(demandRows[0]?.c ?? 0),
+        assigned: Number(assignedRows[0]?.c ?? 0),
+        schedules: {
+          withSchedule,
+          withoutSchedule: Math.max(0, totalSectionCourses - withSchedule),
+          allComplete: totalSectionCourses > 0 && withSchedule === totalSectionCourses,
+        },
+        teachers: {
+          withTeacher,
+          withoutTeacher: Math.max(0, totalSectionCourses - withTeacher),
+          allComplete: totalSectionCourses > 0 && withTeacher === totalSectionCourses,
+        },
+      },
     };
   }
 
@@ -237,6 +350,17 @@ export class LevelingService {
     }
     if (maxExtraCapacity < 0) {
       throw new BadRequestException('maxExtraCapacity must be >= 0');
+    }
+
+
+    if (apply) {
+      const activeSummary = await this.getActiveRunSummary();
+      if (activeSummary.run && activeSummary.run.status !== 'ARCHIVED') {
+        throw new BadRequestException(
+          'Ya existe un proceso de nivelación activo para este periodo. ' +
+          'Por seguridad, debes eliminar los datos del periodo desde la pantalla de Periodos antes de volver a procesar.'
+        );
+      }
     }
 
     const careerFacultyMap = await this.loadCareerFacultyMap();
@@ -339,9 +463,9 @@ export class LevelingService {
             careerName: x.careerName,
             sectionCourses: Array.from(
               s.studentCoursesByDni.get(x.dni) ??
-                new Set(
-                  s.neededCourses.filter((course) => x.neededCourses.includes(course))
-                )
+              new Set(
+                s.neededCourses.filter((course) => x.neededCourses.includes(course))
+              )
             ).sort(),
           })),
       })),
@@ -1244,26 +1368,70 @@ export class LevelingService {
       columns.conditionIdx !== null && columns.needsLevelingIdx !== null;
     const startRow = headerRowIdx >= 0 ? headerRowIdx + 1 : 5;
 
+    let rowsRead = 0;
+    const rowsToProcess: (string | number | null)[][] = [];
+
+    // Deduplication logic: explicit user request to keep only the latest exam date per student
+    if (columns.dniIdx !== null && columns.examDateIdx !== null) {
+      const byDni = new Map<string, (string | number | null)[][]>();
+      for (let i = startRow; i < rows.length; i++) {
+        const row = rows[i] ?? [];
+        if (row.every((value) => !String(value ?? '').trim())) continue;
+        rowsRead++; // Count every valid row read from file
+        const dni = this.normalizeDni(this.cell(row, columns.dniIdx));
+        if (!dni) continue; // Skip rows without valid DNI during deduplication mapping
+        if (!byDni.has(dni)) byDni.set(dni, []);
+        byDni.get(dni)!.push(row);
+      }
+
+      for (const group of byDni.values()) {
+        if (group.length === 1) {
+          rowsToProcess.push(group[0]);
+          continue;
+        }
+        // Descending sort by date
+        group.sort((a, b) => {
+          // Note: cell() helper is instance method
+          const da = this.parseSmartDate(this.cell(a, columns.examDateIdx!));
+          const db = this.parseSmartDate(this.cell(b, columns.examDateIdx!));
+          return db - da;
+        });
+        rowsToProcess.push(group[0]);
+      }
+    } else {
+      // Fallback: process all valid rows
+      for (let i = startRow; i < rows.length; i++) {
+        const row = rows[i] ?? [];
+        if (row.every((value) => !String(value ?? '').trim())) continue;
+        rowsRead++;
+        rowsToProcess.push(row);
+      }
+    }
+
     const studentByDni = new Map<string, ParsedStudent>();
     const unknownCareerSet = new Set<string>();
     const activeCourseNames = new Set<CourseName>();
-    let rowsRead = 0;
 
-    for (let i = startRow; i < rows.length; i++) {
-      const row = rows[i] ?? [];
-      if (row.every((value) => !String(value ?? '').trim())) continue;
-
+    for (const row of rowsToProcess) {
       if (columns.orderIdx !== null) {
         const orderNumber = this.cell(row, columns.orderIdx);
         if (!orderNumber || !/^\d+$/.test(orderNumber)) continue;
       }
-      rowsRead++;
+      // rowsRead is already counted above
 
+      // 1. Existing legacy filter (Ingreso + Needs Leveling)
       if (hasIngresoFilter) {
         const condition = this.norm(this.cell(row, columns.conditionIdx!));
         const needsLeveling = this.norm(this.cell(row, columns.needsLevelingIdx!));
         if (condition !== 'INGRESO') continue;
         if (needsLeveling !== 'SI') continue;
+      }
+
+      // 2. New filter: PROGRAMA DE NIVELACIÓN (must be SI)
+      // Applied AFTER date deduplication (since we are iterating rowsToProcess)
+      if (columns.programLevelingIdx !== null) {
+        const programVal = this.norm(this.cell(row, columns.programLevelingIdx));
+        if (programVal !== 'SI') continue;
       }
 
       const dni = this.normalizeDni(this.cell(row, columns.dniIdx));
@@ -2559,14 +2727,14 @@ export class LevelingService {
     const placeholders = sectionIds.map(() => '?').join(', ');
     const rows: Array<{ periodId: string; sectionId: string; courseId: string }> =
       await manager.query(
-      `
+        `
       SELECT periodId, sectionId, courseId
       FROM section_courses
       WHERE sectionId IN (${placeholders})
         AND periodId = ?
       `,
-      [...sectionIds, periodId]
-    );
+        [...sectionIds, periodId]
+      );
     return new Set(
       rows.map((x) => `${x.periodId}:${x.sectionId}:${String(x.courseId)}`)
     );
@@ -3103,10 +3271,12 @@ export class LevelingService {
       facultyIdx: pick('FACULTAD'),
       areaIdx: pick('AREA'),
       careerIdx: pick('CARRERA', 'PROGRAMA ACADEMICO') ?? 6,
-      campusIdx: pick('SEDE', 'FILIAL', 'CAMPUS'),
+      campusIdx: pick('SEDE', 'SEDE DE EVALUACION', 'SEDE EVALUACION', 'SEDE EXAMEN', 'LUGAR DE EXAMEN', 'FILIAL', 'CAMPUS'),
       modalityIdx: pick('MODALIDAD'),
       conditionIdx: pick('CONDICION'),
       needsLevelingIdx: pick('REQUERIMIENTO DE NIVELACION', 'NIVELACION'),
+      programLevelingIdx: pick('PROGRAMA DE NIVELACIÓN', 'PROGRAMA DE NIVELACION', 'PROGRAMA NIVELACION'),
+      examDateIdx: pick('FECHA EXAMEN', 'FECHA DE EXAMEN', 'FECHAEXAMEN'),
       courseColumns: this.sortCourseColumns(courseColumns),
     };
   }
@@ -3367,5 +3537,22 @@ export class LevelingService {
       remaining -= chunk;
     }
     return out;
+  }
+
+  private parseSmartDate(raw: string): number {
+    if (!raw) return 0;
+    // Try DD/MM/YYYY
+    const dmy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (dmy) {
+      return new Date(
+        Number(dmy[3]),
+        Number(dmy[2]) - 1,
+        Number(dmy[1])
+      ).getTime();
+    }
+    // Try standard
+    const t = Date.parse(raw);
+    if (!Number.isNaN(t)) return t;
+    return 0;
   }
 }
