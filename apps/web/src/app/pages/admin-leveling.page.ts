@@ -522,15 +522,32 @@ const PREFERRED_COURSE_ORDER = [
       </div>
 
       <div class="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
-        <button
-          class="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          [disabled]="!canMatriculateRun || runningMatriculation"
-          (click)="matriculateRun()"
-        >
-          {{ runningMatriculation ? 'Procesando...' : 'Ejecutar Matrícula Automática' }}
-        </button>
-        <div *ngIf="!canMatriculateRun" class="text-xs text-red-600 font-medium">
-          Completa los horarios de todas las secciones para habilitar.
+        <div class="flex flex-col gap-1">
+          <button
+            class="rounded-xl px-4 py-2 text-sm font-semibold text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            [ngClass]="canMatriculateFICA ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-slate-400'"
+            [disabled]="!canMatriculateFICA || runningMatriculation"
+            (click)="matriculateRun('FICA')"
+          >
+            Matricular FICA
+          </button>
+          <div *ngIf="!canMatriculateFICA" class="text-[10px] text-red-600 font-medium">
+            Faltan horarios en FICA
+          </div>
+        </div>
+
+        <div class="flex flex-col gap-1">
+          <button
+            class="rounded-xl px-4 py-2 text-sm font-semibold text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+             [ngClass]="canMatriculateSALUD ? 'bg-pink-600 hover:bg-pink-700' : 'bg-slate-400'"
+            [disabled]="!canMatriculateSALUD || runningMatriculation"
+            (click)="matriculateRun('SALUD')"
+          >
+            Matricular SALUD
+          </button>
+          <div *ngIf="!canMatriculateSALUD" class="text-[10px] text-red-600 font-medium">
+             Faltan horarios en SALUD
+          </div>
         </div>
       </div>
       </div>
@@ -1257,16 +1274,41 @@ export class AdminLevelingPage {
     }
   }
 
-  async matriculateRun() {
-    if (!this.runId || !this.canMatriculateRun || this.runningMatriculation) return;
-    this.askConfirmation(
-      'Ejecutar Matricula',
-      'Se ejecutara la matricula automatica schedule-aware. Continuar?',
-      () => this.executeMatriculateRun()
+  get canMatriculateFICA() {
+    if (!this.runId || this.runSections.length === 0) return false;
+    const ficaSections = this.runSections.filter((s) => s.facultyGroup === 'FICA');
+    if (ficaSections.length === 0) return false;
+    return ficaSections.every((s) =>
+      s.sectionCourses.every((sc) => sc.hasSchedule)
     );
   }
 
-  async executeMatriculateRun() {
+  get canMatriculateSALUD() {
+    if (!this.runId || this.runSections.length === 0) return false;
+    const saludSections = this.runSections.filter((s) => s.facultyGroup === 'SALUD');
+    if (saludSections.length === 0) return false;
+    return saludSections.every((s) =>
+      s.sectionCourses.every((sc) => sc.hasSchedule)
+    );
+  }
+
+  async matriculateRun(facultyGroup?: string) {
+    if (!this.runId || this.runningMatriculation) return;
+
+    if (facultyGroup === 'FICA' && !this.canMatriculateFICA) return;
+    if (facultyGroup === 'SALUD' && !this.canMatriculateSALUD) return;
+    if (!facultyGroup && (!this.canMatriculateFICA || !this.canMatriculateSALUD)) return;
+
+    const label = facultyGroup ? `Matricula ${facultyGroup}` : 'Matricula COMPLETA';
+
+    this.askConfirmation(
+      `Ejecutar ${label}`,
+      `Se ejecutara la matricula automatica schedule-aware para ${facultyGroup ?? 'TODAS las facultades'}. Continuar?`,
+      () => this.executeMatriculateRun(facultyGroup)
+    );
+  }
+
+  async executeMatriculateRun(facultyGroup?: string) {
     if (!this.runId) return;
     this.runningMatriculation = true;
     this.error = null;
@@ -1274,7 +1316,7 @@ export class AdminLevelingPage {
       this.matriculationResult = await firstValueFrom(
         this.http.post<LevelingMatriculationResult>(
           `/api/admin/leveling/runs/${encodeURIComponent(this.runId)}/matriculate`,
-          {}
+          { facultyGroup }
         )
       );
       await this.loadRunContext(this.runId);
@@ -1337,5 +1379,4 @@ export class AdminLevelingPage {
     if (this.sectionCourseFilter === 'ALL') return students.slice();
     return students.filter((st) => (st.sectionCourses ?? []).includes(this.sectionCourseFilter));
   }
-
 }

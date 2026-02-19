@@ -835,12 +835,14 @@ export class LevelingService {
     });
   }
 
-  async matriculateRun(runId: string) {
+  async matriculateRun(runId: string, facultyGroup?: string) {
     return this.dataSource.transaction(async (manager) => {
       const run = await this.getRunOrThrow(runId, manager);
       if (run.status === 'ARCHIVED') {
         throw new BadRequestException('Cannot matriculate an archived leveling run');
       }
+
+      const targetFaculty = facultyGroup ? String(facultyGroup).trim() : null;
 
       const sectionCourseRows: Array<{
         sectionCourseId: string;
@@ -871,15 +873,20 @@ export class LevelingService {
         INNER JOIN courses c ON c.id = sc.courseId
         WHERE s.levelingRunId = ?
           AND sc.periodId = ?
+          ${targetFaculty ? 'AND s.facultyGroup = ?' : ''}
         ORDER BY
           s.code ASC,
           s.name ASC,
           c.name ASC
         `,
-        [run.id, run.periodId]
+        [run.id, run.periodId, ...(targetFaculty ? [targetFaculty] : [])]
       );
       if (sectionCourseRows.length === 0) {
-        throw new BadRequestException('Run has no section-courses to matriculate');
+        throw new BadRequestException(
+          targetFaculty
+            ? `Run has no section-courses for faculty ${targetFaculty}`
+            : 'Run has no section-courses to matriculate'
+        );
       }
 
       const sectionCourseIds = sectionCourseRows.map((x) => String(x.sectionCourseId));
@@ -948,12 +955,17 @@ export class LevelingService {
         INNER JOIN courses c ON c.id = d.courseId
         WHERE d.runId = ?
           AND d.required = 1
+          ${targetFaculty ? 'AND d.facultyGroup = ?' : ''}
         ORDER BY u.fullName ASC, c.name ASC
         `,
-        [run.id]
+        [run.id, ...(targetFaculty ? [targetFaculty] : [])]
       );
       if (demands.length === 0) {
-        throw new BadRequestException('Run has no pending student-course demands');
+        throw new BadRequestException(
+          targetFaculty
+            ? `Run has no pending student-course demands for faculty ${targetFaculty}`
+            : 'Run has no pending student-course demands'
+        );
       }
 
       await this.deleteSectionStudentCoursesBySectionCourseIds(manager, sectionCourseIds);

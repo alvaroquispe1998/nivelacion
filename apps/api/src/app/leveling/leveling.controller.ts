@@ -94,8 +94,11 @@ export class LevelingController {
   }
 
   @Post('runs/:runId/matriculate')
-  matriculateRun(@Param('runId') runId: string) {
-    return this.levelingService.matriculateRun(runId);
+  matriculateRun(
+    @Param('runId') runId: string,
+    @Body() body: { facultyGroup?: string }
+  ) {
+    return this.levelingService.matriculateRun(runId, body?.facultyGroup);
   }
 
   @Get('runs/:runId/conflicts')

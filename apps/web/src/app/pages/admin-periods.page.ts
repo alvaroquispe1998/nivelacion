@@ -149,6 +149,28 @@ interface AdminPeriod {
         </table>
       </div>
     </div>
+
+    <!-- Confirmation Modal -->
+    <div *ngIf="confirmState.isOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+      <div class="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl transform transition-all">
+        <h3 class="text-lg font-semibold text-slate-900">{{ confirmState.title }}</h3>
+        <p class="mt-2 text-sm text-slate-600 leading-relaxed">{{ confirmState.message }}</p>
+        <div class="mt-6 flex justify-end gap-3">
+          <button
+            class="rounded-xl px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 transition-colors"
+            (click)="confirmState.isOpen = false"
+          >
+            Cancelar
+          </button>
+          <button
+            class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 transition-colors shadow-lg shadow-slate-900/20"
+            (click)="confirmState.onConfirm()"
+          >
+            {{ confirmState.confirmLabel }}
+          </button>
+        </div>
+      </div>
+    </div>
   `,
 })
 export class AdminPeriodsPage {
@@ -161,6 +183,13 @@ export class AdminPeriodsPage {
   loadingCreate = false;
   activatingId: string | null = null;
   clearingId: string | null = null;
+  confirmState = {
+    isOpen: false,
+    title: '',
+    message: '',
+    confirmLabel: 'Confirmar',
+    onConfirm: () => { },
+  };
 
   form = this.fb.group({
     code: ['', [Validators.required, Validators.maxLength(40)]],
@@ -238,24 +267,38 @@ export class AdminPeriodsPage {
     }
   }
 
-  async clearData(id: string) {
-    if (
-      !confirm(
-        '¿Estás seguro de ELIMINAR TODOS LOS DATOS (secciones, alumnos, horarios) de este periodo? Esta acción no se puede deshacer.'
-      )
-    ) {
-      return;
-    }
+  askConfirmation(title: string, message: string, onConfirm: () => void) {
+    this.confirmState = {
+      isOpen: true,
+      title,
+      message,
+      confirmLabel: 'Confirmar',
+      onConfirm: () => {
+        this.confirmState.isOpen = false;
+        onConfirm();
+      },
+    };
+  }
+
+  clearData(id: string) {
+    this.askConfirmation(
+      'Eliminar Datos del Periodo',
+      '¿Estás seguro de ELIMINAR TODOS LOS DATOS (secciones, alumnos, horarios, matrículas) de este periodo? Esta acción NO se puede deshacer.',
+      () => this.executeClearData(id)
+    );
+  }
+
+  async executeClearData(id: string) {
     this.clearingId = id;
     this.error = null;
     try {
       await firstValueFrom(
         this.http.delete(`/api/admin/periods/${encodeURIComponent(id)}/data`)
       );
-      alert('Datos eliminados correctamente.');
+      // Wait a moment before reloading or just reload
+      window.location.reload();
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo eliminar datos del periodo';
-    } finally {
       this.clearingId = null;
       this.cdr.detectChanges();
     }

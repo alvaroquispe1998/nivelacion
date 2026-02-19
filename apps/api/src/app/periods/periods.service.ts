@@ -103,7 +103,7 @@ export class PeriodsService {
       await manager.query(
         `
         DELETE lrd
-        FROM leveling_run_demands lrd
+        FROM leveling_run_student_course_demands lrd
         INNER JOIN leveling_runs lr ON lr.id = lrd.runId
         WHERE lr.periodId = ?
         `,
