@@ -4010,8 +4010,11 @@ export class LevelingService {
     const assigned = Math.max(0, Number(params.assignedCount ?? 0));
     const initial = Math.max(0, Number(params.initialCapacity ?? 0));
     const maxExtra = Math.max(0, Number(params.maxExtraCapacity ?? 0));
-    if (maxExtra <= 0) return false;
-    return assigned + 1 > initial + maxExtra;
+    // Hard cap is always initialCapacity + maxExtraCapacity.
+    // When maxExtraCapacity = 0, the cap is initialCapacity alone.
+    const hardCap = initial + maxExtra;
+    if (hardCap <= 0) return false; // Unlimited (no capacity configured)
+    return assigned >= hardCap;
   }
 
   private capacityRatio(params: {

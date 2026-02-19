@@ -520,48 +520,51 @@ export class AdminSidebarComponent implements OnInit {
   updateMenu(s: any) {
     const nextGroups = JSON.parse(JSON.stringify(ADMIN_SIDEBAR_GROUPS));
 
-    const disable = (route: string) => {
+    const disable = (route: string, queryParamKey?: string, queryParamValue?: string) => {
       for (const g of nextGroups) {
         for (const item of g.items) {
-          if (item.route === route) item.disabled = true;
-        }
-      }
-    };
-
-    // Step 1: Nivelación requires active activePeriod
-    if (!s.activePeriod) {
-      disable('/admin/leveling');
-    }
-
-    // Step 2: Sections requires applied run
-    if (!s.activePeriod || !s.run) {
-      disable('/admin/sections');
-    }
-
-    // Step 3: Matricula requires at least one ready faculty (except already matriculated runs)
-    const readyFaculties = Number(s.metrics?.readyFaculties ?? 0);
-    if (!s.activePeriod || !s.run || (readyFaculties <= 0 && s.run.status !== 'MATRICULATED')) {
-      disable('/admin/matricula');
-    }
-
-    // Step 4: Export requires active run + assigned students
-    if (
-      !s.activePeriod ||
-      !s.run ||
-      s.run.status !== 'MATRICULATED' ||
-      !s.metrics ||
-      s.metrics.assigned === 0
-    ) {
-      disable('/admin/export');
-
-      // Also disable "Alumnos por Sección" specifically (distinguished by queryParams)
-      for (const g of nextGroups) {
-        for (const item of g.items) {
-          if (item.route === '/admin/sections' && item.queryParams?.['view'] === 'students') {
+          if (item.route !== route) continue;
+          // If a specific queryParam filter is provided, only disable that item
+          if (queryParamKey !== undefined) {
+            if (item.queryParams?.[queryParamKey] === queryParamValue) {
+              item.disabled = true;
+            }
+          } else {
             item.disabled = true;
           }
         }
       }
+    };
+
+    // Step 1: Nivelación requires an active period
+    if (!s.activePeriod) {
+      disable('/admin/leveling');
+    }
+
+    // Step 2a: Sections (main view) requires an active run
+    // i.e. a plan has been applied (run exists)
+    if (!s.activePeriod || !s.run) {
+      disable('/admin/sections');
+    }
+
+    // Step 2b: 'Horarios y Docentes' (schedule view) also requires an active run
+    // It's the same route but with queryParam view=schedule
+    // Already covered by the disable above since it matches all /admin/sections items
+
+    // Step 3: Matrícula requires at least one faculty with complete schedule + teacher
+    // OR the run is already MATRICULATED (allow viewing results again)
+    const readyFaculties = Number(s.metrics?.readyFaculties ?? 0);
+    if (!s.activePeriod || !s.run || (readyFaculties <= 0 && s.run?.status !== 'MATRICULATED')) {
+      disable('/admin/matricula');
+    }
+
+    // Step 4: 'Exportar' and 'Alumnos por Sección' require a completed matriculation
+    const isMatriculated = s.run?.status === 'MATRICULATED';
+    const hasAssigned = Number(s.metrics?.assigned ?? 0) > 0;
+    if (!s.activePeriod || !s.run || !isMatriculated || !hasAssigned) {
+      disable('/admin/export');
+      // Only disable 'Alumnos por Sección' (view=students), not the general sections page
+      disable('/admin/sections', 'view', 'students');
     }
 
     this.groups = nextGroups;
