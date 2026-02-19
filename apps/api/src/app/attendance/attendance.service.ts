@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -35,14 +34,6 @@ export class AttendanceService {
     });
     if (!block) throw new NotFoundException('Schedule block not found');
 
-    const exists = await this.sessionsRepo.findOne({
-      where: { scheduleBlock: { id: block.id }, sessionDate: params.sessionDate },
-      relations: { scheduleBlock: true },
-    });
-    if (exists) {
-      throw new ConflictException('Attendance session already exists for this date');
-    }
-
     const actor = await this.usersService.getByIdOrThrow(params.actorUserId);
     if (![Role.ADMIN, Role.DOCENTE].includes(actor.role)) {
       throw new BadRequestException('createdBy must be ADMIN or DOCENTE');
@@ -53,6 +44,16 @@ export class AttendanceService {
         teacherId: actor.id,
         sectionCourseId,
       });
+    }
+
+    const exists = await this.sessionsRepo.findOne({
+      where: { scheduleBlock: { id: block.id }, sessionDate: params.sessionDate },
+      relations: { scheduleBlock: true },
+    });
+    if (exists) {
+      // Idempotent behavior: if session already exists for this date,
+      // return it so callers can continue editing records.
+      return exists;
     }
 
     const session = this.sessionsRepo.create({

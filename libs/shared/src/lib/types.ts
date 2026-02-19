@@ -28,6 +28,7 @@ export interface StudentScheduleItem {
   endTime: string; // HH:mm
   courseName: string;
   sectionName: string;
+  teacherName?: string | null;
   zoomUrl?: string | null;
   location?: string | null;
 }
@@ -62,6 +63,56 @@ export interface AdminTeacher {
   fullName: string;
 }
 
+export interface AdminScheduleConflictBlock {
+  blockId: Uuid;
+  sectionCourseId: Uuid;
+  sectionId: Uuid;
+  sectionCode?: string | null;
+  sectionName: string;
+  courseId: Uuid;
+  courseName: string;
+  startTime: string;
+  endTime: string;
+  startDate?: string | null;
+  endDate?: string | null;
+}
+
+export interface AdminScheduleConflictItem {
+  studentId: Uuid;
+  studentCode?: string | null;
+  studentName: string;
+  dayOfWeek: number;
+  blockA: AdminScheduleConflictBlock;
+  blockB: AdminScheduleConflictBlock;
+}
+
+export interface AdminReassignmentOption {
+  sectionCourseId: Uuid;
+  sectionId: Uuid;
+  sectionCode?: string | null;
+  sectionName: string;
+  courseId: Uuid;
+  courseName: string;
+  facultyGroup?: string | null;
+  campusName?: string | null;
+  modality?: string | null;
+  currentStudents: number;
+  projectedStudents: number;
+  initialCapacity: number;
+  maxExtraCapacity: number;
+  createsConflict: boolean;
+  overCapacity: boolean;
+}
+
+export interface AdminReassignmentResult {
+  ok: boolean;
+  studentId: Uuid;
+  fromSectionCourseId: Uuid;
+  toSectionCourseId: Uuid;
+  overCapacity: boolean;
+  projectedStudents: number;
+}
+
 export interface AdminScheduleBlock {
   id: Uuid;
   sectionId: Uuid;
@@ -93,6 +144,25 @@ export interface AdminAttendanceRecord {
 export interface LevelingConfig {
   initialCapacity: number;
   maxExtraCapacity: number;
+}
+
+export type LevelingRunStatus =
+  | 'STRUCTURED'
+  | 'READY'
+  | 'MATRICULATED'
+  | 'ARCHIVED';
+
+export interface LevelingAppliedStructure {
+  runId: Uuid;
+  runStatus: LevelingRunStatus;
+  sectionsCreated: number;
+  sectionsUpdated: number;
+  studentsCreated: number;
+  studentsUpdated: number;
+  sectionCoursesCreated: number;
+  sectionCoursesOmitted: number;
+  demandsCreated: number;
+  demandsOmitted: number;
 }
 
 export interface LevelingSectionPreview {
@@ -171,16 +241,104 @@ export interface LevelingPlanResponse {
     }>;
   };
   sections: LevelingSectionPreview[];
-  applied: null | {
-    sectionsCreated: number;
-    sectionsUpdated: number;
-    studentsCreated: number;
-    studentsUpdated: number;
-    sectionCoursesCreated?: number;
-    sectionCoursesOmitted?: number;
-    sectionStudentCoursesCreated?: number;
-    sectionStudentCoursesOmitted?: number;
-    enrollmentsCreated: number;
-    enrollmentsOmitted?: number;
+  runId?: Uuid | null;
+  runStatus?: LevelingRunStatus | null;
+  applied: null | LevelingAppliedStructure;
+}
+
+export interface LevelingRunDetailsResponse {
+  runId: Uuid;
+  periodId: Uuid;
+  status: LevelingRunStatus;
+  configUsed: LevelingConfig;
+  sourceFileHash?: string | null;
+  createdBy?: Uuid | null;
+  createdAt: string;
+  updatedAt: string;
+  metrics: {
+    sections: number;
+    sectionCourses: number;
+    manualSections: number;
+    demands: number;
+    assigned: number;
+    studentsWithDemand: number;
+    sectionCoursesWithSchedule: number;
+    sectionCoursesWithoutSchedule: number;
   };
+}
+
+export interface LevelingRunSectionCourseView {
+  sectionCourseId: Uuid;
+  courseId: Uuid;
+  courseName: string;
+  hasSchedule: boolean;
+  scheduleBlocksCount: number;
+  assignedStudents: number;
+}
+
+export interface LevelingRunSectionView {
+  sectionId: Uuid;
+  name: string;
+  code?: string | null;
+  facultyGroup?: string | null;
+  facultyName?: string | null;
+  campusName?: string | null;
+  modality?: string | null;
+  initialCapacity: number;
+  maxExtraCapacity: number;
+  isAutoLeveling: boolean;
+  levelingRunId?: Uuid | null;
+  sectionCourses: LevelingRunSectionCourseView[];
+}
+
+export interface LevelingManualSectionCourseResult {
+  runId: Uuid;
+  sectionId: Uuid;
+  sectionCourseId: Uuid;
+  sectionCode?: string | null;
+  sectionName: string;
+  courseId: Uuid;
+  courseName: string;
+  isAutoLeveling: boolean;
+}
+
+export interface LevelingMatriculationUnassignedItem {
+  studentId: Uuid;
+  studentCode?: string | null;
+  studentName: string;
+  courseId: Uuid;
+  courseName: string;
+  facultyGroup?: string | null;
+  campusName?: string | null;
+  reason: string;
+}
+
+export interface LevelingMatriculationSectionSummaryItem {
+  sectionCourseId: Uuid;
+  sectionId: Uuid;
+  sectionCode?: string | null;
+  sectionName: string;
+  courseId: Uuid;
+  courseName: string;
+  assignedCount: number;
+  initialCapacity: number;
+  maxExtraCapacity: number;
+}
+
+export interface LevelingMatriculationResult {
+  runId: Uuid;
+  status: LevelingRunStatus;
+  assignedCount: number;
+  unassigned: LevelingMatriculationUnassignedItem[];
+  summaryBySectionCourse: LevelingMatriculationSectionSummaryItem[];
+  conflictsFoundAfterAssign: number;
+}
+
+export interface LevelingRunConflictItem {
+  studentId: Uuid;
+  studentCode?: string | null;
+  studentName: string;
+  dayOfWeek: number;
+  blockA: AdminScheduleConflictBlock;
+  blockB: AdminScheduleConflictBlock;
 }

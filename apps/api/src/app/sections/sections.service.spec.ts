@@ -8,7 +8,7 @@ jest.mock('./section-course-teacher.entity', () => ({
   SectionCourseTeacherEntity: class SectionCourseTeacherEntity {},
 }));
 
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { SectionsService } from './sections.service';
 
 describe('SectionsService', () => {
@@ -17,6 +17,7 @@ describe('SectionsService', () => {
       findOne: jest.fn(),
       manager: {
         query: jest.fn(),
+        transaction: jest.fn(),
       },
     };
     const usersRepo = {
@@ -38,6 +39,9 @@ describe('SectionsService', () => {
       usersRepo as any,
       sectionCourseTeachersRepo as any,
       periodsService as any
+    );
+    sectionsRepo.manager.transaction.mockImplementation(async (cb: any) =>
+      cb(sectionsRepo.manager)
     );
     return {
       service,
@@ -139,5 +143,189 @@ describe('SectionsService', () => {
         teacherId: 'missing',
       })
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('listScheduleConflicts should map overlapping rows', async () => {
+    const { service, sectionsRepo } = createService();
+
+    sectionsRepo.manager.query.mockResolvedValueOnce([
+      {
+        studentId: 'stu-1',
+        studentCode: '20260001',
+        studentName: 'ALUMNO UNO',
+        dayOfWeek: 1,
+        blockIdA: 'blk-a',
+        sectionCourseIdA: 'sc-a',
+        sectionIdA: 'sec-a',
+        sectionCodeA: 'APF-CH',
+        sectionNameA: 'APF-CH',
+        courseIdA: 'course-a',
+        courseNameA: 'MATEMATICA',
+        startTimeA: '09:00',
+        endTimeA: '10:00',
+        startDateA: '2026-02-23',
+        endDateA: '2026-03-22',
+        blockIdB: 'blk-b',
+        sectionCourseIdB: 'sc-b',
+        sectionIdB: 'sec-b',
+        sectionCodeB: 'BPF-CH',
+        sectionNameB: 'BPF-CH',
+        courseIdB: 'course-b',
+        courseNameB: 'COMUNICACION',
+        startTimeB: '09:00',
+        endTimeB: '10:00',
+        startDateB: '2026-02-23',
+        endDateB: '2026-03-22',
+      },
+    ]);
+
+    const out = await service.listScheduleConflicts();
+    expect(out).toHaveLength(1);
+    expect(out[0].studentCode).toBe('20260001');
+    expect(out[0].blockA.courseName).toBe('MATEMATICA');
+    expect(out[0].blockB.courseName).toBe('COMUNICACION');
+  });
+
+  it('reassignStudentSectionCourse should warn with conflict error when target exceeds capacity without confirmation', async () => {
+    const { service, sectionsRepo } = createService();
+
+    sectionsRepo.manager.query.mockImplementation(async (sql: string) => {
+      const normalized = sql.replace(/\s+/g, ' ').trim().toUpperCase();
+      if (
+        normalized.includes('FROM SECTION_STUDENT_COURSES SSC') &&
+        normalized.includes('AND SC.ID = ?') &&
+        normalized.includes('AND SC.PERIODID = ?')
+      ) {
+        return [
+          {
+            sectionCourseId: 'sc-from',
+            sectionId: 'sec-1',
+            courseId: 'course-1',
+            courseName: 'MATEMATICA',
+            facultyGroup: 'FICA',
+            campusName: 'CHINCHA',
+            modality: 'PRESENCIAL',
+            initialCapacity: 45,
+            maxExtraCapacity: 2,
+          },
+        ];
+      }
+      if (
+        normalized.includes('FROM SECTION_COURSES SC') &&
+        normalized.includes('WHERE SC.ID = ?') &&
+        normalized.includes('AND SC.PERIODID = ?')
+      ) {
+        return [
+          {
+            sectionCourseId: 'sc-to',
+            sectionId: 'sec-2',
+            courseId: 'course-1',
+            courseName: 'MATEMATICA',
+            facultyGroup: 'FICA',
+            campusName: 'CHINCHA',
+            modality: 'PRESENCIAL',
+            initialCapacity: 45,
+            maxExtraCapacity: 2,
+          },
+        ];
+      }
+      if (
+        normalized.includes('SELECT COUNT(*) AS C') &&
+        normalized.includes('FROM SECTION_STUDENT_COURSES') &&
+        normalized.includes('SECTIONCOURSEID = ?')
+      ) {
+        return [{ c: 0 }];
+      }
+      if (normalized.includes('SELECT DISTINCT CAND.ID AS CANDIDATESECTIONCOURSEID')) {
+        return [];
+      }
+      if (normalized.includes('SELECT COUNT(DISTINCT STUDENTID) AS C')) {
+        return [{ c: 47 }];
+      }
+      return [];
+    });
+
+    await expect(
+      service.reassignStudentSectionCourse({
+        studentId: 'stu-1',
+        fromSectionCourseId: 'sc-from',
+        toSectionCourseId: 'sc-to',
+        confirmOverCapacity: false,
+      })
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('reassignStudentSectionCourse should allow reassignment when over-capacity is confirmed', async () => {
+    const { service, sectionsRepo } = createService();
+
+    sectionsRepo.manager.query.mockImplementation(async (sql: string) => {
+      const normalized = sql.replace(/\s+/g, ' ').trim().toUpperCase();
+      if (
+        normalized.includes('FROM SECTION_STUDENT_COURSES SSC') &&
+        normalized.includes('AND SC.ID = ?') &&
+        normalized.includes('AND SC.PERIODID = ?')
+      ) {
+        return [
+          {
+            sectionCourseId: 'sc-from',
+            sectionId: 'sec-1',
+            courseId: 'course-1',
+            courseName: 'MATEMATICA',
+            facultyGroup: 'FICA',
+            campusName: 'CHINCHA',
+            modality: 'PRESENCIAL',
+            initialCapacity: 45,
+            maxExtraCapacity: 2,
+          },
+        ];
+      }
+      if (
+        normalized.includes('FROM SECTION_COURSES SC') &&
+        normalized.includes('WHERE SC.ID = ?') &&
+        normalized.includes('AND SC.PERIODID = ?')
+      ) {
+        return [
+          {
+            sectionCourseId: 'sc-to',
+            sectionId: 'sec-2',
+            courseId: 'course-1',
+            courseName: 'MATEMATICA',
+            facultyGroup: 'FICA',
+            campusName: 'CHINCHA',
+            modality: 'PRESENCIAL',
+            initialCapacity: 45,
+            maxExtraCapacity: 2,
+          },
+        ];
+      }
+      if (
+        normalized.includes('SELECT COUNT(*) AS C') &&
+        normalized.includes('FROM SECTION_STUDENT_COURSES') &&
+        normalized.includes('SECTIONCOURSEID = ?')
+      ) {
+        return [{ c: 0 }];
+      }
+      if (normalized.includes('SELECT DISTINCT CAND.ID AS CANDIDATESECTIONCOURSEID')) {
+        return [];
+      }
+      if (normalized.includes('SELECT COUNT(DISTINCT STUDENTID) AS C')) {
+        return [{ c: 47 }];
+      }
+      if (normalized.includes('UPDATE SECTION_STUDENT_COURSES')) {
+        return { affectedRows: 1 };
+      }
+      return [];
+    });
+
+    const out = await service.reassignStudentSectionCourse({
+      studentId: 'stu-1',
+      fromSectionCourseId: 'sc-from',
+      toSectionCourseId: 'sc-to',
+      confirmOverCapacity: true,
+    });
+
+    expect(out.ok).toBe(true);
+    expect(out.overCapacity).toBe(true);
+    expect(sectionsRepo.manager.transaction).toHaveBeenCalledTimes(1);
   });
 });

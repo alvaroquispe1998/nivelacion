@@ -56,12 +56,20 @@ const COURSE_CONTEXT_STORAGE_KEY = 'admin.sections.selectedCourseName';
                 {{ formatDateRange(b.startDate, b.endDate) }}
               </td>
               <td class="px-4 py-3">
-                <button
-                  class="rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50"
-                  (click)="remove(b.id)"
-                >
-                  Eliminar
-                </button>
+                <div class="flex items-center gap-2">
+                  <button
+                    class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
+                    (click)="startEdit(b)"
+                  >
+                    Editar
+                  </button>
+                  <button
+                    class="rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+                    (click)="remove(b.id)"
+                  >
+                    Eliminar
+                  </button>
+                </div>
               </td>
             </tr>
             <tr *ngIf="visibleBlocks.length===0" class="border-t border-slate-100">
@@ -72,12 +80,14 @@ const COURSE_CONTEXT_STORAGE_KEY = 'admin.sections.selectedCourseName';
       </div>
 
       <div class="rounded-2xl border border-slate-200 bg-white p-4">
-        <div class="text-sm font-semibold">Nuevo bloque</div>
+        <div class="text-sm font-semibold">
+          {{ editingBlockId ? 'Editar bloque' : 'Nuevo bloque' }}
+        </div>
         <div class="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
           <div class="text-[11px] uppercase tracking-wide text-slate-500">Curso</div>
           <div class="text-sm font-semibold text-slate-900">{{ selectedCourseName || '-' }}</div>
         </div>
-        <form class="mt-3 space-y-3" [formGroup]="form" (ngSubmit)="create()">
+        <form class="mt-3 space-y-3" [formGroup]="form" (ngSubmit)="saveBlock()">
           <select
             class="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
             formControlName="dayOfWeek"
@@ -114,12 +124,26 @@ const COURSE_CONTEXT_STORAGE_KEY = 'admin.sections.selectedCourseName';
               />
             </div>
           </div>
-          <button
-            class="w-full rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-            [disabled]="form.invalid || loading"
-          >
-            {{ loading ? 'Creando...' : 'Crear' }}
-          </button>
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <button
+              class="w-full rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+              [disabled]="form.invalid || loading"
+            >
+              {{
+                loading
+                  ? (editingBlockId ? 'Guardando...' : 'Creando...')
+                  : (editingBlockId ? 'Guardar cambios' : 'Crear')
+              }}
+            </button>
+            <button
+              type="button"
+              class="w-full rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50 disabled:opacity-60"
+              [disabled]="!editingBlockId || loading"
+              (click)="cancelEdit()"
+            >
+              Cancelar
+            </button>
+          </div>
         </form>
 
         <div class="mt-2 text-xs text-slate-600">Si defines vigencia, se usara para semanas de asistencia.</div>
@@ -142,6 +166,7 @@ export class AdminSectionSchedulePage {
   loading = false;
   selectedCourseName = '';
   contextCourseName = '';
+  editingBlockId: string | null = null;
 
   get visibleBlocks() {
     const course = this.selectedCourseName.trim();
@@ -208,9 +233,52 @@ export class AdminSectionSchedulePage {
       if (selectedCourseName) {
         this.saveStoredCourseName(selectedCourseName);
       }
+      if (this.editingBlockId) {
+        const current = this.blocks.find((b) => b.id === this.editingBlockId) ?? null;
+        if (!current) {
+          this.cancelEdit(false);
+        }
+      }
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo cargar bloques';
     } finally {
+      this.cdr.detectChanges();
+    }
+  }
+
+  async saveBlock() {
+    if (this.editingBlockId) {
+      await this.update(this.editingBlockId);
+      return;
+    }
+    await this.create();
+  }
+
+  startEdit(block: AdminScheduleBlock) {
+    this.error = null;
+    this.editingBlockId = block.id;
+    this.form.patchValue({
+      courseName: block.courseName,
+      dayOfWeek: Number(block.dayOfWeek ?? 1),
+      startTime: String(block.startTime ?? ''),
+      endTime: String(block.endTime ?? ''),
+      startDate: String(block.startDate ?? '').trim(),
+      endDate: String(block.endDate ?? '').trim(),
+    });
+    this.cdr.detectChanges();
+  }
+
+  cancelEdit(detectChanges = true) {
+    this.editingBlockId = null;
+    this.form.patchValue({
+      courseName: this.selectedCourseName || '',
+      dayOfWeek: 1,
+      startTime: '08:00',
+      endTime: '10:00',
+      startDate: '',
+      endDate: '',
+    });
+    if (detectChanges) {
       this.cdr.detectChanges();
     }
   }
@@ -231,9 +299,35 @@ export class AdminSectionSchedulePage {
           endDate: String(v.endDate ?? '').trim() || null,
         })
       );
+      this.cancelEdit(false);
       await this.load();
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo crear bloque';
+    } finally {
+      this.loading = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  async update(id: string) {
+    this.loading = true;
+    this.error = null;
+    try {
+      const v = this.form.value;
+      await firstValueFrom(
+        this.http.put(`/api/admin/schedule-blocks/${id}`, {
+          courseName: this.selectedCourseName || String(v.courseName ?? '').trim(),
+          dayOfWeek: Number(v.dayOfWeek ?? 1),
+          startTime: String(v.startTime ?? ''),
+          endTime: String(v.endTime ?? ''),
+          startDate: String(v.startDate ?? '').trim() || null,
+          endDate: String(v.endDate ?? '').trim() || null,
+        })
+      );
+      this.cancelEdit(false);
+      await this.load();
+    } catch (e: any) {
+      this.error = e?.error?.message ?? 'No se pudo actualizar bloque';
     } finally {
       this.loading = false;
       this.cdr.detectChanges();

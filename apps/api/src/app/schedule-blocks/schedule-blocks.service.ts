@@ -64,18 +64,28 @@ export class ScheduleBlocksService {
   }
 
   private async assertNoOverlap(params: {
-    sectionCourseId: string;
+    sectionId: string;
     dayOfWeek: number;
     startTime: string;
     endTime: string;
     excludeId?: string;
   }) {
-    const existing = await this.blocksRepo.find({
-      where: {
-        sectionCourseId: params.sectionCourseId,
-        dayOfWeek: params.dayOfWeek,
-      },
-    });
+    const activePeriodId = await this.loadActivePeriodIdOrThrow();
+    const existing: Array<{ id: string; startTime: string; endTime: string }> =
+      await this.blocksRepo.manager.query(
+        `
+      SELECT
+        b.id AS id,
+        b.startTime AS startTime,
+        b.endTime AS endTime
+      FROM schedule_blocks b
+      INNER JOIN section_courses sc ON sc.id = b.sectionCourseId
+      WHERE b.sectionId = ?
+        AND b.dayOfWeek = ?
+        AND sc.periodId = ?
+      `,
+        [params.sectionId, params.dayOfWeek, activePeriodId]
+      );
 
     const overlaps = existing.some((b) => {
       if (params.excludeId && b.id === params.excludeId) return false;
@@ -83,7 +93,9 @@ export class ScheduleBlocksService {
     });
 
     if (overlaps) {
-      throw new ConflictException('Schedule block overlaps with an existing block');
+      throw new ConflictException(
+        'Schedule block overlaps with another course block in this section'
+      );
     }
   }
 
@@ -125,7 +137,7 @@ export class ScheduleBlocksService {
     }
 
     await this.assertNoOverlap({
-      sectionCourseId: sectionCourse.id,
+      sectionId: section.id,
       dayOfWeek: body.dayOfWeek,
       startTime: body.startTime,
       endTime: body.endTime,
@@ -194,7 +206,7 @@ export class ScheduleBlocksService {
     }
 
     await this.assertNoOverlap({
-      sectionCourseId: nextSectionCourse.id,
+      sectionId: block.section.id,
       dayOfWeek: next.dayOfWeek,
       startTime: next.startTime,
       endTime: next.endTime,

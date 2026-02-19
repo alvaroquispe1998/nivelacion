@@ -19,6 +19,63 @@ docker compose -f docker-compose.dev.yml up --build -d
 docker compose -f docker-compose.dev.yml exec -T api pnpm nx run api:migrate
 ```
 
+## Levantar en desarrollo por terminal (sin Docker para web/api)
+
+Usa esta opcion para iterar rapido en codigo sin recrear contenedores.
+
+1. Instalar dependencias (solo la primera vez):
+
+```powershell
+$env:COREPACK_ENABLE_DOWNLOAD_PROMPT='0'
+corepack pnpm install --frozen-lockfile
+```
+
+2. Configurar variables de entorno para API (puedes basarte en `.env.example`).
+
+3. Base de datos:
+- Opcion A (recomendada): deja solo MySQL en Docker.
+- Opcion B: usa MySQL local.
+
+Si quieres solo MySQL en Docker:
+
+```sh
+docker compose -f docker-compose.dev.yml up -d mysql adminer
+```
+
+### Solo API (terminal)
+
+```sh
+npx nx serve api
+```
+
+- API base: `http://localhost:3000/api`
+- Swagger: `http://localhost:3000/docs`
+
+### Solo Web (terminal)
+
+```sh
+npx nx serve web --proxy-config apps/web/proxy.local.conf.json --port 4200
+```
+
+- Web: `http://localhost:4200`
+
+Nota: el proxy `apps/web/proxy.conf.json` apunta a `http://api:3000` y se usa para Docker.
+En host local usa `apps/web/proxy.local.conf.json` (apunta a `http://localhost:3000`).
+
+### API + Web (2 terminales)
+
+Terminal 1:
+
+```sh
+npx nx serve api
+```
+
+Terminal 2:
+
+```sh
+npx nx serve web --proxy-config apps/web/proxy.local.conf.json --port 4200
+```
+
 ## Migraciones de base de datos
 
 ### Docker (recomendado)
@@ -46,13 +103,19 @@ npx nx run api:migrate
 
 ## URLs (host)
 
-- Web: `http://localhost:4201`
-- API base: `http://localhost:3333/api`
-- Swagger: `http://localhost:3333/docs`
-- Adminer: `http://localhost:8080`
+- Docker:
+  - Web: `http://localhost:4201`
+  - API base: `http://localhost:3333/api`
+  - Swagger: `http://localhost:3333/docs`
+  - Adminer: `http://localhost:8080`
+- Local terminal:
+  - Web: `http://localhost:4200`
+  - API base: `http://localhost:3000/api`
+  - Swagger: `http://localhost:3000/docs`
 
 MySQL (desde Adminer o cliente):
-- Host: `mysql`
+- Host Docker: `mysql`
+- Host local: `localhost`
 - Puerto: `3306`
 - DB: `uai`
 - User: `uai`

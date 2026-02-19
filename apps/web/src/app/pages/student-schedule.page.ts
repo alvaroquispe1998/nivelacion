@@ -61,14 +61,12 @@ import { DAYS, minutesFromHHmm } from '../shared/days';
             ></div>
 
             <ng-container *ngFor="let item of items">
-              <a
+              <button
+                type="button"
                 class="m-0.5 rounded-lg bg-sky-600 px-2 py-1 text-[11px] font-semibold text-white shadow-sm hover:bg-sky-700"
                 [style.gridColumn]="gridCol(item)"
                 [style.gridRow]="gridRow(item)"
-                [href]="item.zoomUrl || null"
-                [attr.target]="item.zoomUrl ? '_blank' : null"
-                [attr.rel]="item.zoomUrl ? 'noreferrer' : null"
-                (click)="!item.zoomUrl && $event.preventDefault()"
+                (click)="selectItem(item)"
               >
                 <div class="truncate">{{ item.courseName }}</div>
                 <div class="opacity-90 font-normal">
@@ -76,10 +74,46 @@ import { DAYS, minutesFromHHmm } from '../shared/days';
                   <span class="opacity-80">|</span>
                   {{ item.sectionName }}
                 </div>
-              </a>
+              </button>
             </ng-container>
           </div>
         </div>
+      </div>
+    </div>
+
+    <div
+      *ngIf="selectedItem"
+      class="fixed inset-0 z-40 bg-slate-900/40 p-4 sm:p-6"
+      (click)="closeDetail()"
+    >
+      <div
+        class="mx-auto mt-16 w-full max-w-md rounded-2xl border border-slate-200 bg-white p-4 shadow-xl"
+        (click)="$event.stopPropagation()"
+      >
+        <div class="flex items-start justify-between gap-3">
+          <div class="text-base font-semibold text-slate-900">Detalle de curso</div>
+          <button
+            type="button"
+            class="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-semibold hover:bg-slate-50"
+            (click)="closeDetail()"
+          >
+            Cerrar
+          </button>
+        </div>
+        <div class="mt-3 space-y-1 text-sm text-slate-700">
+          <div><b>Curso:</b> {{ selectedItem.courseName }}</div>
+          <div><b>Hora:</b> {{ selectedItem.startTime }}-{{ selectedItem.endTime }}</div>
+          <div><b>Docente:</b> {{ selectedItem.teacherName || 'Sin docente asignado' }}</div>
+        </div>
+        <a
+          *ngIf="selectedItem.zoomUrl"
+          class="mt-4 inline-block rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
+          [href]="selectedItem.zoomUrl"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Abrir enlace de clase
+        </a>
       </div>
     </div>
   `,
@@ -90,6 +124,7 @@ export class StudentSchedulePage {
 
   days = DAYS;
   items: StudentScheduleItem[] = [];
+  selectedItem: StudentScheduleItem | null = null;
   error: string | null = null;
 
   startMinutes = 6 * 60;
@@ -118,6 +153,7 @@ export class StudentSchedulePage {
       this.items = await firstValueFrom(
         this.http.get<StudentScheduleItem[]>('/api/student/schedule')
       );
+      this.selectedItem = null;
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo cargar el horario';
     } finally {
@@ -132,10 +168,30 @@ export class StudentSchedulePage {
   }
 
   gridRow(item: StudentScheduleItem) {
-    const start = minutesFromHHmm(item.startTime);
-    const end = minutesFromHHmm(item.endTime);
-    const rowStart = (start - this.startMinutes) / this.slotMinutes + 1;
-    const rowSpan = (end - start) / this.slotMinutes;
+    const start = this.safeMinutes(item.startTime, this.startMinutes);
+    const end = this.safeMinutes(item.endTime, start + this.slotMinutes);
+    const rowStart = Math.max(
+      1,
+      Math.min(
+        this.slotCount,
+        Math.floor((Math.max(start, this.startMinutes) - this.startMinutes) / this.slotMinutes) +
+          1
+      )
+    );
+    const rowSpan = Math.max(1, Math.ceil((Math.max(end, start) - start) / this.slotMinutes));
     return `${rowStart} / span ${rowSpan}`;
+  }
+
+  selectItem(item: StudentScheduleItem) {
+    this.selectedItem = item;
+  }
+
+  closeDetail() {
+    this.selectedItem = null;
+  }
+
+  private safeMinutes(value: string, fallback: number) {
+    const minutes = minutesFromHHmm(value);
+    return Number.isFinite(minutes) ? minutes : fallback;
   }
 }

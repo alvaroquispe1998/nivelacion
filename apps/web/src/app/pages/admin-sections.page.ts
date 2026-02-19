@@ -200,21 +200,19 @@ interface SectionStudentRow {
           <table class="min-w-full text-sm">
             <thead class="sticky top-0 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600">
               <tr>
-                <th class="px-3 py-2">DNI</th>
-                <th class="px-3 py-2">Codigo</th>
+                <th class="px-3 py-2">Codigo alumno</th>
                 <th class="px-3 py-2">Alumno</th>
                 <th class="px-3 py-2">Curso</th>
               </tr>
             </thead>
             <tbody>
               <tr *ngFor="let st of studentsModalRows; trackBy: trackStudentRow" class="border-t border-slate-100">
-                <td class="px-3 py-2 font-mono text-xs">{{ st.dni }}</td>
-                <td class="px-3 py-2 text-xs">{{ st.codigoAlumno || '-' }}</td>
+                <td class="px-3 py-2 text-xs">{{ studentCode(st.codigoAlumno) }}</td>
                 <td class="px-3 py-2">{{ st.fullName }}</td>
                 <td class="px-3 py-2 text-xs">{{ st.courseName || modalCourseName || '-' }}</td>
               </tr>
               <tr *ngIf="studentsModalRows.length === 0">
-                <td class="px-3 py-4 text-slate-500" colspan="4">Sin alumnos en la seccion-curso</td>
+                <td class="px-3 py-4 text-slate-500" colspan="3">Sin alumnos en la seccion-curso</td>
               </tr>
             </tbody>
           </table>
@@ -319,6 +317,11 @@ export class AdminSectionsPage {
 
   trackStudentRow(_: number, item: SectionStudentRow) {
     return item.id;
+  }
+
+  studentCode(code: string | null | undefined) {
+    const value = String(code ?? '').trim();
+    return value || 'SIN CODIGO';
   }
 
   async reloadAll() {

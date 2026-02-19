@@ -1,10 +1,16 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
-import { randomUUID } from 'crypto';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { createHash, randomUUID } from 'crypto';
 import { Role } from '@uai/shared';
 import * as XLSX from 'xlsx';
 import { DataSource, EntityManager, In } from 'typeorm';
 import { SectionEntity } from '../sections/section.entity';
 import { UserEntity } from '../users/user.entity';
+import { CreateLevelingManualSectionCourseDto } from './dto/create-leveling-manual-section-course.dto';
 
 type CourseName = string;
 
@@ -126,17 +132,37 @@ interface ProgramNeedsPayload {
   }>;
 }
 
-interface ApplyPlanResult {
+type LevelingRunStatus = 'STRUCTURED' | 'READY' | 'MATRICULATED' | 'ARCHIVED';
+
+interface ApplyStructureResult {
+  runId: string;
+  runStatus: LevelingRunStatus;
   sectionsCreated: number;
   sectionsUpdated: number;
   studentsCreated: number;
   studentsUpdated: number;
   sectionCoursesCreated: number;
   sectionCoursesOmitted: number;
-  sectionStudentCoursesCreated: number;
-  sectionStudentCoursesOmitted: number;
-  enrollmentsCreated: number;
-  enrollmentsOmitted: number;
+  demandsCreated: number;
+  demandsOmitted: number;
+}
+
+interface StudentDemandItem {
+  studentId: string;
+  studentCode: string | null;
+  studentName: string;
+  courseId: string;
+  courseName: string;
+  facultyGroup: string | null;
+  campusName: string | null;
+}
+
+interface ScheduleBlockWindow {
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+  startDate: string | null;
+  endDate: string | null;
 }
 
 interface ExcelColumns {
@@ -196,6 +222,7 @@ export class LevelingService {
     maxExtraCapacity?: number;
     apply?: boolean;
     groupModalityOverrides?: string;
+    createdById?: string | null;
   }) {
     const cfg = await this.getConfig();
     const initialCapacity = params.initialCapacity ?? cfg.initialCapacity;
@@ -243,11 +270,18 @@ export class LevelingService {
       maxExtraCapacity,
     });
 
-    let applied: null | ApplyPlanResult = null;
+    let applied: null | ApplyStructureResult = null;
 
     if (apply) {
       applied = await this.applyPlan({
         sections: plannedSections,
+        students: parsed.students,
+        configUsed: {
+          initialCapacity,
+          maxExtraCapacity,
+        },
+        sourceFileHash: this.hashBuffer(params.fileBuffer),
+        createdById: params.createdById ?? null,
       });
     }
 
@@ -311,8 +345,864 @@ export class LevelingService {
             ).sort(),
           })),
       })),
+      runId: applied?.runId ?? null,
+      runStatus: applied?.runStatus ?? null,
       applied,
     };
+  }
+
+  async getRunDetails(runId: string) {
+    const run = await this.getRunOrThrow(runId);
+    const sectionRows: Array<{ c: number; manualC: number }> = await this.dataSource.query(
+      `
+      SELECT
+        COUNT(*) AS c,
+        SUM(CASE WHEN s.isAutoLeveling = 0 THEN 1 ELSE 0 END) AS manualC
+      FROM sections s
+      WHERE s.levelingRunId = ?
+      `,
+      [run.id]
+    );
+    const sectionCourseRows: Array<{ c: number }> = await this.dataSource.query(
+      `
+      SELECT COUNT(*) AS c
+      FROM section_courses sc
+      INNER JOIN sections s ON s.id = sc.sectionId
+      WHERE s.levelingRunId = ?
+        AND sc.periodId = ?
+      `,
+      [run.id, run.periodId]
+    );
+    const demandRows: Array<{ c: number; students: number }> = await this.dataSource.query(
+      `
+      SELECT
+        COUNT(*) AS c,
+        COUNT(DISTINCT studentId) AS students
+      FROM leveling_run_student_course_demands
+      WHERE runId = ?
+      `,
+      [run.id]
+    );
+    const assignedRows: Array<{ c: number }> = await this.dataSource.query(
+      `
+      SELECT COUNT(*) AS c
+      FROM section_student_courses ssc
+      INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
+      INNER JOIN sections s ON s.id = sc.sectionId
+      WHERE s.levelingRunId = ?
+        AND sc.periodId = ?
+      `,
+      [run.id, run.periodId]
+    );
+    const scheduledRows: Array<{ c: number }> = await this.dataSource.query(
+      `
+      SELECT COUNT(DISTINCT sc.id) AS c
+      FROM section_courses sc
+      INNER JOIN sections s ON s.id = sc.sectionId
+      INNER JOIN schedule_blocks sb ON sb.sectionCourseId = sc.id
+      WHERE s.levelingRunId = ?
+        AND sc.periodId = ?
+      `,
+      [run.id, run.periodId]
+    );
+
+    const sectionCourses = Number(sectionCourseRows[0]?.c ?? 0);
+    const withSchedule = Number(scheduledRows[0]?.c ?? 0);
+    return {
+      runId: run.id,
+      periodId: run.periodId,
+      status: run.status as LevelingRunStatus,
+      configUsed: run.configUsed,
+      sourceFileHash: run.sourceFileHash,
+      createdBy: run.createdBy,
+      createdAt: run.createdAt,
+      updatedAt: run.updatedAt,
+      metrics: {
+        sections: Number(sectionRows[0]?.c ?? 0),
+        sectionCourses,
+        manualSections: Number(sectionRows[0]?.manualC ?? 0),
+        demands: Number(demandRows[0]?.c ?? 0),
+        assigned: Number(assignedRows[0]?.c ?? 0),
+        studentsWithDemand: Number(demandRows[0]?.students ?? 0),
+        sectionCoursesWithSchedule: withSchedule,
+        sectionCoursesWithoutSchedule: Math.max(0, sectionCourses - withSchedule),
+      },
+    };
+  }
+
+  async listRunSections(runId: string) {
+    const run = await this.getRunOrThrow(runId);
+    const sectionRows: Array<{
+      sectionId: string;
+      name: string;
+      code: string | null;
+      facultyGroup: string | null;
+      facultyName: string | null;
+      campusName: string | null;
+      modality: string | null;
+      initialCapacity: number;
+      maxExtraCapacity: number;
+      isAutoLeveling: number;
+      levelingRunId: string | null;
+    }> = await this.dataSource.query(
+      `
+      SELECT
+        s.id AS sectionId,
+        s.name AS name,
+        s.code AS code,
+        s.facultyGroup AS facultyGroup,
+        s.facultyName AS facultyName,
+        s.campusName AS campusName,
+        s.modality AS modality,
+        s.initialCapacity AS initialCapacity,
+        s.maxExtraCapacity AS maxExtraCapacity,
+        s.isAutoLeveling AS isAutoLeveling,
+        s.levelingRunId AS levelingRunId
+      FROM sections s
+      WHERE s.levelingRunId = ?
+      ORDER BY
+        CASE
+          WHEN UPPER(COALESCE(s.modality, '')) LIKE '%PRESENCIAL%' THEN 0
+          WHEN UPPER(COALESCE(s.modality, '')) LIKE '%VIRTUAL%' THEN 1
+          ELSE 2
+        END,
+        s.code ASC,
+        s.name ASC
+      `,
+      [run.id]
+    );
+    if (sectionRows.length === 0) return [];
+
+    const sectionIds = sectionRows.map((x) => String(x.sectionId));
+    const placeholders = sectionIds.map(() => '?').join(', ');
+    const sectionCourseRows: Array<{
+      sectionCourseId: string;
+      sectionId: string;
+      courseId: string;
+      courseName: string;
+      scheduleBlocksCount: number;
+      assignedStudents: number;
+    }> = await this.dataSource.query(
+      `
+      SELECT
+        sc.id AS sectionCourseId,
+        sc.sectionId AS sectionId,
+        sc.courseId AS courseId,
+        c.name AS courseName,
+        COUNT(DISTINCT sb.id) AS scheduleBlocksCount,
+        COUNT(DISTINCT ssc.studentId) AS assignedStudents
+      FROM section_courses sc
+      INNER JOIN courses c ON c.id = sc.courseId
+      LEFT JOIN schedule_blocks sb ON sb.sectionCourseId = sc.id
+      LEFT JOIN section_student_courses ssc ON ssc.sectionCourseId = sc.id
+      WHERE sc.sectionId IN (${placeholders})
+        AND sc.periodId = ?
+      GROUP BY
+        sc.id,
+        sc.sectionId,
+        sc.courseId,
+        c.name
+      ORDER BY c.name ASC
+      `,
+      [...sectionIds, run.periodId]
+    );
+
+    const coursesBySection = new Map<string, typeof sectionCourseRows>();
+    for (const row of sectionCourseRows) {
+      const sectionId = String(row.sectionId);
+      if (!coursesBySection.has(sectionId)) {
+        coursesBySection.set(sectionId, []);
+      }
+      coursesBySection.get(sectionId)!.push(row);
+    }
+
+    return sectionRows.map((row) => ({
+      sectionId: String(row.sectionId),
+      name: String(row.name ?? ''),
+      code: row.code ? String(row.code) : null,
+      facultyGroup: row.facultyGroup ? String(row.facultyGroup) : null,
+      facultyName: row.facultyName ? String(row.facultyName) : null,
+      campusName: row.campusName ? String(row.campusName) : null,
+      modality: row.modality ? String(row.modality) : null,
+      initialCapacity: Number(row.initialCapacity ?? 45),
+      maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
+      isAutoLeveling: Boolean(row.isAutoLeveling),
+      levelingRunId: row.levelingRunId ? String(row.levelingRunId) : null,
+      sectionCourses: (coursesBySection.get(String(row.sectionId)) ?? []).map((courseRow) => ({
+        sectionCourseId: String(courseRow.sectionCourseId),
+        courseId: String(courseRow.courseId),
+        courseName: String(courseRow.courseName ?? ''),
+        hasSchedule: Number(courseRow.scheduleBlocksCount ?? 0) > 0,
+        scheduleBlocksCount: Number(courseRow.scheduleBlocksCount ?? 0),
+        assignedStudents: Number(courseRow.assignedStudents ?? 0),
+      })),
+    }));
+  }
+
+  async createManualSectionCourse(
+    runId: string,
+    dto: CreateLevelingManualSectionCourseDto
+  ) {
+    return this.dataSource.transaction(async (manager) => {
+      const run = await this.getRunOrThrow(runId, manager);
+      if (run.status === 'ARCHIVED') {
+        throw new BadRequestException('Cannot mutate an archived leveling run');
+      }
+
+      const course = await this.resolveCourseByNameOrThrow(dto.courseName, manager);
+      const cfg = run.configUsed;
+      const initialCapacity = dto.initialCapacity ?? cfg.initialCapacity ?? 45;
+      const maxExtraCapacity = dto.maxExtraCapacity ?? cfg.maxExtraCapacity ?? 0;
+      const sectionCode = await this.generateManualSectionCode({
+        manager,
+        facultyGroup: dto.facultyGroup,
+        campusName: dto.campusName,
+      });
+
+      const sectionId = randomUUID();
+      await manager.query(
+        `
+        INSERT INTO sections (
+          id,
+          name,
+          code,
+          akademicSectionId,
+          facultyGroup,
+          facultyName,
+          campusName,
+          modality,
+          teacherId,
+          initialCapacity,
+          maxExtraCapacity,
+          isAutoLeveling,
+          levelingRunId,
+          createdAt,
+          updatedAt
+        )
+        VALUES (?, ?, ?, NULL, ?, ?, ?, ?, NULL, ?, ?, 0, ?, NOW(6), NOW(6))
+        `,
+        [
+          sectionId,
+          sectionCode,
+          sectionCode,
+          dto.facultyGroup,
+          String(dto.facultyName ?? '').trim() || this.defaultFacultyName(dto.facultyGroup),
+          dto.campusName,
+          dto.modality,
+          initialCapacity,
+          maxExtraCapacity,
+          run.id,
+        ]
+      );
+
+      const sectionCourseId = randomUUID();
+      await manager.query(
+        `
+        INSERT INTO section_courses (
+          id,
+          periodId,
+          sectionId,
+          courseId,
+          idakademic,
+          createdAt,
+          updatedAt
+        )
+        VALUES (?, ?, ?, ?, NULL, NOW(6), NOW(6))
+        `,
+        [sectionCourseId, run.periodId, sectionId, course.id]
+      );
+
+      return {
+        runId: run.id,
+        sectionId,
+        sectionCourseId,
+        sectionCode,
+        sectionName: sectionCode,
+        courseId: course.id,
+        courseName: course.name,
+        isAutoLeveling: false,
+      };
+    });
+  }
+
+  async deleteManualSectionCourse(runId: string, sectionCourseId: string) {
+    return this.dataSource.transaction(async (manager) => {
+      await this.getRunOrThrow(runId, manager);
+      const rows: Array<{
+        sectionCourseId: string;
+        sectionId: string;
+        isAutoLeveling: number;
+      }> = await manager.query(
+        `
+        SELECT
+          sc.id AS sectionCourseId,
+          sc.sectionId AS sectionId,
+          s.isAutoLeveling AS isAutoLeveling
+        FROM section_courses sc
+        INNER JOIN sections s ON s.id = sc.sectionId
+        WHERE sc.id = ?
+          AND s.levelingRunId = ?
+        LIMIT 1
+        `,
+        [sectionCourseId, runId]
+      );
+      const sectionCourse = rows[0];
+      if (!sectionCourse?.sectionCourseId) {
+        throw new NotFoundException('Section-course not found in this leveling run');
+      }
+      if (Number(sectionCourse.isAutoLeveling ?? 0) > 0) {
+        throw new BadRequestException(
+          'Cannot delete auto-generated section-course from leveling run'
+        );
+      }
+
+      const assignedRows: Array<{ c: number }> = await manager.query(
+        `
+        SELECT COUNT(*) AS c
+        FROM section_student_courses
+        WHERE sectionCourseId = ?
+        `,
+        [sectionCourseId]
+      );
+      if (Number(assignedRows[0]?.c ?? 0) > 0) {
+        throw new ConflictException(
+          'Cannot delete manual section-course with enrolled students'
+        );
+      }
+
+      await manager.query(
+        `
+        DELETE FROM section_courses
+        WHERE id = ?
+        LIMIT 1
+        `,
+        [sectionCourseId]
+      );
+
+      const remainRows: Array<{ c: number }> = await manager.query(
+        `
+        SELECT COUNT(*) AS c
+        FROM section_courses
+        WHERE sectionId = ?
+        `,
+        [sectionCourse.sectionId]
+      );
+      let sectionDeleted = false;
+      if (Number(remainRows[0]?.c ?? 0) === 0) {
+        await manager.query(
+          `
+          DELETE FROM sections
+          WHERE id = ?
+            AND levelingRunId = ?
+            AND isAutoLeveling = 0
+          LIMIT 1
+          `,
+          [sectionCourse.sectionId, runId]
+        );
+        sectionDeleted = true;
+      }
+
+      return {
+        ok: true,
+        runId,
+        sectionCourseId,
+        sectionDeleted,
+      };
+    });
+  }
+
+  async matriculateRun(runId: string) {
+    return this.dataSource.transaction(async (manager) => {
+      const run = await this.getRunOrThrow(runId, manager);
+      if (run.status === 'ARCHIVED') {
+        throw new BadRequestException('Cannot matriculate an archived leveling run');
+      }
+
+      const sectionCourseRows: Array<{
+        sectionCourseId: string;
+        sectionId: string;
+        sectionCode: string | null;
+        sectionName: string;
+        courseId: string;
+        courseName: string;
+        facultyGroup: string | null;
+        campusName: string | null;
+        initialCapacity: number;
+        maxExtraCapacity: number;
+      }> = await manager.query(
+        `
+        SELECT
+          sc.id AS sectionCourseId,
+          sc.sectionId AS sectionId,
+          s.code AS sectionCode,
+          s.name AS sectionName,
+          sc.courseId AS courseId,
+          c.name AS courseName,
+          s.facultyGroup AS facultyGroup,
+          s.campusName AS campusName,
+          s.initialCapacity AS initialCapacity,
+          s.maxExtraCapacity AS maxExtraCapacity
+        FROM section_courses sc
+        INNER JOIN sections s ON s.id = sc.sectionId
+        INNER JOIN courses c ON c.id = sc.courseId
+        WHERE s.levelingRunId = ?
+          AND sc.periodId = ?
+        ORDER BY
+          s.code ASC,
+          s.name ASC,
+          c.name ASC
+        `,
+        [run.id, run.periodId]
+      );
+      if (sectionCourseRows.length === 0) {
+        throw new BadRequestException('Run has no section-courses to matriculate');
+      }
+
+      const sectionCourseIds = sectionCourseRows.map((x) => String(x.sectionCourseId));
+      const placeholders = sectionCourseIds.map(() => '?').join(', ');
+      const blockRows: Array<{
+        sectionCourseId: string;
+        dayOfWeek: number;
+        startTime: string;
+        endTime: string;
+        startDate: string | null;
+        endDate: string | null;
+      }> = await manager.query(
+        `
+        SELECT
+          sb.sectionCourseId AS sectionCourseId,
+          sb.dayOfWeek AS dayOfWeek,
+          sb.startTime AS startTime,
+          sb.endTime AS endTime,
+          sb.startDate AS startDate,
+          sb.endDate AS endDate
+        FROM schedule_blocks sb
+        WHERE sb.sectionCourseId IN (${placeholders})
+        ORDER BY sb.dayOfWeek ASC, sb.startTime ASC
+        `,
+        sectionCourseIds
+      );
+
+      const blocksBySectionCourse = new Map<string, ScheduleBlockWindow[]>();
+      for (const row of blockRows) {
+        const key = String(row.sectionCourseId);
+        if (!blocksBySectionCourse.has(key)) {
+          blocksBySectionCourse.set(key, []);
+        }
+        blocksBySectionCourse.get(key)!.push({
+          dayOfWeek: Number(row.dayOfWeek ?? 0),
+          startTime: String(row.startTime ?? ''),
+          endTime: String(row.endTime ?? ''),
+          startDate: this.toIsoDateOnly(row.startDate),
+          endDate: this.toIsoDateOnly(row.endDate),
+        });
+      }
+
+      const withoutSchedule = sectionCourseRows.filter(
+        (row) => (blocksBySectionCourse.get(String(row.sectionCourseId)) ?? []).length === 0
+      );
+      if (withoutSchedule.length > 0) {
+        throw new BadRequestException(
+          `Each section-course requires at least 1 schedule block before matriculate. Missing: ${withoutSchedule
+            .map((x) => `${x.sectionCode ?? x.sectionName} - ${x.courseName}`)
+            .join(', ')}`
+        );
+      }
+
+      const demands: StudentDemandItem[] = await manager.query(
+        `
+        SELECT
+          d.studentId AS studentId,
+          u.codigoAlumno AS studentCode,
+          u.fullName AS studentName,
+          d.courseId AS courseId,
+          c.name AS courseName,
+          d.facultyGroup AS facultyGroup,
+          d.campusName AS campusName
+        FROM leveling_run_student_course_demands d
+        INNER JOIN users u ON u.id = d.studentId
+        INNER JOIN courses c ON c.id = d.courseId
+        WHERE d.runId = ?
+          AND d.required = 1
+        ORDER BY u.fullName ASC, c.name ASC
+        `,
+        [run.id]
+      );
+      if (demands.length === 0) {
+        throw new BadRequestException('Run has no pending student-course demands');
+      }
+
+      await this.deleteSectionStudentCoursesBySectionCourseIds(manager, sectionCourseIds);
+
+      type Candidate = {
+        sectionCourseId: string;
+        sectionId: string;
+        sectionCode: string | null;
+        sectionName: string;
+        courseId: string;
+        courseName: string;
+        facultyGroup: string | null;
+        campusName: string | null;
+        initialCapacity: number;
+        maxExtraCapacity: number;
+        assignedCount: number;
+        blocks: ScheduleBlockWindow[];
+      };
+
+      const candidatesByCourse = new Map<string, Candidate[]>();
+      for (const row of sectionCourseRows) {
+        const key = String(row.courseId);
+        if (!candidatesByCourse.has(key)) {
+          candidatesByCourse.set(key, []);
+        }
+        candidatesByCourse.get(key)!.push({
+          sectionCourseId: String(row.sectionCourseId),
+          sectionId: String(row.sectionId),
+          sectionCode: row.sectionCode ? String(row.sectionCode) : null,
+          sectionName: String(row.sectionName ?? ''),
+          courseId: String(row.courseId),
+          courseName: String(row.courseName ?? ''),
+          facultyGroup: row.facultyGroup ? String(row.facultyGroup) : null,
+          campusName: row.campusName ? String(row.campusName) : null,
+          initialCapacity: Number(row.initialCapacity ?? 45),
+          maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
+          assignedCount: 0,
+          blocks: blocksBySectionCourse.get(String(row.sectionCourseId)) ?? [],
+        });
+      }
+
+      const demandWithCandidates = demands.map((demand) => {
+        const sameScope = (candidatesByCourse.get(String(demand.courseId)) ?? []).filter(
+          (candidate) =>
+            this.scopeKey(candidate.facultyGroup) === this.scopeKey(demand.facultyGroup) &&
+            this.scopeKey(candidate.campusName) === this.scopeKey(demand.campusName)
+        );
+        const allCourseCandidates = candidatesByCourse.get(String(demand.courseId)) ?? [];
+        const candidates = sameScope.length > 0 ? sameScope : allCourseCandidates;
+        return {
+          ...demand,
+          candidates,
+        };
+      });
+
+      demandWithCandidates.sort((a, b) => {
+        if (a.candidates.length !== b.candidates.length) {
+          return a.candidates.length - b.candidates.length;
+        }
+        const sa = this.scopeKey(a.facultyGroup) + this.scopeKey(a.campusName);
+        const sb = this.scopeKey(b.facultyGroup) + this.scopeKey(b.campusName);
+        if (sa !== sb) return sa.localeCompare(sb);
+        const na = this.scopeKey(a.studentName);
+        const nb = this.scopeKey(b.studentName);
+        if (na !== nb) return na.localeCompare(nb);
+        return this.scopeKey(a.courseName).localeCompare(this.scopeKey(b.courseName));
+      });
+
+      const assignedBlocksByStudent = new Map<string, ScheduleBlockWindow[]>();
+      const rowsToInsert: Array<{
+        id: string;
+        sectionCourseId: string;
+        sectionId: string;
+        courseId: string;
+        studentId: string;
+      }> = [];
+      const unassigned: Array<{
+        studentId: string;
+        studentCode: string | null;
+        studentName: string;
+        courseId: string;
+        courseName: string;
+        facultyGroup: string | null;
+        campusName: string | null;
+        reason: string;
+      }> = [];
+
+      const getStudentBlocks = (studentId: string) => {
+        if (!assignedBlocksByStudent.has(studentId)) {
+          assignedBlocksByStudent.set(studentId, []);
+        }
+        return assignedBlocksByStudent.get(studentId)!;
+      };
+
+      for (const demand of demandWithCandidates) {
+        if (demand.candidates.length === 0) {
+          unassigned.push({
+            studentId: String(demand.studentId),
+            studentCode: demand.studentCode ? String(demand.studentCode) : null,
+            studentName: String(demand.studentName ?? ''),
+            courseId: String(demand.courseId),
+            courseName: String(demand.courseName ?? ''),
+            facultyGroup: demand.facultyGroup ? String(demand.facultyGroup) : null,
+            campusName: demand.campusName ? String(demand.campusName) : null,
+            reason: 'No section-course candidate found for this course',
+          });
+          continue;
+        }
+
+        const studentBlocks = getStudentBlocks(String(demand.studentId));
+        const available = demand.candidates.filter((candidate) => {
+          if (this.isCapacityBlocked(candidate)) return false;
+          return !this.hasScheduleOverlap(studentBlocks, candidate.blocks);
+        });
+
+        if (available.length === 0) {
+          const blockedByCapacity =
+            demand.candidates.every((candidate) => this.isCapacityBlocked(candidate)) &&
+            demand.candidates.length > 0;
+          unassigned.push({
+            studentId: String(demand.studentId),
+            studentCode: demand.studentCode ? String(demand.studentCode) : null,
+            studentName: String(demand.studentName ?? ''),
+            courseId: String(demand.courseId),
+            courseName: String(demand.courseName ?? ''),
+            facultyGroup: demand.facultyGroup ? String(demand.facultyGroup) : null,
+            campusName: demand.campusName ? String(demand.campusName) : null,
+            reason: blockedByCapacity
+              ? 'No available capacity in candidate section-courses'
+              : 'Schedule conflict with already assigned courses',
+          });
+          continue;
+        }
+
+        available.sort((a, b) => {
+          const ratioA = this.capacityRatio(a);
+          const ratioB = this.capacityRatio(b);
+          if (ratioA !== ratioB) return ratioA - ratioB;
+          const codeA = this.scopeKey(a.sectionCode ?? a.sectionName);
+          const codeB = this.scopeKey(b.sectionCode ?? b.sectionName);
+          if (codeA !== codeB) return codeA.localeCompare(codeB);
+          return this.scopeKey(a.courseName).localeCompare(this.scopeKey(b.courseName));
+        });
+        const selected = available[0];
+
+        rowsToInsert.push({
+          id: randomUUID(),
+          sectionCourseId: selected.sectionCourseId,
+          sectionId: selected.sectionId,
+          courseId: selected.courseId,
+          studentId: String(demand.studentId),
+        });
+        selected.assignedCount += 1;
+        studentBlocks.push(...selected.blocks);
+      }
+
+      await this.bulkInsertSectionStudentCoursesIgnore(manager, rowsToInsert);
+
+      const conflictsRows: Array<{ c: number }> = await manager.query(
+        `
+        SELECT COUNT(*) AS c
+        FROM (
+          SELECT 1
+          FROM section_student_courses ssc1
+          INNER JOIN section_student_courses ssc2
+            ON ssc2.studentId = ssc1.studentId
+           AND ssc2.sectionCourseId > ssc1.sectionCourseId
+          INNER JOIN section_courses sc1 ON sc1.id = ssc1.sectionCourseId
+          INNER JOIN section_courses sc2 ON sc2.id = ssc2.sectionCourseId
+          INNER JOIN sections s1 ON s1.id = sc1.sectionId
+          INNER JOIN sections s2 ON s2.id = sc2.sectionId
+          INNER JOIN schedule_blocks b1 ON b1.sectionCourseId = sc1.id
+          INNER JOIN schedule_blocks b2
+            ON b2.sectionCourseId = sc2.id
+           AND b1.dayOfWeek = b2.dayOfWeek
+           AND b1.startTime < b2.endTime
+           AND b1.endTime > b2.startTime
+           AND COALESCE(b1.startDate, '1000-01-01') <= COALESCE(b2.endDate, '9999-12-31')
+           AND COALESCE(b2.startDate, '1000-01-01') <= COALESCE(b1.endDate, '9999-12-31')
+          WHERE s1.levelingRunId = ?
+            AND s2.levelingRunId = ?
+            AND sc1.periodId = ?
+            AND sc2.periodId = ?
+          LIMIT 1
+        ) z
+        `,
+        [run.id, run.id, run.periodId, run.periodId]
+      );
+      const conflictsFoundAfterAssign = Number(conflictsRows[0]?.c ?? 0);
+      const nextStatus: LevelingRunStatus =
+        unassigned.length === 0 ? 'MATRICULATED' : 'READY';
+
+      await manager.query(
+        `
+        UPDATE leveling_runs
+        SET
+          status = ?,
+          updatedAt = NOW(6)
+        WHERE id = ?
+        `,
+        [nextStatus, run.id]
+      );
+
+      return {
+        runId: run.id,
+        status: nextStatus,
+        assignedCount: rowsToInsert.length,
+        unassigned,
+        summaryBySectionCourse: sectionCourseRows.map((row) => {
+          const candidate = (candidatesByCourse.get(String(row.courseId)) ?? []).find(
+            (x) => x.sectionCourseId === String(row.sectionCourseId)
+          );
+          return {
+            sectionCourseId: String(row.sectionCourseId),
+            sectionId: String(row.sectionId),
+            sectionCode: row.sectionCode ? String(row.sectionCode) : null,
+            sectionName: String(row.sectionName ?? ''),
+            courseId: String(row.courseId),
+            courseName: String(row.courseName ?? ''),
+            assignedCount: Number(candidate?.assignedCount ?? 0),
+            initialCapacity: Number(row.initialCapacity ?? 45),
+            maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
+          };
+        }),
+        conflictsFoundAfterAssign,
+      };
+    });
+  }
+
+  async listRunScheduleConflicts(params: {
+    runId: string;
+    facultyGroup?: string;
+    campusName?: string;
+  }) {
+    const run = await this.getRunOrThrow(params.runId);
+    const facultyGroup = String(params.facultyGroup ?? '').trim();
+    const campusName = String(params.campusName ?? '').trim();
+
+    const rows: Array<{
+      studentId: string;
+      studentCode: string | null;
+      studentName: string;
+      dayOfWeek: number;
+      blockIdA: string;
+      sectionCourseIdA: string;
+      sectionIdA: string;
+      sectionCodeA: string | null;
+      sectionNameA: string;
+      courseIdA: string;
+      courseNameA: string;
+      startTimeA: string;
+      endTimeA: string;
+      startDateA: string | null;
+      endDateA: string | null;
+      blockIdB: string;
+      sectionCourseIdB: string;
+      sectionIdB: string;
+      sectionCodeB: string | null;
+      sectionNameB: string;
+      courseIdB: string;
+      courseNameB: string;
+      startTimeB: string;
+      endTimeB: string;
+      startDateB: string | null;
+      endDateB: string | null;
+    }> = await this.dataSource.query(
+      `
+      SELECT
+        u.id AS studentId,
+        u.codigoAlumno AS studentCode,
+        u.fullName AS studentName,
+        b1.dayOfWeek AS dayOfWeek,
+        b1.id AS blockIdA,
+        sc1.id AS sectionCourseIdA,
+        s1.id AS sectionIdA,
+        s1.code AS sectionCodeA,
+        s1.name AS sectionNameA,
+        c1.id AS courseIdA,
+        c1.name AS courseNameA,
+        b1.startTime AS startTimeA,
+        b1.endTime AS endTimeA,
+        b1.startDate AS startDateA,
+        b1.endDate AS endDateA,
+        b2.id AS blockIdB,
+        sc2.id AS sectionCourseIdB,
+        s2.id AS sectionIdB,
+        s2.code AS sectionCodeB,
+        s2.name AS sectionNameB,
+        c2.id AS courseIdB,
+        c2.name AS courseNameB,
+        b2.startTime AS startTimeB,
+        b2.endTime AS endTimeB,
+        b2.startDate AS startDateB,
+        b2.endDate AS endDateB
+      FROM section_student_courses ssc1
+      INNER JOIN section_student_courses ssc2
+        ON ssc2.studentId = ssc1.studentId
+       AND ssc2.sectionCourseId > ssc1.sectionCourseId
+      INNER JOIN section_courses sc1
+        ON sc1.id = ssc1.sectionCourseId
+       AND sc1.periodId = ?
+      INNER JOIN section_courses sc2
+        ON sc2.id = ssc2.sectionCourseId
+       AND sc2.periodId = ?
+      INNER JOIN sections s1 ON s1.id = sc1.sectionId
+      INNER JOIN sections s2 ON s2.id = sc2.sectionId
+      INNER JOIN schedule_blocks b1 ON b1.sectionCourseId = sc1.id
+      INNER JOIN schedule_blocks b2
+        ON b2.sectionCourseId = sc2.id
+       AND b1.dayOfWeek = b2.dayOfWeek
+       AND b1.startTime < b2.endTime
+       AND b1.endTime > b2.startTime
+       AND COALESCE(b1.startDate, '1000-01-01') <= COALESCE(b2.endDate, '9999-12-31')
+       AND COALESCE(b2.startDate, '1000-01-01') <= COALESCE(b1.endDate, '9999-12-31')
+      INNER JOIN courses c1 ON c1.id = sc1.courseId
+      INNER JOIN courses c2 ON c2.id = sc2.courseId
+      INNER JOIN users u ON u.id = ssc1.studentId
+      WHERE s1.levelingRunId = ?
+        AND s2.levelingRunId = ?
+        AND (? = '' OR s1.facultyGroup = ? OR s2.facultyGroup = ?)
+        AND (? = '' OR s1.campusName = ? OR s2.campusName = ?)
+      ORDER BY
+        u.fullName ASC,
+        u.codigoAlumno ASC,
+        b1.dayOfWeek ASC,
+        b1.startTime ASC
+      `,
+      [
+        run.periodId,
+        run.periodId,
+        run.id,
+        run.id,
+        facultyGroup,
+        facultyGroup,
+        facultyGroup,
+        campusName,
+        campusName,
+        campusName,
+      ]
+    );
+
+    return rows.map((row) => ({
+      studentId: String(row.studentId),
+      studentCode: row.studentCode ? String(row.studentCode) : null,
+      studentName: String(row.studentName ?? ''),
+      dayOfWeek: Number(row.dayOfWeek ?? 0),
+      blockA: {
+        blockId: String(row.blockIdA),
+        sectionCourseId: String(row.sectionCourseIdA),
+        sectionId: String(row.sectionIdA),
+        sectionCode: row.sectionCodeA ? String(row.sectionCodeA) : null,
+        sectionName: String(row.sectionNameA ?? ''),
+        courseId: String(row.courseIdA),
+        courseName: String(row.courseNameA ?? ''),
+        startTime: String(row.startTimeA ?? ''),
+        endTime: String(row.endTimeA ?? ''),
+        startDate: this.toIsoDateOnly(row.startDateA),
+        endDate: this.toIsoDateOnly(row.endDateA),
+      },
+      blockB: {
+        blockId: String(row.blockIdB),
+        sectionCourseId: String(row.sectionCourseIdB),
+        sectionId: String(row.sectionIdB),
+        sectionCode: row.sectionCodeB ? String(row.sectionCodeB) : null,
+        sectionName: String(row.sectionNameB ?? ''),
+        courseId: String(row.courseIdB),
+        courseName: String(row.courseNameB ?? ''),
+        startTime: String(row.startTimeB ?? ''),
+        endTime: String(row.endTimeB ?? ''),
+        startDate: this.toIsoDateOnly(row.startDateB),
+        endDate: this.toIsoDateOnly(row.endDateB),
+      },
+    }));
   }
 
   private parseExcel(
@@ -1337,16 +2227,83 @@ export class LevelingService {
   }
 
 
-  private async applyPlan(params: { sections: PlannedSection[] }): Promise<ApplyPlanResult> {
+  private async applyPlan(params: {
+    sections: PlannedSection[];
+    students?: ParsedStudent[];
+    configUsed?: { initialCapacity: number; maxExtraCapacity: number };
+    sourceFileHash?: string;
+    createdById?: string | null;
+  }): Promise<ApplyStructureResult> {
     return this.dataSource.transaction(async (manager) => {
       const usersRepo = manager.getRepository(UserEntity);
       const sectionsRepo = manager.getRepository(SectionEntity);
       const courseIdByName = await this.loadCourseIdByCanonicalName(manager);
       const activePeriodId = await this.loadActivePeriodIdOrThrow(manager);
+      const runId = randomUUID();
+      const createdById = String(params.createdById ?? '').trim() || null;
+      const configUsed = params.configUsed ?? {
+        initialCapacity: 45,
+        maxExtraCapacity: 0,
+      };
+      const sourceFileHash = String(params.sourceFileHash ?? '').trim() || null;
+      const sourceStudents =
+        params.students && params.students.length > 0
+          ? params.students
+          : params.sections.flatMap((section) => section.students);
+
+      if (createdById) {
+        const rows: Array<{ id: string }> = await manager.query(
+          `
+          SELECT id
+          FROM users
+          WHERE id = ?
+          LIMIT 1
+          `,
+          [createdById]
+        );
+        if (!rows[0]?.id) {
+          throw new BadRequestException('createdBy user does not exist');
+        }
+      }
+
+      await manager.query(
+        `
+        UPDATE leveling_runs
+        SET
+          status = 'ARCHIVED',
+          updatedAt = NOW(6)
+        WHERE periodId = ?
+          AND status <> 'ARCHIVED'
+        `,
+        [activePeriodId]
+      );
+
+      await manager.query(
+        `
+        INSERT INTO leveling_runs (
+          id,
+          periodId,
+          status,
+          configJson,
+          sourceFileHash,
+          createdBy,
+          createdAt,
+          updatedAt
+        )
+        VALUES (?, ?, 'STRUCTURED', ?, ?, ?, NOW(6), NOW(6))
+        `,
+        [
+          runId,
+          activePeriodId,
+          JSON.stringify(configUsed),
+          sourceFileHash,
+          createdById,
+        ]
+      );
 
       const uniqueByDni = new Map<string, ParsedStudent>();
-      for (const section of params.sections) {
-        for (const s of section.students) uniqueByDni.set(s.dni, s);
+      for (const student of sourceStudents) {
+        uniqueByDni.set(student.dni, student);
       }
 
       const dnis = Array.from(uniqueByDni.keys());
@@ -1447,6 +2404,7 @@ export class LevelingService {
             initialCapacity: s.initialCapacity,
             maxExtraCapacity: s.maxExtraCapacity,
             isAutoLeveling: true,
+            levelingRunId: runId,
           });
           const saved = await sectionsRepo.save(created);
           sectionByCode.set(s.code, saved);
@@ -1462,6 +2420,7 @@ export class LevelingService {
         existing.initialCapacity = s.initialCapacity;
         existing.maxExtraCapacity = s.maxExtraCapacity;
         existing.isAutoLeveling = true;
+        existing.levelingRunId = runId;
         const saved = await sectionsRepo.save(existing);
         sectionByCode.set(s.code, saved);
         sectionsUpdated++;
@@ -1520,60 +2479,50 @@ export class LevelingService {
       for (const row of sectionCourseRows) {
         sectionCourseIdByKey.set(`${row.sectionId}:${row.courseId}`, row.id);
       }
+      const sectionCourseIds = Array.from(sectionCourseIdByKey.values());
+      await this.deleteSectionStudentCoursesBySectionCourseIds(manager, sectionCourseIds);
 
-      const sectionStudentCourseCandidates = new Map<
+      const demandCandidates = new Map<
         string,
         {
           id: string;
-          sectionCourseId: string;
-          sectionId: string;
-          courseId: string;
+          runId: string;
           studentId: string;
+          courseId: string;
+          facultyGroup: string | null;
+          campusName: string | null;
+          required: number;
         }
       >();
-      for (const sec of params.sections) {
-        const section = sectionByCode.get(sec.code);
-        if (!section) continue;
-        for (const [dni, courses] of sec.studentCoursesByDni.entries()) {
-          const user = studentByDni.get(dni);
-          if (!user) continue;
-          for (const courseName of courses) {
-            const courseId = courseIdByName.get(this.courseKey(courseName));
-            if (!courseId) continue;
-            const sectionCourseId = sectionCourseIdByKey.get(`${section.id}:${courseId}`);
-            if (!sectionCourseId) {
-              throw new BadRequestException(
-                `Section-course relation was not created for section ${section.code} and course ${courseName}`
-              );
-            }
-            const key = `${sectionCourseId}:${user.id}`;
-            if (!sectionStudentCourseCandidates.has(key)) {
-              sectionStudentCourseCandidates.set(key, {
-                id: randomUUID(),
-                sectionCourseId,
-                sectionId: section.id,
-                courseId,
-                studentId: user.id,
-              });
-            }
-          }
+      for (const student of sourceStudents) {
+        const savedStudent = studentByDni.get(student.dni);
+        if (!savedStudent) continue;
+        for (const courseName of student.neededCourses) {
+          const courseId = courseIdByName.get(this.courseKey(courseName));
+          if (!courseId) continue;
+          const key = `${runId}:${savedStudent.id}:${courseId}`;
+          if (demandCandidates.has(key)) continue;
+          demandCandidates.set(key, {
+            id: randomUUID(),
+            runId,
+            studentId: savedStudent.id,
+            courseId,
+            facultyGroup: student.facultyGroup,
+            campusName: student.campusName,
+            required: 1,
+          });
         }
       }
 
-      const sectionCourseIds = Array.from(sectionCourseIdByKey.values());
-      const existingSectionStudentCourseKeys =
-        await this.loadExistingSectionStudentCourseKeys(manager, sectionCourseIds);
-      const sectionStudentCourseRowsToInsert = Array.from(
-        sectionStudentCourseCandidates.entries()
-      )
-        .filter(([key]) => !existingSectionStudentCourseKeys.has(key))
+      const existingDemandKeys = await this.loadExistingRunDemandKeys(manager, runId);
+      const demandRowsToInsert = Array.from(demandCandidates.entries())
+        .filter(([key]) => !existingDemandKeys.has(key))
         .map(([, row]) => row);
-      await this.bulkInsertSectionStudentCoursesIgnore(
-        manager,
-        sectionStudentCourseRowsToInsert
-      );
+      await this.bulkInsertLevelingRunDemandsIgnore(manager, demandRowsToInsert);
 
       return {
+        runId,
+        runStatus: 'STRUCTURED',
         sectionsCreated,
         sectionsUpdated,
         studentsCreated,
@@ -1581,12 +2530,8 @@ export class LevelingService {
         sectionCoursesCreated: sectionCourseRowsToInsert.length,
         sectionCoursesOmitted:
           sectionCourseCandidates.size - sectionCourseRowsToInsert.length,
-        sectionStudentCoursesCreated: sectionStudentCourseRowsToInsert.length,
-        sectionStudentCoursesOmitted:
-          sectionStudentCourseCandidates.size - sectionStudentCourseRowsToInsert.length,
-        // Legacy counters kept for API compatibility.
-        enrollmentsCreated: 0,
-        enrollmentsOmitted: 0,
+        demandsCreated: demandRowsToInsert.length,
+        demandsOmitted: demandCandidates.size - demandRowsToInsert.length,
       };
     });
   }
@@ -1651,24 +2596,6 @@ export class LevelingService {
       sectionId: String(row.sectionId),
       courseId: String(row.courseId),
     }));
-  }
-
-  private async loadExistingSectionStudentCourseKeys(
-    manager: EntityManager,
-    sectionCourseIds: string[]
-  ) {
-    if (sectionCourseIds.length === 0) return new Set<string>();
-    const placeholders = sectionCourseIds.map(() => '?').join(', ');
-    const rows: Array<{ sectionCourseId: string; studentId: string }> =
-      await manager.query(
-        `
-      SELECT sectionCourseId, studentId
-      FROM section_student_courses
-      WHERE sectionCourseId IN (${placeholders})
-      `,
-        sectionCourseIds
-      );
-    return new Set(rows.map((x) => `${x.sectionCourseId}:${String(x.studentId)}`));
   }
 
   private async bulkInsertSectionCoursesIgnore(
@@ -1743,6 +2670,310 @@ export class LevelingService {
         params
       );
     }
+  }
+
+  private async deleteSectionStudentCoursesBySectionCourseIds(
+    manager: EntityManager,
+    sectionCourseIds: string[]
+  ) {
+    const ids = Array.from(
+      new Set(sectionCourseIds.map((id) => String(id || '').trim()).filter(Boolean))
+    );
+    if (ids.length === 0) return;
+    const placeholders = ids.map(() => '?').join(', ');
+    await manager.query(
+      `
+      DELETE FROM section_student_courses
+      WHERE sectionCourseId IN (${placeholders})
+      `,
+      ids
+    );
+  }
+
+  private async loadExistingRunDemandKeys(manager: EntityManager, runId: string) {
+    const rows: Array<{ runId: string; studentId: string; courseId: string }> =
+      await manager.query(
+        `
+        SELECT runId, studentId, courseId
+        FROM leveling_run_student_course_demands
+        WHERE runId = ?
+        `,
+        [runId]
+      );
+    return new Set(rows.map((x) => `${x.runId}:${x.studentId}:${x.courseId}`));
+  }
+
+  private async bulkInsertLevelingRunDemandsIgnore(
+    manager: EntityManager,
+    rows: Array<{
+      id: string;
+      runId: string;
+      studentId: string;
+      courseId: string;
+      facultyGroup: string | null;
+      campusName: string | null;
+      required: number;
+    }>
+  ) {
+    if (rows.length === 0) return;
+    const batchSize = 1000;
+    for (let i = 0; i < rows.length; i += batchSize) {
+      const batch = rows.slice(i, i + batchSize);
+      const placeholders = batch
+        .map(() => '(?, ?, ?, ?, ?, ?, ?, NOW(6), NOW(6))')
+        .join(', ');
+      const params: Array<string | number | null> = [];
+      for (const row of batch) {
+        params.push(
+          row.id,
+          row.runId,
+          row.studentId,
+          row.courseId,
+          row.facultyGroup,
+          row.campusName,
+          row.required
+        );
+      }
+      await manager.query(
+        `
+        INSERT IGNORE INTO leveling_run_student_course_demands (
+          id,
+          runId,
+          studentId,
+          courseId,
+          facultyGroup,
+          campusName,
+          required,
+          createdAt,
+          updatedAt
+        )
+        VALUES ${placeholders}
+        `,
+        params
+      );
+    }
+  }
+
+  private async getRunOrThrow(runId: string, manager?: EntityManager) {
+    const db = manager ?? this.dataSource;
+    const rows: Array<{
+      id: string;
+      periodId: string;
+      status: string;
+      configJson: unknown;
+      sourceFileHash: string | null;
+      createdBy: string | null;
+      createdAt: Date | string;
+      updatedAt: Date | string;
+    }> = await db.query(
+      `
+      SELECT
+        id,
+        periodId,
+        status,
+        configJson,
+        sourceFileHash,
+        createdBy,
+        createdAt,
+        updatedAt
+      FROM leveling_runs
+      WHERE id = ?
+      LIMIT 1
+      `,
+      [runId]
+    );
+    const row = rows[0];
+    if (!row?.id) {
+      throw new NotFoundException('Leveling run not found');
+    }
+    const configUsed = this.parseRunConfig(row.configJson);
+    return {
+      id: String(row.id),
+      periodId: String(row.periodId),
+      status: String(row.status || 'STRUCTURED') as LevelingRunStatus,
+      configUsed,
+      sourceFileHash: row.sourceFileHash ? String(row.sourceFileHash) : null,
+      createdBy: row.createdBy ? String(row.createdBy) : null,
+      createdAt: this.toIsoDateTime(row.createdAt),
+      updatedAt: this.toIsoDateTime(row.updatedAt),
+    };
+  }
+
+  private parseRunConfig(value: unknown) {
+    const raw =
+      typeof value === 'string'
+        ? this.safeJsonParse(value)
+        : (value as Record<string, unknown> | null);
+    const initialCapacity = Number(raw?.initialCapacity ?? 45);
+    const maxExtraCapacity = Number(raw?.maxExtraCapacity ?? 0);
+    return {
+      initialCapacity: Number.isFinite(initialCapacity) && initialCapacity > 0 ? initialCapacity : 45,
+      maxExtraCapacity:
+        Number.isFinite(maxExtraCapacity) && maxExtraCapacity >= 0 ? maxExtraCapacity : 0,
+    };
+  }
+
+  private safeJsonParse(value: string) {
+    try {
+      const out = JSON.parse(value);
+      if (out && typeof out === 'object') {
+        return out as Record<string, unknown>;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async resolveCourseByNameOrThrow(courseName: string, manager: EntityManager) {
+    const rows: Array<{ id: string; name: string }> = await manager.query(
+      `
+      SELECT id, name
+      FROM courses
+      `
+    );
+    const targetKey = this.courseKey(courseName);
+    for (const row of rows) {
+      const candidateName = String(row.name ?? '').trim();
+      if (!candidateName) continue;
+      if (this.courseKey(candidateName) === targetKey) {
+        return {
+          id: String(row.id),
+          name: candidateName,
+        };
+      }
+    }
+    throw new BadRequestException(`Course not found: ${courseName}`);
+  }
+
+  private async generateManualSectionCode(params: {
+    manager: EntityManager;
+    facultyGroup: string;
+    campusName: string;
+  }) {
+    const facultyChar = this.facultyChar(params.facultyGroup);
+    const campus = this.normalizeCampus(params.campusName);
+    const base = `M${facultyChar}-${campus.campusCode}`;
+    for (let i = 1; i <= 999; i++) {
+      const candidate = `${base}-${String(i).padStart(3, '0')}`;
+      const rows: Array<{ c: number }> = await params.manager.query(
+        `
+        SELECT COUNT(*) AS c
+        FROM sections
+        WHERE code = ?
+        `,
+        [candidate]
+      );
+      if (Number(rows[0]?.c ?? 0) === 0) {
+        return candidate;
+      }
+    }
+    return `${base}-${randomUUID().slice(0, 8).toUpperCase()}`;
+  }
+
+  private defaultFacultyName(facultyGroup: string) {
+    return this.norm(facultyGroup) === 'SALUD' ? SALUD_NAME : FICA_NAME;
+  }
+
+  private scopeKey(value: string | null | undefined) {
+    return String(value ?? '')
+      .trim()
+      .toUpperCase();
+  }
+
+  private isCapacityBlocked(params: {
+    assignedCount: number;
+    initialCapacity: number;
+    maxExtraCapacity: number;
+  }) {
+    const assigned = Math.max(0, Number(params.assignedCount ?? 0));
+    const initial = Math.max(0, Number(params.initialCapacity ?? 0));
+    const maxExtra = Math.max(0, Number(params.maxExtraCapacity ?? 0));
+    if (maxExtra <= 0) return false;
+    return assigned + 1 > initial + maxExtra;
+  }
+
+  private capacityRatio(params: {
+    assignedCount: number;
+    initialCapacity: number;
+    maxExtraCapacity: number;
+  }) {
+    const assigned = Math.max(0, Number(params.assignedCount ?? 0));
+    const initial = Math.max(1, Number(params.initialCapacity ?? 1));
+    const maxExtra = Math.max(0, Number(params.maxExtraCapacity ?? 0));
+    if (maxExtra <= 0) {
+      return assigned / Math.max(initial, 1);
+    }
+    return assigned / Math.max(initial + maxExtra, 1);
+  }
+
+  private hasScheduleOverlap(existing: ScheduleBlockWindow[], next: ScheduleBlockWindow[]) {
+    if (existing.length === 0 || next.length === 0) return false;
+    for (const a of existing) {
+      for (const b of next) {
+        if (this.blocksOverlap(a, b)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private blocksOverlap(a: ScheduleBlockWindow, b: ScheduleBlockWindow) {
+    if (a.dayOfWeek !== b.dayOfWeek) return false;
+    if (!(a.startTime < b.endTime && a.endTime > b.startTime)) return false;
+    return this.dateRangesOverlap(
+      a.startDate,
+      a.endDate,
+      b.startDate,
+      b.endDate
+    );
+  }
+
+  private dateRangesOverlap(
+    startA: string | null,
+    endA: string | null,
+    startB: string | null,
+    endB: string | null
+  ) {
+    const aStart = startA || '1000-01-01';
+    const aEnd = endA || '9999-12-31';
+    const bStart = startB || '1000-01-01';
+    const bEnd = endB || '9999-12-31';
+    return aStart <= bEnd && bStart <= aEnd;
+  }
+
+  private hashBuffer(buffer: Buffer) {
+    return createHash('sha256').update(buffer).digest('hex');
+  }
+
+  private toIsoDateOnly(value: unknown): string | null {
+    if (!value) return null;
+    if (typeof value === 'string') {
+      const text = value.trim();
+      if (!text) return null;
+      const directDate = text.match(/^(\d{4}-\d{2}-\d{2})/);
+      if (directDate) return directDate[1];
+      const parsed = new Date(text);
+      if (Number.isNaN(parsed.getTime())) return null;
+      return parsed.toISOString().slice(0, 10);
+    }
+    if (value instanceof Date) {
+      if (Number.isNaN(value.getTime())) return null;
+      return value.toISOString().slice(0, 10);
+    }
+    return null;
+  }
+
+  private toIsoDateTime(value: unknown): string {
+    if (value instanceof Date) {
+      return value.toISOString();
+    }
+    const parsed = new Date(String(value ?? ''));
+    if (Number.isNaN(parsed.getTime())) {
+      return new Date().toISOString();
+    }
+    return parsed.toISOString();
   }
 
   private async loadActivePeriodIdOrThrow(manager: EntityManager) {

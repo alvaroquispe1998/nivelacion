@@ -96,8 +96,8 @@ export class TeacherController {
       dayOfWeek: Number(row.dayOfWeek),
       startTime: String(row.startTime ?? ''),
       endTime: String(row.endTime ?? ''),
-      startDate: row.startDate ? String(row.startDate) : null,
-      endDate: row.endDate ? String(row.endDate) : null,
+      startDate: this.toIsoDateOnly(row.startDate),
+      endDate: this.toIsoDateOnly(row.endDate),
       zoomUrl: row.zoomUrl ? String(row.zoomUrl) : null,
       location: row.location ? String(row.location) : null,
       sectionName: String(row.sectionName ?? ''),
@@ -184,8 +184,8 @@ export class TeacherController {
       dayOfWeek: Number(row.dayOfWeek),
       startTime: String(row.startTime ?? ''),
       endTime: String(row.endTime ?? ''),
-      startDate: row.startDate ? String(row.startDate) : null,
-      endDate: row.endDate ? String(row.endDate) : null,
+      startDate: this.toIsoDateOnly(row.startDate),
+      endDate: this.toIsoDateOnly(row.endDate),
       zoomUrl: row.zoomUrl ? String(row.zoomUrl) : null,
       location: row.location ? String(row.location) : null,
     }));
@@ -260,5 +260,24 @@ export class TeacherController {
     throw new BadRequestException(
       `Teacher ${teacherId} is not assigned to section-course ${sectionCourseId}`
     );
+  }
+
+  private toIsoDateOnly(value: unknown): string | null {
+    if (!value) return null;
+    if (typeof value === 'string') {
+      const text = value.trim();
+      if (!text) return null;
+      const directDate = text.match(/^(\d{4}-\d{2}-\d{2})/);
+      if (directDate) return directDate[1];
+
+      const parsed = new Date(text);
+      if (Number.isNaN(parsed.getTime())) return null;
+      return parsed.toISOString().slice(0, 10);
+    }
+    if (value instanceof Date) {
+      if (Number.isNaN(value.getTime())) return null;
+      return value.toISOString().slice(0, 10);
+    }
+    return null;
   }
 }

@@ -34,6 +34,9 @@ describe('StudentService', () => {
       if (normalized.includes('FROM SECTION_STUDENT_COURSES')) {
         return [{ sectionCourseId: 'sc-1' }];
       }
+      if (normalized.includes('FROM SECTION_COURSES SC')) {
+        return [{ sectionCourseId: 'sc-1', teacherName: 'DOCENTE UNO' }];
+      }
       throw new Error(`Unexpected SQL in test: ${normalized}`);
     });
 
@@ -84,5 +87,6 @@ describe('StudentService', () => {
     expect(out).toHaveLength(1);
     expect(out[0].courseName).toBe('COMUNICACION');
     expect(out[0].sectionName).toBe('SEC-1');
+    expect(out[0].teacherName).toBe('DOCENTE UNO');
   });
 });

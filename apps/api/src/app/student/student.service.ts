@@ -16,6 +16,8 @@ export class StudentService {
   async getSchedule(studentId: string) {
     const sectionCourseIds = await this.loadSectionCourseMembershipIdsByStudent(studentId);
     if (sectionCourseIds.length === 0) return [];
+    const teacherBySectionCourseId =
+      await this.loadTeacherNamesBySectionCourseIds(sectionCourseIds);
 
     const blocks = await this.blocksRepo.find({
       where: sectionCourseIds.map((sectionCourseId) => ({ sectionCourseId })),
@@ -26,10 +28,12 @@ export class StudentService {
     return blocks
       .map((b) => ({
         dayOfWeek: b.dayOfWeek,
-        startTime: b.startTime,
-        endTime: b.endTime,
-        courseName: b.courseName,
-        sectionName: b.section.name,
+        startTime: this.toHHmm(b.startTime),
+        endTime: this.toHHmm(b.endTime),
+        courseName: String(b.courseName ?? ''),
+        sectionName: String(b.section?.name ?? ''),
+        teacherName:
+          teacherBySectionCourseId.get(String(b.sectionCourseId ?? '').trim()) ?? null,
         zoomUrl: b.zoomUrl,
         location: b.location,
       }));
@@ -97,5 +101,47 @@ export class StudentService {
       throw new BadRequestException('No active period configured');
     }
     return id;
+  }
+
+  private async loadTeacherNamesBySectionCourseIds(sectionCourseIds: string[]) {
+    const ids = sectionCourseIds.map((x) => String(x ?? '').trim()).filter(Boolean);
+    if (ids.length === 0) return new Map<string, string>();
+
+    const placeholders = ids.map(() => '?').join(', ');
+    const rows: Array<{ sectionCourseId: string; teacherName: string | null }> =
+      await this.blocksRepo.manager.query(
+        `
+      SELECT
+        sc.id AS sectionCourseId,
+        MAX(COALESCE(tc.fullName, ts.fullName)) AS teacherName
+      FROM section_courses sc
+      LEFT JOIN section_course_teachers sct ON sct.sectionCourseId = sc.id
+      LEFT JOIN users tc ON tc.id = sct.teacherId
+      LEFT JOIN sections s ON s.id = sc.sectionId
+      LEFT JOIN users ts ON ts.id = s.teacherId
+      WHERE sc.id IN (${placeholders})
+      GROUP BY sc.id
+      `,
+        [...ids]
+      );
+
+    const out = new Map<string, string>();
+    for (const row of rows) {
+      const sectionCourseId = String(row.sectionCourseId ?? '').trim();
+      const teacherName = String(row.teacherName ?? '').trim();
+      if (!sectionCourseId || !teacherName) continue;
+      out.set(sectionCourseId, teacherName);
+    }
+    return out;
+  }
+
+  private toHHmm(value: string) {
+    const text = String(value ?? '').trim();
+    const match = text.match(/(\d{1,2}):(\d{2})/);
+    if (!match) return text;
+    const hh = Number(match[1]);
+    const mm = Number(match[2]);
+    if (!Number.isFinite(hh) || !Number.isFinite(mm)) return text;
+    return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
   }
 }

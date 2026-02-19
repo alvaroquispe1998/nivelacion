@@ -2,7 +2,15 @@ import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { ChangeDetectorRef, Component, inject } from '@angular/core';
 import { FormBuilder, FormsModule, ReactiveFormsModule, Validators } from '@angular/forms';
-import type { LevelingConfig, LevelingPlanResponse } from '@uai/shared';
+import type {
+  LevelingConfig,
+  LevelingManualSectionCourseResult,
+  LevelingMatriculationResult,
+  LevelingPlanResponse,
+  LevelingRunConflictItem,
+  LevelingRunDetailsResponse,
+  LevelingRunSectionView,
+} from '@uai/shared';
 import { firstValueFrom } from 'rxjs';
 
 interface CourseColumn {
@@ -34,7 +42,8 @@ const PREFERRED_COURSE_ORDER = [
       <div>
         <div class="text-xl font-semibold">Nivelacion por Excel</div>
         <div class="text-sm text-slate-600">
-          Paso 1: define grupos (presencial/virtual). Paso 2: regenera secciones. Paso 3: aplica.
+          Paso 1: define grupos (presencial/virtual). Paso 2: regenera secciones.
+          Paso 3: aplica estructura. Paso 4: configura horarios y ejecuta matricula.
         </div>
       </div>
       <button
@@ -125,7 +134,7 @@ const PREFERRED_COURSE_ORDER = [
               (click)="runPlan(true, true)"
               type="button"
             >
-              {{ running ? 'Aplicando...' : 'Aplicar' }}
+              {{ running ? 'Aplicando...' : 'Aplicar estructura' }}
             </button>
           </div>
         </div>
@@ -157,25 +166,18 @@ const PREFERRED_COURSE_ORDER = [
             *ngIf="result.applied"
             class="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800"
           >
-            <div class="font-semibold">Distribucion aplicada</div>
+            <div class="font-semibold">Estructura aplicada</div>
             <div class="mt-1">
+              Run: {{ result.applied.runId }} |
+              Estado: {{ result.applied.runStatus }} |
               Secciones creadas: {{ result.applied.sectionsCreated }} |
               actualizadas: {{ result.applied.sectionsUpdated }} |
-              matriculas creadas: {{ result.applied.enrollmentsCreated }}
+              demandas creadas: {{ result.applied.demandsCreated }}
             </div>
-            <div
-              class="mt-1"
-              *ngIf="
-                result.applied.sectionCoursesCreated !== undefined ||
-                result.applied.sectionStudentCoursesCreated !== undefined ||
-                result.applied.enrollmentsOmitted !== undefined
-              "
-            >
-              seccion-curso creadas: {{ result.applied.sectionCoursesCreated ?? 0 }} |
-              omitidas: {{ result.applied.sectionCoursesOmitted ?? 0 }} |
-              alumno-curso creadas: {{ result.applied.sectionStudentCoursesCreated ?? 0 }} |
-              omitidas: {{ result.applied.sectionStudentCoursesOmitted ?? 0 }} |
-              matriculas omitidas: {{ result.applied.enrollmentsOmitted ?? 0 }}
+            <div class="mt-1">
+              seccion-curso creadas: {{ result.applied.sectionCoursesCreated }} |
+              omitidas: {{ result.applied.sectionCoursesOmitted }} |
+              demandas omitidas: {{ result.applied.demandsOmitted }}
             </div>
           </div>
         </div>
@@ -493,6 +495,287 @@ const PREFERRED_COURSE_ORDER = [
       </details>
     </div>
 
+    <div *ngIf="runId" class="mt-5 rounded-2xl border border-slate-200 bg-white p-4">
+      <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div class="text-lg font-semibold">Matricula (Schedule-Aware)</div>
+          <div class="text-xs text-slate-600">
+            Run: <span class="font-mono">{{ runId }}</span>
+            <span *ngIf="runDetails"> | Estado: <b>{{ runDetails.status }}</b></span>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <button
+            type="button"
+            class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold hover:bg-slate-50 disabled:opacity-60"
+            [disabled]="loadingRunSections || !runId"
+            (click)="runId && loadRunContext(runId)"
+          >
+            {{ loadingRunSections ? 'Actualizando...' : 'Refrescar matricula' }}
+          </button>
+          <button
+            type="button"
+            class="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+            [disabled]="!canMatriculateRun"
+            (click)="matriculateRun()"
+          >
+            {{ runningMatriculation ? 'Matriculando...' : 'Matricular' }}
+          </button>
+        </div>
+      </div>
+
+      <div *ngIf="runDetails" class="mt-3 grid gap-2 sm:grid-cols-4">
+        <div class="rounded-xl bg-slate-50 p-3 text-xs">
+          <div class="text-slate-600">Secciones</div>
+          <div class="font-semibold">{{ runDetails.metrics.sections }}</div>
+        </div>
+        <div class="rounded-xl bg-slate-50 p-3 text-xs">
+          <div class="text-slate-600">Seccion-curso</div>
+          <div class="font-semibold">{{ runDetails.metrics.sectionCourses }}</div>
+        </div>
+        <div class="rounded-xl bg-slate-50 p-3 text-xs">
+          <div class="text-slate-600">Demandas</div>
+          <div class="font-semibold">{{ runDetails.metrics.demands }}</div>
+        </div>
+        <div class="rounded-xl bg-slate-50 p-3 text-xs">
+          <div class="text-slate-600">Matriculados</div>
+          <div class="font-semibold">{{ runDetails.metrics.assigned }}</div>
+        </div>
+      </div>
+
+      <div *ngIf="!canMatriculateRun && runSectionCourseCount > 0" class="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+        Debes completar horario en todas las secciones-curso para habilitar matricula.
+      </div>
+
+      <div class="mt-4 grid gap-2 sm:grid-cols-2">
+        <label class="text-xs text-slate-700">
+          Facultad
+          <select
+            class="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+            [(ngModel)]="runFacultyFilter"
+            [ngModelOptions]="{ standalone: true }"
+          >
+            <option value="ALL">Todas</option>
+            <option *ngFor="let value of runFacultyOptions" [value]="value">{{ value }}</option>
+          </select>
+        </label>
+        <label class="text-xs text-slate-700">
+          Sede
+          <select
+            class="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+            [(ngModel)]="runCampusFilter"
+            [ngModelOptions]="{ standalone: true }"
+          >
+            <option value="ALL">Todas</option>
+            <option *ngFor="let value of runCampusOptions" [value]="value">{{ value }}</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="mt-3 overflow-x-auto">
+        <table class="min-w-full text-xs">
+          <thead class="bg-slate-50 text-left uppercase tracking-wide text-slate-600">
+            <tr>
+              <th class="px-3 py-2">Seccion</th>
+              <th class="px-3 py-2">Contexto</th>
+              <th class="px-3 py-2">Aforo</th>
+              <th class="px-3 py-2">Cursos / Horarios</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let section of filteredRunSections; trackBy: trackRunSection" class="border-t border-slate-100 align-top">
+              <td class="px-3 py-2">
+                <div class="font-semibold">{{ section.code || section.name }}</div>
+                <div class="text-[11px] text-slate-500">
+                  {{ section.isAutoLeveling ? 'AUTO' : 'MANUAL' }}
+                </div>
+              </td>
+              <td class="px-3 py-2">
+                <div>{{ section.facultyGroup || '-' }}</div>
+                <div>{{ section.campusName || '-' }}</div>
+                <div>{{ section.modality || '-' }}</div>
+              </td>
+              <td class="px-3 py-2">
+                <div class="grid grid-cols-2 gap-1">
+                  <input
+                    type="number"
+                    min="1"
+                    class="w-full rounded border border-slate-300 px-2 py-1"
+                    [(ngModel)]="section.initialCapacity"
+                    [ngModelOptions]="{ standalone: true }"
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    class="w-full rounded border border-slate-300 px-2 py-1"
+                    [(ngModel)]="section.maxExtraCapacity"
+                    [ngModelOptions]="{ standalone: true }"
+                  />
+                </div>
+                <button
+                  type="button"
+                  class="mt-1 rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold hover:bg-slate-50 disabled:opacity-60"
+                  [disabled]="savingCapacityBySectionId.has(section.sectionId)"
+                  (click)="saveRunSectionCapacity(section)"
+                >
+                  Guardar aforo
+                </button>
+              </td>
+              <td class="px-3 py-2">
+                <div *ngFor="let sectionCourse of section.sectionCourses; trackBy: trackRunSectionCourse" class="mb-2 rounded border border-slate-200 p-2">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="font-semibold">{{ sectionCourse.courseName }}</span>
+                    <span
+                      class="rounded px-2 py-0.5 text-[10px] font-semibold"
+                      [ngClass]="
+                        sectionCourse.hasSchedule
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-amber-100 text-amber-800'
+                      "
+                    >
+                      {{ sectionCourse.hasSchedule ? 'CON HORARIO' : 'SIN HORARIO' }}
+                    </span>
+                    <span class="text-[11px] text-slate-500">
+                      Bloques: {{ sectionCourse.scheduleBlocksCount }} | Asignados: {{ sectionCourse.assignedStudents }}
+                    </span>
+                  </div>
+                  <div class="mt-2 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      class="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold hover:bg-slate-50"
+                      (click)="openRunSectionSchedule(section.sectionId, sectionCourse.courseName)"
+                    >
+                      Editar horario
+                    </button>
+                    <button
+                      *ngIf="!section.isAutoLeveling"
+                      type="button"
+                      class="rounded border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-60"
+                      [disabled]="
+                        deletingManualSectionCourseId === sectionCourse.sectionCourseId ||
+                        sectionCourse.assignedStudents > 0
+                      "
+                      (click)="deleteManualSectionCourse(section, sectionCourse)"
+                    >
+                      Eliminar manual
+                    </button>
+                  </div>
+                </div>
+              </td>
+            </tr>
+            <tr *ngIf="filteredRunSections.length === 0">
+              <td class="px-3 py-3 text-slate-500" colspan="4">Sin secciones para el filtro seleccionado.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="mt-4 rounded-xl border border-slate-200 p-3">
+        <div class="text-sm font-semibold">Crear seccion-curso manual</div>
+        <form class="mt-2 grid gap-2 sm:grid-cols-4" [formGroup]="manualSectionCourseForm" (ngSubmit)="createManualSectionCourse()">
+          <input class="rounded border border-slate-300 px-2 py-1 text-xs" formControlName="facultyGroup" placeholder="Facultad (FICA/SALUD)" />
+          <input class="rounded border border-slate-300 px-2 py-1 text-xs" formControlName="campusName" placeholder="Sede" />
+          <input class="rounded border border-slate-300 px-2 py-1 text-xs" formControlName="modality" placeholder="Modalidad" />
+          <input class="rounded border border-slate-300 px-2 py-1 text-xs" formControlName="courseName" placeholder="Curso" />
+          <input class="rounded border border-slate-300 px-2 py-1 text-xs" type="number" min="1" formControlName="initialCapacity" placeholder="Aforo inicial" />
+          <input class="rounded border border-slate-300 px-2 py-1 text-xs" type="number" min="0" formControlName="maxExtraCapacity" placeholder="Aforo extra" />
+          <input class="rounded border border-slate-300 px-2 py-1 text-xs sm:col-span-2" formControlName="facultyName" placeholder="Nombre facultad (opcional)" />
+          <button
+            class="rounded bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60 sm:col-span-4"
+            [disabled]="manualSectionCourseForm.invalid || creatingManualSectionCourse"
+          >
+            {{ creatingManualSectionCourse ? 'Creando...' : 'Crear seccion-curso manual' }}
+          </button>
+        </form>
+      </div>
+
+      <div *ngIf="matriculationResult" class="mt-4 rounded-xl border border-slate-200 p-3">
+        <div class="text-sm font-semibold">Resultado de matricula</div>
+        <div class="mt-1 text-xs text-slate-600">
+          Estado run: {{ matriculationResult.status }} | Asignados: {{ matriculationResult.assignedCount }} |
+          No asignados: {{ matriculationResult.unassigned.length }} |
+          Cruces detectados: {{ matriculationResult.conflictsFoundAfterAssign }}
+        </div>
+        <div *ngIf="matriculationResult.unassigned.length > 0" class="mt-3 overflow-x-auto">
+          <table class="min-w-full text-xs">
+            <thead class="bg-slate-50 text-left uppercase tracking-wide text-slate-600">
+              <tr>
+                <th class="px-2 py-1">Codigo</th>
+                <th class="px-2 py-1">Alumno</th>
+                <th class="px-2 py-1">Curso</th>
+                <th class="px-2 py-1">Motivo</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr *ngFor="let row of matriculationResult.unassigned" class="border-t border-slate-100">
+                <td class="px-2 py-1">{{ studentCode(row.studentCode) }}</td>
+                <td class="px-2 py-1">{{ row.studentName }}</td>
+                <td class="px-2 py-1">{{ row.courseName }}</td>
+                <td class="px-2 py-1">{{ row.reason }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="mt-4 rounded-xl border border-slate-200 p-3">
+        <div class="text-sm font-semibold">Validar cruces</div>
+        <div class="mt-2 grid gap-2 sm:grid-cols-3">
+          <input
+            class="rounded border border-slate-300 px-2 py-1 text-xs"
+            placeholder="Facultad (opcional)"
+            [(ngModel)]="runConflictsFacultyFilter"
+            [ngModelOptions]="{ standalone: true }"
+          />
+          <input
+            class="rounded border border-slate-300 px-2 py-1 text-xs"
+            placeholder="Sede (opcional)"
+            [(ngModel)]="runConflictsCampusFilter"
+            [ngModelOptions]="{ standalone: true }"
+          />
+          <button
+            type="button"
+            class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50 disabled:opacity-60"
+            [disabled]="runConflictLoading"
+            (click)="loadRunConflicts()"
+          >
+            {{ runConflictLoading ? 'Validando...' : 'Buscar cruces' }}
+          </button>
+        </div>
+        <div class="mt-3 overflow-x-auto">
+          <table class="min-w-full text-xs">
+            <thead class="bg-slate-50 text-left uppercase tracking-wide text-slate-600">
+              <tr>
+                <th class="px-2 py-1">Codigo</th>
+                <th class="px-2 py-1">Alumno</th>
+                <th class="px-2 py-1">Dia</th>
+                <th class="px-2 py-1">Cruce A</th>
+                <th class="px-2 py-1">Cruce B</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr *ngFor="let row of runConflictRows; trackBy: trackRunConflict" class="border-t border-slate-100">
+                <td class="px-2 py-1">{{ studentCode(row.studentCode) }}</td>
+                <td class="px-2 py-1">{{ row.studentName }}</td>
+                <td class="px-2 py-1">{{ dayLabel(row.dayOfWeek) }}</td>
+                <td class="px-2 py-1">
+                  {{ row.blockA.sectionCode || row.blockA.sectionName }} / {{ row.blockA.courseName }} /
+                  {{ row.blockA.startTime }}-{{ row.blockA.endTime }}
+                </td>
+                <td class="px-2 py-1">
+                  {{ row.blockB.sectionCode || row.blockB.sectionName }} / {{ row.blockB.courseName }} /
+                  {{ row.blockB.startTime }}-{{ row.blockB.endTime }}
+                </td>
+              </tr>
+              <tr *ngIf="!runConflictLoading && runConflictRows.length === 0">
+                <td class="px-2 py-3 text-slate-500" colspan="5">Sin cruces detectados.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
     <div
       *ngIf="studentsModalSection"
       class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
@@ -525,7 +808,7 @@ const PREFERRED_COURSE_ORDER = [
           <table class="min-w-full text-sm">
             <thead class="sticky top-0 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600">
               <tr>
-                <th class="px-3 py-2">DNI</th>
+                <th class="px-3 py-2">Codigo alumno</th>
                 <th class="px-3 py-2">Alumno</th>
                 <th class="px-3 py-2">Carrera</th>
                 <th class="px-3 py-2">Curso(s)</th>
@@ -536,7 +819,7 @@ const PREFERRED_COURSE_ORDER = [
                 *ngFor="let st of studentsModalStudents; trackBy: trackStudent"
                 class="border-t border-slate-100"
               >
-                <td class="px-3 py-2 font-mono text-xs">{{ st.dni }}</td>
+                <td class="px-3 py-2 font-mono text-xs">{{ studentCode(st.codigoAlumno) }}</td>
                 <td class="px-3 py-2">{{ st.fullName }}</td>
                 <td class="px-3 py-2 text-xs">{{ st.careerName }}</td>
                 <td class="px-3 py-2 text-xs">
@@ -571,11 +854,36 @@ export class AdminLevelingPage {
   sectionFacultyFilter = 'ALL';
   sectionSiteModalityFilter = 'ALL';
   sectionCourseFilter = 'ALL';
+  runId: string | null = null;
+  runDetails: LevelingRunDetailsResponse | null = null;
+  runSections: LevelingRunSectionView[] = [];
+  runFacultyFilter = 'ALL';
+  runCampusFilter = 'ALL';
+  runConflictRows: LevelingRunConflictItem[] = [];
+  runConflictsFacultyFilter = '';
+  runConflictsCampusFilter = '';
+  runConflictLoading = false;
+  loadingRunSections = false;
+  savingCapacityBySectionId = new Set<string>();
+  creatingManualSectionCourse = false;
+  deletingManualSectionCourseId: string | null = null;
+  runningMatriculation = false;
+  matriculationResult: LevelingMatriculationResult | null = null;
 
   savingConfig = false;
   running = false;
 
   configForm = this.fb.group({
+    initialCapacity: [45, [Validators.required, Validators.min(1), Validators.max(1000)]],
+    maxExtraCapacity: [0, [Validators.required, Validators.min(0), Validators.max(1000)]],
+  });
+
+  manualSectionCourseForm = this.fb.group({
+    facultyGroup: ['FICA', [Validators.required]],
+    facultyName: [''],
+    campusName: ['', [Validators.required]],
+    modality: ['PRESENCIAL', [Validators.required]],
+    courseName: ['', [Validators.required]],
     initialCapacity: [45, [Validators.required, Validators.min(1), Validators.max(1000)]],
     maxExtraCapacity: [0, [Validators.required, Validators.min(0), Validators.max(1000)]],
   });
@@ -619,6 +927,31 @@ export class AdminLevelingPage {
     }
   ) {
     return item.dni;
+  }
+
+  trackRunSection(_: number, item: LevelingRunSectionView) {
+    return item.sectionId;
+  }
+
+  trackRunSectionCourse(
+    _: number,
+    item: LevelingRunSectionView['sectionCourses'][number]
+  ) {
+    return item.sectionCourseId;
+  }
+
+  trackRunConflict(_: number, item: LevelingRunConflictItem) {
+    return `${item.studentId}:${item.blockA.blockId}:${item.blockB.blockId}`;
+  }
+
+  dayLabel(dayOfWeek: number) {
+    const labels = ['', 'Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab', 'Dom'];
+    return labels[Number(dayOfWeek) || 0] ?? String(dayOfWeek);
+  }
+
+  studentCode(code: string | null | undefined) {
+    const value = String(code ?? '').trim();
+    return value || 'SIN CODIGO';
   }
 
   get courseColumns(): CourseColumn[] {
@@ -796,6 +1129,67 @@ export class AdminLevelingPage {
     return mapped;
   }
 
+  get runFacultyOptions() {
+    return Array.from(
+      new Set(
+        this.runSections
+          .map((s) => String(s.facultyGroup ?? '').trim())
+          .filter((value) => Boolean(value))
+      )
+    ).sort((a, b) => a.localeCompare(b));
+  }
+
+  get runCampusOptions() {
+    return Array.from(
+      new Set(
+        this.runSections
+          .map((s) => String(s.campusName ?? '').trim())
+          .filter((value) => Boolean(value))
+      )
+    ).sort((a, b) => a.localeCompare(b));
+  }
+
+  get filteredRunSections() {
+    return this.runSections.filter((row) => {
+      if (this.runFacultyFilter !== 'ALL') {
+        if (String(row.facultyGroup ?? '').trim() !== this.runFacultyFilter) return false;
+      }
+      if (this.runCampusFilter !== 'ALL') {
+        if (String(row.campusName ?? '').trim() !== this.runCampusFilter) return false;
+      }
+      return true;
+    });
+  }
+
+  get runSectionCourseCount() {
+    return this.runSections.reduce(
+      (acc, row) => acc + (row.sectionCourses?.length ?? 0),
+      0
+    );
+  }
+
+  get runAssignedCount() {
+    return this.runSections.reduce(
+      (acc, row) =>
+        acc +
+        (row.sectionCourses ?? []).reduce(
+          (sectionAcc, sectionCourse) => sectionAcc + Number(sectionCourse.assignedStudents ?? 0),
+          0
+        ),
+      0
+    );
+  }
+
+  get canMatriculateRun() {
+    if (!this.runId || this.runningMatriculation || this.loadingRunSections) return false;
+    if (this.runSectionCourseCount === 0) return false;
+    return this.runSections.every((row) =>
+      (row.sectionCourses ?? []).every(
+        (sectionCourse) => Number(sectionCourse.scheduleBlocksCount ?? 0) > 0
+      )
+    );
+  }
+
   onFileSelected(event: Event) {
     const input = event.target as HTMLInputElement | null;
     const file = input?.files?.[0] ?? null;
@@ -808,6 +1202,11 @@ export class AdminLevelingPage {
     this.programCampusFilter = 'ALL';
     this.programModalityFilter = 'ALL';
     this.sectionCourseFilter = 'ALL';
+    this.runId = null;
+    this.runDetails = null;
+    this.runSections = [];
+    this.runConflictRows = [];
+    this.matriculationResult = null;
   }
 
   openStudentsModal(
@@ -852,6 +1251,10 @@ export class AdminLevelingPage {
         initialCapacity: cfg.initialCapacity,
         maxExtraCapacity: cfg.maxExtraCapacity,
       });
+      this.manualSectionCourseForm.patchValue({
+        initialCapacity: cfg.initialCapacity,
+        maxExtraCapacity: cfg.maxExtraCapacity,
+      });
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo cargar configuracion';
     } finally {
@@ -892,7 +1295,7 @@ export class AdminLevelingPage {
     }
     if (apply) {
       const ok = window.confirm(
-        'Se aplicara la distribucion y se reasignaran matriculas. Deseas continuar?'
+        'Se aplicara la estructura (usuarios/secciones/seccion-curso) sin matricular alumnos. Deseas continuar?'
       );
       if (!ok) return;
     }
@@ -932,11 +1335,210 @@ export class AdminLevelingPage {
       this.sectionCourseFilter = 'ALL';
       this.rebuildGroupModalityOverrides();
       this.sectionsDirty = false;
+      this.matriculationResult = null;
+      this.runConflictRows = [];
+      this.runId = String(this.result.runId ?? '').trim() || null;
+      if (this.runId) {
+        await this.loadRunContext(this.runId);
+      } else {
+        this.runDetails = null;
+        this.runSections = [];
+      }
     } catch (e: any) {
       this.result = null;
       this.error = e?.error?.message ?? 'No se pudo procesar el archivo';
     } finally {
       this.running = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  async loadRunContext(runId: string) {
+    this.loadingRunSections = true;
+    this.error = null;
+    try {
+      const [details, sections] = await Promise.all([
+        firstValueFrom(
+          this.http.get<LevelingRunDetailsResponse>(
+            `/api/admin/leveling/runs/${encodeURIComponent(runId)}`
+          )
+        ),
+        firstValueFrom(
+          this.http.get<LevelingRunSectionView[]>(
+            `/api/admin/leveling/runs/${encodeURIComponent(runId)}/sections`
+          )
+        ),
+      ]);
+      this.runId = runId;
+      this.runDetails = details;
+      this.runSections = sections;
+      if (!this.manualSectionCourseForm.value.campusName && this.runCampusOptions.length > 0) {
+        this.manualSectionCourseForm.patchValue({
+          campusName: this.runCampusOptions[0],
+        });
+      }
+      if (!this.manualSectionCourseForm.value.courseName) {
+        const firstCourse = sections[0]?.sectionCourses?.[0]?.courseName ?? '';
+        if (firstCourse) {
+          this.manualSectionCourseForm.patchValue({
+            courseName: firstCourse,
+          });
+        }
+      }
+    } catch (e: any) {
+      this.error = e?.error?.message ?? 'No se pudo cargar el contexto de matricula';
+      this.runDetails = null;
+      this.runSections = [];
+    } finally {
+      this.loadingRunSections = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  openRunSectionSchedule(sectionId: string, courseName: string) {
+    const sid = encodeURIComponent(sectionId);
+    const course = encodeURIComponent(courseName);
+    window.location.href = `/admin/sections/${sid}/schedule?courseName=${course}`;
+  }
+
+  async saveRunSectionCapacity(section: LevelingRunSectionView) {
+    const sectionId = String(section.sectionId ?? '').trim();
+    if (!sectionId || this.savingCapacityBySectionId.has(sectionId)) return;
+    this.savingCapacityBySectionId.add(sectionId);
+    this.error = null;
+    try {
+      await firstValueFrom(
+        this.http.patch(`/api/admin/sections/${encodeURIComponent(sectionId)}/capacity`, {
+          initialCapacity: Number(section.initialCapacity ?? 45),
+          maxExtraCapacity: Number(section.maxExtraCapacity ?? 0),
+        })
+      );
+      if (this.runId) {
+        await this.loadRunContext(this.runId);
+      }
+    } catch (e: any) {
+      this.error = e?.error?.message ?? 'No se pudo actualizar el aforo';
+    } finally {
+      this.savingCapacityBySectionId.delete(sectionId);
+      this.cdr.detectChanges();
+    }
+  }
+
+  async createManualSectionCourse() {
+    if (!this.runId || this.manualSectionCourseForm.invalid || this.creatingManualSectionCourse) {
+      return;
+    }
+    this.creatingManualSectionCourse = true;
+    this.error = null;
+    try {
+      const value = this.manualSectionCourseForm.getRawValue();
+      await firstValueFrom(
+        this.http.post<LevelingManualSectionCourseResult>(
+          `/api/admin/leveling/runs/${encodeURIComponent(this.runId)}/manual-section-courses`,
+          {
+            facultyGroup: String(value.facultyGroup ?? '').trim(),
+            facultyName: String(value.facultyName ?? '').trim() || null,
+            campusName: String(value.campusName ?? '').trim(),
+            modality: String(value.modality ?? '').trim(),
+            courseName: String(value.courseName ?? '').trim(),
+            initialCapacity: Number(value.initialCapacity ?? 45),
+            maxExtraCapacity: Number(value.maxExtraCapacity ?? 0),
+          }
+        )
+      );
+      await this.loadRunContext(this.runId);
+    } catch (e: any) {
+      this.error = e?.error?.message ?? 'No se pudo crear la seccion-curso manual';
+    } finally {
+      this.creatingManualSectionCourse = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  async deleteManualSectionCourse(
+    section: LevelingRunSectionView,
+    sectionCourse: LevelingRunSectionView['sectionCourses'][number]
+  ) {
+    if (!this.runId) return;
+    if (section.isAutoLeveling) return;
+    if (Number(sectionCourse.assignedStudents ?? 0) > 0) {
+      this.error = 'No se puede eliminar una seccion-curso con alumnos matriculados';
+      this.cdr.detectChanges();
+      return;
+    }
+    const ok = window.confirm(
+      `Eliminar ${section.code || section.name} - ${sectionCourse.courseName}?`
+    );
+    if (!ok) return;
+
+    this.deletingManualSectionCourseId = sectionCourse.sectionCourseId;
+    this.error = null;
+    try {
+      await firstValueFrom(
+        this.http.delete(
+          `/api/admin/leveling/runs/${encodeURIComponent(
+            this.runId
+          )}/manual-section-courses/${encodeURIComponent(sectionCourse.sectionCourseId)}`
+        )
+      );
+      await this.loadRunContext(this.runId);
+    } catch (e: any) {
+      this.error = e?.error?.message ?? 'No se pudo eliminar la seccion-curso manual';
+    } finally {
+      this.deletingManualSectionCourseId = null;
+      this.cdr.detectChanges();
+    }
+  }
+
+  async matriculateRun() {
+    if (!this.runId || !this.canMatriculateRun || this.runningMatriculation) return;
+    const ok = window.confirm(
+      'Se ejecutara la matricula automatica schedule-aware. Continuar?'
+    );
+    if (!ok) return;
+
+    this.runningMatriculation = true;
+    this.error = null;
+    try {
+      this.matriculationResult = await firstValueFrom(
+        this.http.post<LevelingMatriculationResult>(
+          `/api/admin/leveling/runs/${encodeURIComponent(this.runId)}/matriculate`,
+          {}
+        )
+      );
+      await this.loadRunContext(this.runId);
+      await this.loadRunConflicts();
+    } catch (e: any) {
+      this.error = e?.error?.message ?? 'No se pudo matricular automaticamente';
+    } finally {
+      this.runningMatriculation = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  async loadRunConflicts() {
+    if (!this.runId) return;
+    this.runConflictLoading = true;
+    this.error = null;
+    try {
+      const query = new URLSearchParams();
+      const facultyGroup = this.runConflictsFacultyFilter.trim();
+      const campusName = this.runConflictsCampusFilter.trim();
+      if (facultyGroup) query.set('facultyGroup', facultyGroup);
+      if (campusName) query.set('campusName', campusName);
+      const suffix = query.toString();
+      this.runConflictRows = await firstValueFrom(
+        this.http.get<LevelingRunConflictItem[]>(
+          `/api/admin/leveling/runs/${encodeURIComponent(this.runId)}/conflicts${
+            suffix ? `?${suffix}` : ''
+          }`
+        )
+      );
+    } catch (e: any) {
+      this.error = e?.error?.message ?? 'No se pudo validar cruces';
+      this.runConflictRows = [];
+    } finally {
+      this.runConflictLoading = false;
       this.cdr.detectChanges();
     }
   }

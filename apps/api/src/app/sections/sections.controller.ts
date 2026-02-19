@@ -2,12 +2,12 @@ import {
   BadRequestException,
   Body,
   Controller,
-  Header,
   Get,
   Param,
   Patch,
   Post,
   Query,
+  StreamableFile,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -18,6 +18,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { CreateSectionDto } from './dto/create-section.dto';
 import { AssignSectionCourseTeacherDto } from './dto/assign-section-course-teacher.dto';
 import { AssignSectionTeacherDto } from './dto/assign-section-teacher.dto';
+import { ReassignStudentSectionCourseDto } from './dto/reassign-student-section-course.dto';
 import { UpdateSectionCapacityDto } from './dto/update-section-capacity.dto';
 import { SectionsService } from './sections.service';
 
@@ -80,22 +81,63 @@ export class SectionsController {
     return this.sectionsService.listFacultyFilters();
   }
 
+  @Get('schedule-conflicts')
+  listScheduleConflicts(
+    @Query('facultyGroup') facultyGroup?: string,
+    @Query('campusName') campusName?: string,
+    @Query('courseName') courseName?: string,
+    @Query('studentCode') studentCode?: string
+  ) {
+    return this.sectionsService.listScheduleConflicts({
+      facultyGroup: String(facultyGroup ?? '').trim() || undefined,
+      campusName: String(campusName ?? '').trim() || undefined,
+      courseName: String(courseName ?? '').trim() || undefined,
+      studentCode: String(studentCode ?? '').trim() || undefined,
+    });
+  }
+
+  @Get('schedule-conflicts/reassignment-options')
+  listReassignmentOptions(
+    @Query('studentId') studentId?: string,
+    @Query('fromSectionCourseId') fromSectionCourseId?: string
+  ) {
+    const sid = String(studentId ?? '').trim();
+    const from = String(fromSectionCourseId ?? '').trim();
+    if (!sid) {
+      throw new BadRequestException('studentId is required');
+    }
+    if (!from) {
+      throw new BadRequestException('fromSectionCourseId is required');
+    }
+    return this.sectionsService.listReassignmentOptions({
+      studentId: sid,
+      fromSectionCourseId: from,
+    });
+  }
+
+  @Post('schedule-conflicts/reassign')
+  reassignStudentSectionCourse(@Body() dto: ReassignStudentSectionCourseDto) {
+    return this.sectionsService.reassignStudentSectionCourse({
+      studentId: dto.studentId,
+      fromSectionCourseId: dto.fromSectionCourseId,
+      toSectionCourseId: dto.toSectionCourseId,
+      confirmOverCapacity: Boolean(dto.confirmOverCapacity),
+    });
+  }
+
   @Get('export/assigned-courses')
   listAssignedSectionCoursesForExport() {
     return this.sectionsService.listAssignedSectionCoursesForExport();
   }
 
   @Get('export/assigned-courses/excel')
-  @Header(
-    'Content-Type',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-  )
-  @Header(
-    'Content-Disposition',
-    'attachment; filename="plantilla_docentes_seccion_curso.xlsx"'
-  )
-  async exportAssignedSectionCoursesExcel() {
-    return this.sectionsService.buildAssignedSectionCoursesExportWorkbook();
+  async exportAssignedSectionCoursesExcel(): Promise<StreamableFile> {
+    const fileBuffer =
+      await this.sectionsService.buildAssignedSectionCoursesExportWorkbook();
+    return new StreamableFile(fileBuffer, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: 'attachment; filename="plantilla_docentes_seccion_curso.xlsx"',
+    });
   }
 
   @Get('filters/campuses')

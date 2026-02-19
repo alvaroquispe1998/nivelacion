@@ -17,6 +17,7 @@ describe('LevelingService', () => {
     const sectionsByCode = new Map<string, any>();
     const sectionCourses = new Map<string, { id: string; periodId: string; sectionId: string; courseId: string }>();
     const sectionStudentCourses = new Set<string>();
+    const runDemands = new Set<string>();
     const queries: string[] = [];
 
     let userSeq = 0;
@@ -74,6 +75,14 @@ describe('LevelingService', () => {
 
         if (normalized.includes('SELECT ID FROM PERIODS')) {
           return [{ id: 'period-1' }];
+        }
+
+        if (normalized.includes('UPDATE LEVELING_RUNS SET STATUS = \'ARCHIVED\'')) {
+          return;
+        }
+
+        if (normalized.includes('INSERT INTO LEVELING_RUNS')) {
+          return;
         }
 
         if (normalized.includes('SELECT PERIODID, SECTIONID, COURSEID FROM SECTION_COURSES')) {
@@ -135,6 +144,41 @@ describe('LevelingService', () => {
           return;
         }
 
+        if (normalized.includes('DELETE FROM SECTION_STUDENT_COURSES WHERE SECTIONCOURSEID IN')) {
+          const sectionCourseIds = params.map((x) => String(x));
+          for (const key of Array.from(sectionStudentCourses)) {
+            const [sectionCourseId] = key.split(':');
+            if (sectionCourseIds.includes(sectionCourseId)) {
+              sectionStudentCourses.delete(key);
+            }
+          }
+          return;
+        }
+
+        if (
+          normalized.includes(
+            'SELECT RUNID, STUDENTID, COURSEID FROM LEVELING_RUN_STUDENT_COURSE_DEMANDS'
+          )
+        ) {
+          const runId = String(params[0] ?? '');
+          return Array.from(runDemands)
+            .map((key) => {
+              const [runIdKey, studentId, courseId] = key.split(':');
+              return { runId: runIdKey, studentId, courseId };
+            })
+            .filter((row) => row.runId === runId);
+        }
+
+        if (normalized.includes('INSERT IGNORE INTO LEVELING_RUN_STUDENT_COURSE_DEMANDS')) {
+          for (let i = 0; i < params.length; i += 7) {
+            const runId = String(params[i + 1]);
+            const studentId = String(params[i + 2]);
+            const courseId = String(params[i + 3]);
+            runDemands.add(`${runId}:${studentId}:${courseId}`);
+          }
+          return;
+        }
+
         throw new Error(`Unexpected SQL in test: ${normalized}`);
       }),
     };
@@ -179,21 +223,25 @@ describe('LevelingService', () => {
 
     expect(first.sectionCoursesCreated).toBe(1);
     expect(first.sectionCoursesOmitted).toBe(0);
-    expect(first.sectionStudentCoursesCreated).toBe(1);
-    expect(first.sectionStudentCoursesOmitted).toBe(0);
-    expect(first.enrollmentsCreated).toBe(0);
-    expect(first.enrollmentsOmitted).toBe(0);
+    expect(first.runStatus).toBe('STRUCTURED');
+    expect(first.runId).toBeTruthy();
+    expect(first.demandsCreated).toBe(1);
+    expect(first.demandsOmitted).toBe(0);
 
     expect(second.sectionCoursesCreated).toBe(0);
     expect(second.sectionCoursesOmitted).toBe(1);
-    expect(second.sectionStudentCoursesCreated).toBe(0);
-    expect(second.sectionStudentCoursesOmitted).toBe(1);
-    expect(second.enrollmentsCreated).toBe(0);
-    expect(second.enrollmentsOmitted).toBe(0);
+    expect(second.runStatus).toBe('STRUCTURED');
+    expect(second.runId).toBeTruthy();
+    expect(second.demandsCreated).toBe(1);
+    expect(second.demandsOmitted).toBe(0);
 
     expect(queries.some((q) => q.includes('DELETE FROM SECTION_COURSES'))).toBe(false);
     expect(
-      queries.some((q) => q.includes('DELETE FROM SECTION_STUDENT_COURSES'))
+      queries.some(
+        (q) =>
+          q.includes('DELETE FROM SECTION_STUDENT_COURSES') &&
+          !q.includes('WHERE SECTIONCOURSEID IN')
+      )
     ).toBe(false);
     expect(queries.some((q) => q.includes('DELETE FROM ENROLLMENTS'))).toBe(false);
   });

@@ -24,6 +24,7 @@ services:
     working_dir: /workspace
     environment:
       PNPM_STORE_DIR: /pnpm-store
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
       NX_DAEMON: "false"
       NX_SKIP_NX_CACHE: "true"
     volumes:
@@ -41,6 +42,7 @@ services:
     environment:
       NODE_ENV: development
       PNPM_STORE_DIR: /pnpm-store
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
       NX_DAEMON: "true"
       NX_SKIP_NX_CACHE: "true"
       CHOKIDAR_USEPOLLING: "true"
@@ -77,6 +79,7 @@ services:
     environment:
       NODE_ENV: development
       PNPM_STORE_DIR: /pnpm-store
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
       NX_DAEMON: "false"
       NX_SKIP_NX_CACHE: "true"
       CHOKIDAR_USEPOLLING: "true"
@@ -93,7 +96,7 @@ services:
         condition: service_completed_successfully
       api:
         condition: service_started
-    command: bash -lc "pnpm nx serve web --host 0.0.0.0 --port 4200 --proxy-config apps/web/proxy.conf.json --skip-nx-cache"
+    command: bash -lc "npx nx reset && npx nx serve web --host 0.0.0.0 --port 4200 --proxy-config apps/web/proxy.conf.json --skip-nx-cache"
 
   adminer:
     image: adminer:latest

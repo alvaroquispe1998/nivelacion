@@ -6,6 +6,8 @@ import { AttendanceRecordEntity } from '../attendance/attendance-record.entity';
 import { AttendanceSessionEntity } from '../attendance/attendance-session.entity';
 import { PeriodEntity } from '../periods/period.entity';
 import { ScheduleBlockEntity } from '../schedule-blocks/schedule-block.entity';
+import { LevelingRunEntity } from '../leveling/leveling-run.entity';
+import { LevelingRunStudentCourseDemandEntity } from '../leveling/leveling-run-student-course-demand.entity';
 import { SectionCourseTeacherEntity } from '../sections/section-course-teacher.entity';
 import { SectionEntity } from '../sections/section.entity';
 import { TeacherEntity } from '../teachers/teacher.entity';
@@ -31,6 +33,7 @@ import { UsersStudentProfileFields018Migration1762600000000 } from './migrations
 import { SeedDefaultAdmin019Migration1762700000000 } from './migrations/019-seed-default-admin.migration';
 import { RemoveLegacyDemoAdmin020Migration1762800000000 } from './migrations/020-remove-legacy-demo-admin.migration';
 import { PeriodKindSpanishValues021Migration1762900000000 } from './migrations/021-period-kind-spanish-values.migration';
+import { LevelingRunsAndStaging022Migration1763000000000 } from './migrations/022-leveling-runs-and-staging.migration';
 
 export const TYPEORM_ENTITIES = [
   UserEntity,
@@ -39,6 +42,8 @@ export const TYPEORM_ENTITIES = [
   SectionCourseTeacherEntity,
   TeacherEntity,
   ScheduleBlockEntity,
+  LevelingRunEntity,
+  LevelingRunStudentCourseDemandEntity,
   AttendanceSessionEntity,
   AttendanceRecordEntity,
 ];
@@ -65,6 +70,7 @@ export const TYPEORM_MIGRATIONS = [
   SeedDefaultAdmin019Migration1762700000000,
   RemoveLegacyDemoAdmin020Migration1762800000000,
   PeriodKindSpanishValues021Migration1762900000000,
+  LevelingRunsAndStaging022Migration1763000000000,
 ];
 
 export function createDataSourceOptionsFromEnv(): DataSourceOptions {

@@ -54,6 +54,9 @@ export class SectionEntity {
   @Column({ type: 'boolean', default: false })
   isAutoLeveling!: boolean;
 
+  @Column({ type: 'char', length: 36, nullable: true })
+  levelingRunId!: string | null;
+
   @CreateDateColumn()
   createdAt!: Date;
 

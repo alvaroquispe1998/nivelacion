@@ -9,7 +9,10 @@ export const DAYS = [
 ];
 
 export function minutesFromHHmm(hhmm: string): number {
-  const [hh, mm] = hhmm.split(':').map((x) => Number(x));
+  const match = String(hhmm ?? '').trim().match(/(\d{1,2}):(\d{2})/);
+  if (!match) return Number.NaN;
+  const hh = Number(match[1]);
+  const mm = Number(match[2]);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return Number.NaN;
   return hh * 60 + mm;
 }
-

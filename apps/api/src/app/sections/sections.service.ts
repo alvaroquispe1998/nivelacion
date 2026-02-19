@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Role } from '@uai/shared';
 import * as XLSX from 'xlsx';
@@ -69,6 +74,7 @@ export class SectionsService {
     if (!facultyGroup || !campusName || !courseName) {
       return [];
     }
+    const isVirtualCampus = this.isVirtualCampusFilter(campusName);
 
     const course = await this.resolveCourseByName(courseName);
     if (!course) return [];
@@ -125,7 +131,10 @@ export class SectionsService {
       INNER JOIN section_student_courses ssc
         ON ssc.sectionCourseId = scf.id
       WHERE s.facultyGroup = ?
-        AND s.campusName = ?
+        AND (
+          (? = 1 AND UPPER(COALESCE(s.modality, '')) LIKE '%VIRTUAL%')
+          OR (? = 0 AND s.campusName = ?)
+        )
       GROUP BY
         s.id,
         s.name,
@@ -156,7 +165,14 @@ export class SectionsService {
         s.code ASC,
         s.name ASC
       `,
-      [course.id, activePeriodId, facultyGroup, campusName]
+      [
+        course.id,
+        activePeriodId,
+        facultyGroup,
+        isVirtualCampus ? 1 : 0,
+        isVirtualCampus ? 1 : 0,
+        campusName,
+      ]
     );
 
     return rows.map((row) => ({
@@ -187,6 +203,385 @@ export class SectionsService {
       }),
       studentCount: Number(row.studentCount || 0),
     }));
+  }
+
+  async listScheduleConflicts(params?: {
+    facultyGroup?: string;
+    campusName?: string;
+    courseName?: string;
+    studentCode?: string;
+  }) {
+    const activePeriodId = await this.periodsService.getActivePeriodIdOrThrow();
+    const facultyGroup = String(params?.facultyGroup ?? '').trim();
+    const campusName = String(params?.campusName ?? '').trim();
+    const courseName = String(params?.courseName ?? '').trim();
+    const studentCode = String(params?.studentCode ?? '').trim();
+
+    const rows: Array<{
+      studentId: string;
+      studentCode: string | null;
+      studentName: string;
+      dayOfWeek: number;
+      blockIdA: string;
+      sectionCourseIdA: string;
+      sectionIdA: string;
+      sectionCodeA: string | null;
+      sectionNameA: string;
+      courseIdA: string;
+      courseNameA: string;
+      startTimeA: string;
+      endTimeA: string;
+      startDateA: string | null;
+      endDateA: string | null;
+      blockIdB: string;
+      sectionCourseIdB: string;
+      sectionIdB: string;
+      sectionCodeB: string | null;
+      sectionNameB: string;
+      courseIdB: string;
+      courseNameB: string;
+      startTimeB: string;
+      endTimeB: string;
+      startDateB: string | null;
+      endDateB: string | null;
+    }> = await this.sectionsRepo.manager.query(
+      `
+      SELECT
+        u.id AS studentId,
+        u.codigoAlumno AS studentCode,
+        u.fullName AS studentName,
+        b1.dayOfWeek AS dayOfWeek,
+        b1.id AS blockIdA,
+        sc1.id AS sectionCourseIdA,
+        s1.id AS sectionIdA,
+        s1.code AS sectionCodeA,
+        s1.name AS sectionNameA,
+        c1.id AS courseIdA,
+        c1.name AS courseNameA,
+        b1.startTime AS startTimeA,
+        b1.endTime AS endTimeA,
+        b1.startDate AS startDateA,
+        b1.endDate AS endDateA,
+        b2.id AS blockIdB,
+        sc2.id AS sectionCourseIdB,
+        s2.id AS sectionIdB,
+        s2.code AS sectionCodeB,
+        s2.name AS sectionNameB,
+        c2.id AS courseIdB,
+        c2.name AS courseNameB,
+        b2.startTime AS startTimeB,
+        b2.endTime AS endTimeB,
+        b2.startDate AS startDateB,
+        b2.endDate AS endDateB
+      FROM section_student_courses ssc1
+      INNER JOIN section_student_courses ssc2
+        ON ssc2.studentId = ssc1.studentId
+       AND ssc2.sectionCourseId > ssc1.sectionCourseId
+      INNER JOIN section_courses sc1
+        ON sc1.id = ssc1.sectionCourseId
+       AND sc1.periodId = ?
+      INNER JOIN section_courses sc2
+        ON sc2.id = ssc2.sectionCourseId
+       AND sc2.periodId = ?
+      INNER JOIN schedule_blocks b1
+        ON b1.sectionCourseId = sc1.id
+      INNER JOIN schedule_blocks b2
+        ON b2.sectionCourseId = sc2.id
+       AND b1.dayOfWeek = b2.dayOfWeek
+       AND b1.startTime < b2.endTime
+       AND b1.endTime > b2.startTime
+       AND COALESCE(b1.startDate, '1000-01-01') <= COALESCE(b2.endDate, '9999-12-31')
+       AND COALESCE(b2.startDate, '1000-01-01') <= COALESCE(b1.endDate, '9999-12-31')
+      INNER JOIN sections s1 ON s1.id = sc1.sectionId
+      INNER JOIN sections s2 ON s2.id = sc2.sectionId
+      INNER JOIN courses c1 ON c1.id = sc1.courseId
+      INNER JOIN courses c2 ON c2.id = sc2.courseId
+      INNER JOIN users u ON u.id = ssc1.studentId
+      WHERE (? = '' OR s1.facultyGroup = ? OR s2.facultyGroup = ?)
+        AND (? = '' OR s1.campusName = ? OR s2.campusName = ?)
+        AND (? = '' OR c1.name = ? OR c2.name = ?)
+        AND (? = '' OR UPPER(COALESCE(u.codigoAlumno, '')) LIKE ?)
+      ORDER BY
+        u.fullName ASC,
+        u.codigoAlumno ASC,
+        b1.dayOfWeek ASC,
+        b1.startTime ASC,
+        s1.code ASC,
+        s2.code ASC
+      `,
+      [
+        activePeriodId,
+        activePeriodId,
+        facultyGroup,
+        facultyGroup,
+        facultyGroup,
+        campusName,
+        campusName,
+        campusName,
+        courseName,
+        courseName,
+        courseName,
+        studentCode,
+        `%${studentCode.toUpperCase()}%`,
+      ]
+    );
+
+    return rows.map((row) => ({
+      studentId: String(row.studentId),
+      studentCode: row.studentCode ? String(row.studentCode) : null,
+      studentName: String(row.studentName ?? ''),
+      dayOfWeek: Number(row.dayOfWeek ?? 0),
+      blockA: {
+        blockId: String(row.blockIdA),
+        sectionCourseId: String(row.sectionCourseIdA),
+        sectionId: String(row.sectionIdA),
+        sectionCode: row.sectionCodeA ? String(row.sectionCodeA) : null,
+        sectionName: String(row.sectionNameA ?? ''),
+        courseId: String(row.courseIdA),
+        courseName: String(row.courseNameA ?? ''),
+        startTime: String(row.startTimeA ?? ''),
+        endTime: String(row.endTimeA ?? ''),
+        startDate: this.toIsoDateOnly(row.startDateA),
+        endDate: this.toIsoDateOnly(row.endDateA),
+      },
+      blockB: {
+        blockId: String(row.blockIdB),
+        sectionCourseId: String(row.sectionCourseIdB),
+        sectionId: String(row.sectionIdB),
+        sectionCode: row.sectionCodeB ? String(row.sectionCodeB) : null,
+        sectionName: String(row.sectionNameB ?? ''),
+        courseId: String(row.courseIdB),
+        courseName: String(row.courseNameB ?? ''),
+        startTime: String(row.startTimeB ?? ''),
+        endTime: String(row.endTimeB ?? ''),
+        startDate: this.toIsoDateOnly(row.startDateB),
+        endDate: this.toIsoDateOnly(row.endDateB),
+      },
+    }));
+  }
+
+  async listReassignmentOptions(params: {
+    studentId: string;
+    fromSectionCourseId: string;
+  }) {
+    const activePeriodId = await this.periodsService.getActivePeriodIdOrThrow();
+    const fromMembership = await this.loadStudentMembershipBySectionCourseOrThrow({
+      studentId: params.studentId,
+      sectionCourseId: params.fromSectionCourseId,
+      periodId: activePeriodId,
+    });
+
+    const rows: Array<{
+      sectionCourseId: string;
+      sectionId: string;
+      sectionCode: string | null;
+      sectionName: string;
+      courseId: string;
+      courseName: string;
+      facultyGroup: string | null;
+      campusName: string | null;
+      modality: string | null;
+      initialCapacity: number;
+      maxExtraCapacity: number;
+      currentStudents: number;
+    }> = await this.sectionsRepo.manager.query(
+      `
+      SELECT
+        sc.id AS sectionCourseId,
+        sc.sectionId AS sectionId,
+        s.code AS sectionCode,
+        s.name AS sectionName,
+        sc.courseId AS courseId,
+        c.name AS courseName,
+        s.facultyGroup AS facultyGroup,
+        s.campusName AS campusName,
+        s.modality AS modality,
+        s.initialCapacity AS initialCapacity,
+        s.maxExtraCapacity AS maxExtraCapacity,
+        COUNT(DISTINCT ssc.studentId) AS currentStudents
+      FROM section_courses sc
+      INNER JOIN sections s ON s.id = sc.sectionId
+      INNER JOIN courses c ON c.id = sc.courseId
+      LEFT JOIN section_student_courses ssc ON ssc.sectionCourseId = sc.id
+      WHERE sc.periodId = ?
+        AND sc.courseId = ?
+        AND sc.id <> ?
+        AND COALESCE(s.facultyGroup, '') = COALESCE(?, '')
+        AND COALESCE(s.campusName, '') = COALESCE(?, '')
+        AND UPPER(COALESCE(s.modality, '')) = UPPER(COALESCE(?, ''))
+      GROUP BY
+        sc.id,
+        sc.sectionId,
+        s.code,
+        s.name,
+        sc.courseId,
+        c.name,
+        s.facultyGroup,
+        s.campusName,
+        s.modality,
+        s.initialCapacity,
+        s.maxExtraCapacity
+      ORDER BY s.code ASC, s.name ASC
+      `,
+      [
+        activePeriodId,
+        fromMembership.courseId,
+        fromMembership.sectionCourseId,
+        fromMembership.facultyGroup,
+        fromMembership.campusName,
+        fromMembership.modality,
+      ]
+    );
+
+    const candidateIds = rows.map((row) => String(row.sectionCourseId)).filter(Boolean);
+    const conflictingCandidateIds = await this.findConflictingCandidateIds({
+      studentId: params.studentId,
+      excludeSectionCourseId: fromMembership.sectionCourseId,
+      candidateSectionCourseIds: candidateIds,
+      periodId: activePeriodId,
+    });
+
+    return rows.map((row) => {
+      const currentStudents = Number(row.currentStudents ?? 0);
+      const projectedStudents = currentStudents + 1;
+      const initialCapacity = Number(row.initialCapacity ?? 45);
+      const maxExtraCapacity = Number(row.maxExtraCapacity ?? 0);
+      const overCapacity = this.isOverCapacity({
+        initialCapacity,
+        maxExtraCapacity,
+        projectedStudents,
+      });
+      return {
+        sectionCourseId: String(row.sectionCourseId),
+        sectionId: String(row.sectionId),
+        sectionCode: row.sectionCode ? String(row.sectionCode) : null,
+        sectionName: String(row.sectionName ?? ''),
+        courseId: String(row.courseId ?? ''),
+        courseName: String(row.courseName ?? ''),
+        facultyGroup: row.facultyGroup ? String(row.facultyGroup) : null,
+        campusName: row.campusName ? String(row.campusName) : null,
+        modality: row.modality ? String(row.modality) : null,
+        currentStudents,
+        projectedStudents,
+        initialCapacity,
+        maxExtraCapacity,
+        createsConflict: conflictingCandidateIds.has(String(row.sectionCourseId)),
+        overCapacity,
+      };
+    });
+  }
+
+  async reassignStudentSectionCourse(params: {
+    studentId: string;
+    fromSectionCourseId: string;
+    toSectionCourseId: string;
+    confirmOverCapacity?: boolean;
+  }) {
+    const activePeriodId = await this.periodsService.getActivePeriodIdOrThrow();
+    const fromMembership = await this.loadStudentMembershipBySectionCourseOrThrow({
+      studentId: params.studentId,
+      sectionCourseId: params.fromSectionCourseId,
+      periodId: activePeriodId,
+    });
+    const toSectionCourse = await this.getSectionCourseContextOrThrow({
+      sectionCourseId: params.toSectionCourseId,
+      periodId: activePeriodId,
+    });
+
+    if (fromMembership.sectionCourseId === toSectionCourse.sectionCourseId) {
+      throw new BadRequestException('Origin and target section-course are the same');
+    }
+    if (fromMembership.courseId !== toSectionCourse.courseId) {
+      throw new BadRequestException('Target section-course must belong to the same course');
+    }
+    if (!this.isSameScope(fromMembership, toSectionCourse)) {
+      throw new BadRequestException(
+        'Target section-course must be in the same faculty, campus and modality'
+      );
+    }
+
+    const targetMembershipRows: Array<{ c: number }> = await this.sectionsRepo.manager.query(
+      `
+      SELECT COUNT(*) AS c
+      FROM section_student_courses
+      WHERE studentId = ?
+        AND sectionCourseId = ?
+      `,
+      [params.studentId, toSectionCourse.sectionCourseId]
+    );
+    if (Number(targetMembershipRows[0]?.c ?? 0) > 0) {
+      throw new BadRequestException('Student is already assigned to target section-course');
+    }
+
+    const createsConflict = await this.candidateCreatesConflict({
+      studentId: params.studentId,
+      candidateSectionCourseId: toSectionCourse.sectionCourseId,
+      excludeSectionCourseId: fromMembership.sectionCourseId,
+      periodId: activePeriodId,
+    });
+    if (createsConflict) {
+      throw new ConflictException(
+        'Target section-course creates schedule conflicts for this student'
+      );
+    }
+
+    const targetCurrentRows: Array<{ c: number }> = await this.sectionsRepo.manager.query(
+      `
+      SELECT COUNT(DISTINCT studentId) AS c
+      FROM section_student_courses
+      WHERE sectionCourseId = ?
+      `,
+      [toSectionCourse.sectionCourseId]
+    );
+    const currentStudents = Number(targetCurrentRows[0]?.c ?? 0);
+    const projectedStudents = currentStudents + 1;
+    const overCapacity = this.isOverCapacity({
+      initialCapacity: toSectionCourse.initialCapacity,
+      maxExtraCapacity: toSectionCourse.maxExtraCapacity,
+      projectedStudents,
+    });
+
+    if (overCapacity && !params.confirmOverCapacity) {
+      throw new ConflictException(
+        'Target section-course exceeds capacity. Confirm over-capacity to continue.'
+      );
+    }
+
+    await this.sectionsRepo.manager.transaction(async (manager) => {
+      const result: any = await manager.query(
+        `
+        UPDATE section_student_courses
+        SET
+          sectionCourseId = ?,
+          sectionId = ?,
+          courseId = ?,
+          updatedAt = NOW(6)
+        WHERE studentId = ?
+          AND sectionCourseId = ?
+        LIMIT 1
+        `,
+        [
+          toSectionCourse.sectionCourseId,
+          toSectionCourse.sectionId,
+          toSectionCourse.courseId,
+          params.studentId,
+          fromMembership.sectionCourseId,
+        ]
+      );
+      const affectedRows = Number(result?.affectedRows ?? result?.affected ?? 0);
+      if (affectedRows <= 0) {
+        throw new NotFoundException('Student membership to origin section-course was not found');
+      }
+    });
+
+    return {
+      ok: true,
+      studentId: params.studentId,
+      fromSectionCourseId: fromMembership.sectionCourseId,
+      toSectionCourseId: toSectionCourse.sectionCourseId,
+      overCapacity,
+      projectedStudents,
+    };
   }
 
   async listFacultyFilters() {
@@ -226,19 +621,38 @@ export class SectionsService {
       [activePeriodId, fg]
     );
 
-    return rows
+    const virtualRows: Array<{ hasVirtual: number }> = await this.sectionsRepo.manager.query(
+      `
+      SELECT 1 AS hasVirtual
+      FROM sections s
+      INNER JOIN section_courses sc ON sc.sectionId = s.id
+      INNER JOIN section_student_courses ssc ON ssc.sectionCourseId = sc.id
+      WHERE sc.periodId = ?
+        AND s.facultyGroup = ?
+        AND UPPER(COALESCE(s.modality, '')) LIKE '%VIRTUAL%'
+      LIMIT 1
+      `,
+      [activePeriodId, fg]
+    );
+
+    const campuses = rows
       .map((x) => String(x.campusName || '').trim())
-      .filter(Boolean)
-      .sort((a, b) => {
-        const cmp = this.campusSort(a) - this.campusSort(b);
-        return cmp !== 0 ? cmp : a.localeCompare(b);
-      });
+      .filter(Boolean);
+    if (virtualRows.length > 0) {
+      campuses.push('VIRTUAL');
+    }
+
+    return Array.from(new Set(campuses)).sort((a, b) => {
+      const cmp = this.campusSort(a) - this.campusSort(b);
+      return cmp !== 0 ? cmp : a.localeCompare(b);
+    });
   }
 
   async listCourseFilters(params: { facultyGroup: string; campusName: string }) {
     const activePeriodId = await this.periodsService.getActivePeriodIdOrThrow();
     const fg = params.facultyGroup.trim();
     const campus = params.campusName.trim();
+    const isVirtualCampus = this.isVirtualCampusFilter(campus);
     const rows: Array<{ courseName: string }> = await this.sectionsRepo.manager.query(
       `
       SELECT DISTINCT c.name AS courseName
@@ -248,10 +662,13 @@ export class SectionsService {
       INNER JOIN section_student_courses ssc ON ssc.sectionCourseId = sc.id
       WHERE sc.periodId = ?
         AND s.facultyGroup = ?
-        AND s.campusName = ?
+        AND (
+          (? = 1 AND UPPER(COALESCE(s.modality, '')) LIKE '%VIRTUAL%')
+          OR (? = 0 AND s.campusName = ?)
+        )
       ORDER BY c.name ASC
       `,
-      [activePeriodId, fg, campus]
+      [activePeriodId, fg, isVirtualCampus ? 1 : 0, isVirtualCampus ? 1 : 0, campus]
     );
     return rows
       .map((row) => String(row.courseName || '').trim())
@@ -752,6 +1169,202 @@ export class SectionsService {
     return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
   }
 
+  private async loadStudentMembershipBySectionCourseOrThrow(params: {
+    studentId: string;
+    sectionCourseId: string;
+    periodId: string;
+  }) {
+    const rows: Array<{
+      sectionCourseId: string;
+      sectionId: string;
+      courseId: string;
+      courseName: string;
+      facultyGroup: string | null;
+      campusName: string | null;
+      modality: string | null;
+      initialCapacity: number;
+      maxExtraCapacity: number;
+    }> = await this.sectionsRepo.manager.query(
+      `
+      SELECT
+        sc.id AS sectionCourseId,
+        sc.sectionId AS sectionId,
+        sc.courseId AS courseId,
+        c.name AS courseName,
+        s.facultyGroup AS facultyGroup,
+        s.campusName AS campusName,
+        s.modality AS modality,
+        s.initialCapacity AS initialCapacity,
+        s.maxExtraCapacity AS maxExtraCapacity
+      FROM section_student_courses ssc
+      INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
+      INNER JOIN courses c ON c.id = sc.courseId
+      INNER JOIN sections s ON s.id = sc.sectionId
+      WHERE ssc.studentId = ?
+        AND sc.id = ?
+        AND sc.periodId = ?
+      LIMIT 1
+      `,
+      [params.studentId, params.sectionCourseId, params.periodId]
+    );
+    const row = rows[0];
+    if (!row?.sectionCourseId) {
+      throw new BadRequestException(
+        'Student is not assigned to the provided origin section-course in active period'
+      );
+    }
+    return {
+      sectionCourseId: String(row.sectionCourseId),
+      sectionId: String(row.sectionId),
+      courseId: String(row.courseId),
+      courseName: String(row.courseName ?? ''),
+      facultyGroup: row.facultyGroup ? String(row.facultyGroup) : null,
+      campusName: row.campusName ? String(row.campusName) : null,
+      modality: row.modality ? String(row.modality) : null,
+      initialCapacity: Number(row.initialCapacity ?? 45),
+      maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
+    };
+  }
+
+  private async getSectionCourseContextOrThrow(params: {
+    sectionCourseId: string;
+    periodId: string;
+  }) {
+    const rows: Array<{
+      sectionCourseId: string;
+      sectionId: string;
+      courseId: string;
+      courseName: string;
+      facultyGroup: string | null;
+      campusName: string | null;
+      modality: string | null;
+      initialCapacity: number;
+      maxExtraCapacity: number;
+    }> = await this.sectionsRepo.manager.query(
+      `
+      SELECT
+        sc.id AS sectionCourseId,
+        sc.sectionId AS sectionId,
+        sc.courseId AS courseId,
+        c.name AS courseName,
+        s.facultyGroup AS facultyGroup,
+        s.campusName AS campusName,
+        s.modality AS modality,
+        s.initialCapacity AS initialCapacity,
+        s.maxExtraCapacity AS maxExtraCapacity
+      FROM section_courses sc
+      INNER JOIN courses c ON c.id = sc.courseId
+      INNER JOIN sections s ON s.id = sc.sectionId
+      WHERE sc.id = ?
+        AND sc.periodId = ?
+      LIMIT 1
+      `,
+      [params.sectionCourseId, params.periodId]
+    );
+    const row = rows[0];
+    if (!row?.sectionCourseId) {
+      throw new BadRequestException('Target section-course is not part of active period');
+    }
+    return {
+      sectionCourseId: String(row.sectionCourseId),
+      sectionId: String(row.sectionId),
+      courseId: String(row.courseId),
+      courseName: String(row.courseName ?? ''),
+      facultyGroup: row.facultyGroup ? String(row.facultyGroup) : null,
+      campusName: row.campusName ? String(row.campusName) : null,
+      modality: row.modality ? String(row.modality) : null,
+      initialCapacity: Number(row.initialCapacity ?? 45),
+      maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
+    };
+  }
+
+  private isSameScope(
+    a: { facultyGroup: string | null; campusName: string | null; modality: string | null },
+    b: { facultyGroup: string | null; campusName: string | null; modality: string | null }
+  ) {
+    return (
+      this.scopeKey(a.facultyGroup) === this.scopeKey(b.facultyGroup) &&
+      this.scopeKey(a.campusName) === this.scopeKey(b.campusName) &&
+      this.scopeKey(a.modality) === this.scopeKey(b.modality)
+    );
+  }
+
+  private scopeKey(value: string | null | undefined) {
+    return String(value ?? '')
+      .trim()
+      .toUpperCase();
+  }
+
+  private isOverCapacity(params: {
+    initialCapacity: number;
+    maxExtraCapacity: number;
+    projectedStudents: number;
+  }) {
+    const initialCapacity = Math.max(0, Number(params.initialCapacity ?? 0));
+    const maxExtraCapacity = Math.max(0, Number(params.maxExtraCapacity ?? 0));
+    const projectedStudents = Math.max(0, Number(params.projectedStudents ?? 0));
+
+    // Legacy behavior in this app: maxExtraCapacity=0 means no hard upper bound.
+    if (maxExtraCapacity <= 0) return false;
+    return projectedStudents > initialCapacity + maxExtraCapacity;
+  }
+
+  private async findConflictingCandidateIds(params: {
+    studentId: string;
+    excludeSectionCourseId: string;
+    candidateSectionCourseIds: string[];
+    periodId: string;
+  }) {
+    const ids = Array.from(
+      new Set(params.candidateSectionCourseIds.map((id) => String(id || '').trim()).filter(Boolean))
+    );
+    if (ids.length === 0) return new Set<string>();
+    const placeholders = ids.map(() => '?').join(', ');
+    const rows: Array<{ candidateSectionCourseId: string }> = await this.sectionsRepo.manager.query(
+      `
+      SELECT DISTINCT cand.id AS candidateSectionCourseId
+      FROM section_courses cand
+      INNER JOIN schedule_blocks cb ON cb.sectionCourseId = cand.id
+      INNER JOIN section_student_courses ssc ON ssc.studentId = ?
+      INNER JOIN section_courses other_sc
+        ON other_sc.id = ssc.sectionCourseId
+       AND other_sc.periodId = ?
+      INNER JOIN schedule_blocks ob ON ob.sectionCourseId = other_sc.id
+      WHERE cand.id IN (${placeholders})
+        AND cand.periodId = ?
+        AND other_sc.id <> ?
+        AND cb.dayOfWeek = ob.dayOfWeek
+        AND cb.startTime < ob.endTime
+        AND cb.endTime > ob.startTime
+        AND COALESCE(cb.startDate, '1000-01-01') <= COALESCE(ob.endDate, '9999-12-31')
+        AND COALESCE(ob.startDate, '1000-01-01') <= COALESCE(cb.endDate, '9999-12-31')
+      `,
+      [
+        params.studentId,
+        params.periodId,
+        ...ids,
+        params.periodId,
+        params.excludeSectionCourseId,
+      ]
+    );
+    return new Set(rows.map((row) => String(row.candidateSectionCourseId)));
+  }
+
+  private async candidateCreatesConflict(params: {
+    studentId: string;
+    candidateSectionCourseId: string;
+    excludeSectionCourseId: string;
+    periodId: string;
+  }) {
+    const ids = await this.findConflictingCandidateIds({
+      studentId: params.studentId,
+      excludeSectionCourseId: params.excludeSectionCourseId,
+      candidateSectionCourseIds: [params.candidateSectionCourseId],
+      periodId: params.periodId,
+    });
+    return ids.has(params.candidateSectionCourseId);
+  }
+
   private async loadCourseLookup() {
     const rows: Array<{ id: string; name: string }> = await this.sectionsRepo.manager.query(
       `
@@ -823,7 +1436,12 @@ export class SectionsService {
     if (n.includes('CHINCHA')) return 0;
     if (n.includes('ICA')) return 1;
     if (n.includes('HUAURA') || n.includes('HUACHO')) return 2;
+    if (n.includes('VIRTUAL')) return 3;
     return 10;
+  }
+
+  private isVirtualCampusFilter(campusName: string) {
+    return this.norm(campusName).includes('VIRTUAL');
   }
 
   private norm(value: string) {
@@ -870,5 +1488,23 @@ export class SectionsService {
       apellidoMaterno: tokens[1] ?? '',
       nombres: tokens.slice(2).join(' '),
     };
+  }
+
+  private toIsoDateOnly(value: unknown): string | null {
+    if (!value) return null;
+    if (typeof value === 'string') {
+      const text = value.trim();
+      if (!text) return null;
+      const directDate = text.match(/^(\d{4}-\d{2}-\d{2})/);
+      if (directDate) return directDate[1];
+      const parsed = new Date(text);
+      if (Number.isNaN(parsed.getTime())) return null;
+      return parsed.toISOString().slice(0, 10);
+    }
+    if (value instanceof Date) {
+      if (Number.isNaN(value.getTime())) return null;
+      return value.toISOString().slice(0, 10);
+    }
+    return null;
   }
 }

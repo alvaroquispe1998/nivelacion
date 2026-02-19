@@ -104,13 +104,26 @@ interface TeacherRecordRow {
             Alumnos: {{ students.length }} | Fechas: {{ weekDates.length }}
           </div>
         </div>
-        <button
-          class="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
-          (click)="saveAll()"
-          [disabled]="saving || !selectedBlock || students.length===0 || weekDates.length===0"
-        >
-          {{ saving ? 'Guardando...' : 'Guardar asistencia' }}
-        </button>
+        <div class="flex items-center gap-2">
+          <select
+            class="rounded-lg border border-slate-200 px-2 py-2 text-xs"
+            [(ngModel)]="selectedSaveDate"
+            [disabled]="weekDates.length===0"
+          >
+            <option value="">Seleccionar fecha</option>
+            <option [value]="allDatesOption">Todas las fechas</option>
+            <option *ngFor="let d of weekDates; trackBy: trackText" [value]="d">
+              {{ d }}
+            </option>
+          </select>
+          <button
+            class="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+            (click)="saveAll()"
+            [disabled]="saving || !selectedBlock || students.length===0 || weekDates.length===0 || !selectedSaveDate"
+          >
+            {{ saving ? 'Guardando...' : 'Guardar asistencia' }}
+          </button>
+        </div>
       </div>
 
       <div class="overflow-x-auto">
@@ -120,7 +133,7 @@ interface TeacherRecordRow {
               <th class="sticky left-0 z-10 border-r border-slate-200 bg-slate-50 px-4 py-3">
                 Alumno
               </th>
-              <th class="border-r border-slate-200 bg-slate-50 px-3 py-3">DNI</th>
+              <th class="border-r border-slate-200 bg-slate-50 px-3 py-3">Codigo</th>
               <th
                 *ngFor="let d of weekDates; trackBy: trackText"
                 class="min-w-[160px] border-r border-slate-200 px-3 py-3 text-center"
@@ -138,7 +151,7 @@ interface TeacherRecordRow {
                 {{ s.fullName }}
               </td>
               <td class="border-r border-slate-200 bg-white px-3 py-3 text-slate-600">
-                {{ s.dni }}
+                {{ studentCode(s.codigoAlumno) }}
               </td>
               <td
                 *ngFor="let d of weekDates; trackBy: trackText"
@@ -188,12 +201,14 @@ export class TeacherSectionAttendancePage {
   students: TeacherStudentRow[] = [];
 
   selectedBlockId = '';
+  selectedSaveDate = '';
   weekDates: string[] = [];
   statusMatrix: Record<string, Record<string, AttendanceStatus>> = {};
   sessionsByDate = new Map<string, TeacherSession>();
 
   error: string | null = null;
   saving = false;
+  readonly allDatesOption = '__ALL__';
 
   get selectedBlock() {
     return this.blocks.find((b) => b.id === this.selectedBlockId) ?? null;
@@ -227,6 +242,11 @@ export class TeacherSectionAttendancePage {
     return item.id;
   }
 
+  studentCode(code: string | null | undefined) {
+    const value = String(code ?? '').trim();
+    return value || 'SIN CODIGO';
+  }
+
   dayLabel(dow: number) {
     return this.days.find((d) => d.dayOfWeek === dow)?.label ?? String(dow);
   }
@@ -247,6 +267,7 @@ export class TeacherSectionAttendancePage {
   async loadAll() {
     this.error = null;
     this.selectedBlockId = '';
+    this.selectedSaveDate = '';
     this.weekDates = [];
     this.statusMatrix = {};
     this.sessionsByDate.clear();
@@ -296,6 +317,7 @@ export class TeacherSectionAttendancePage {
 
   async onBlockChange() {
     this.error = null;
+    this.selectedSaveDate = '';
     this.weekDates = [];
     this.statusMatrix = {};
     this.sessionsByDate.clear();
@@ -312,6 +334,7 @@ export class TeacherSectionAttendancePage {
       .sort((a, b) => a.sessionDate.localeCompare(b.sessionDate));
 
     this.weekDates = this.computeWeekDates(block, blockSessions);
+    this.selectedSaveDate = this.weekDates[0] ?? '';
     for (const session of blockSessions) {
       this.sessionsByDate.set(session.sessionDate, session);
     }
@@ -353,11 +376,18 @@ export class TeacherSectionAttendancePage {
     const block = this.selectedBlock;
     if (!block) return;
     if (this.students.length === 0 || this.weekDates.length === 0) return;
+    const datesToSave =
+      this.selectedSaveDate === this.allDatesOption
+        ? this.weekDates
+        : this.selectedSaveDate
+          ? [this.selectedSaveDate]
+          : [];
+    if (datesToSave.length === 0) return;
 
     this.saving = true;
     this.error = null;
     try {
-      for (const date of this.weekDates) {
+      for (const date of datesToSave) {
         let session = this.sessionsByDate.get(date);
         if (!session) {
           const created = await firstValueFrom(
