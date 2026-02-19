@@ -43,7 +43,7 @@ services:
       NODE_ENV: development
       PNPM_STORE_DIR: /pnpm-store
       COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
-      NX_DAEMON: "true"
+      NX_DAEMON: "false"
       NX_SKIP_NX_CACHE: "true"
       CHOKIDAR_USEPOLLING: "true"
       WATCHPACK_POLLING: "true"
@@ -58,7 +58,6 @@ services:
       AKADEMIC_MODE: mock
     volumes:
       - ./:/workspace
-      - nx_api:/workspace/.nx
       - node_modules:/workspace/node_modules
       - pnpm_store:/pnpm-store
     ports:
@@ -69,7 +68,7 @@ services:
       deps:
         condition: service_completed_successfully
     # NOTE: @nx/js:node uses --port/--host for the Node inspector; passing 3000 conflicts with Nest listen port.
-    command: bash -lc "pnpm nx serve api --configuration=development --skip-nx-cache"
+    command: bash -lc "pnpm nx reset && pnpm nx serve api --configuration=development --skip-nx-cache"
 
   web:
     build:
@@ -108,7 +107,6 @@ services:
 
 volumes:
   mysql_data:
-  nx_api:
   nx_deps:
   nx_web:
   node_modules:

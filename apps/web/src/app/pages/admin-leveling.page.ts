@@ -494,7 +494,7 @@ const PREFERRED_COURSE_ORDER = [
                 <td class="px-4 py-3">{{ row.section.campusName }}</td>
                 <td class="px-4 py-3">{{ row.section.modality }}</td>
                 <td class="px-4 py-3 text-xs text-slate-600">
-                  {{ (sectionCourseFilter !== 'ALL' ? [sectionCourseFilter] : (row.section.courses ?? [])).join(', ') || '-' }}
+                  {{ (sectionCourseFilter !== 'ALL' ? [sectionCourseFilter] : row.section.courses).join(', ') || '-' }}
                 </td>
               </tr>
               <tr *ngIf="filteredSectionRows.length === 0" class="border-t border-slate-100">

@@ -538,8 +538,12 @@ export class AdminSidebarComponent implements OnInit {
       disable('/admin/sections');
     }
 
-    // Step 3: Matricula requires run.status == 'MATRICULATED'
-    if (!s.activePeriod || !s.run || s.run.status !== 'MATRICULATED') {
+    // Step 3: Matricula requires run.status == 'MATRICULATED' OR partial assignment
+    // We allow access if status is MATRICULATED OR if there are already assigned students (partial run)
+    const hasAssignments = s.metrics?.assigned > 0;
+    const isMatriculated = s.run?.status === 'MATRICULATED';
+
+    if (!s.activePeriod || !s.run || (!isMatriculated && !hasAssignments)) {
       disable('/admin/matricula');
     }
 
