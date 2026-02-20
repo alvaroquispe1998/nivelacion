@@ -34,6 +34,7 @@ import { SeedDefaultAdmin019Migration1762700000000 } from './migrations/019-seed
 import { RemoveLegacyDemoAdmin020Migration1762800000000 } from './migrations/020-remove-legacy-demo-admin.migration';
 import { PeriodKindSpanishValues021Migration1762900000000 } from './migrations/021-period-kind-spanish-values.migration';
 import { LevelingRunsAndStaging022Migration1763000000000 } from './migrations/022-leveling-runs-and-staging.migration';
+import { LevelingRunSectionCourseCapacities023Migration1763100000000 } from './migrations/023-leveling-run-section-course-capacities.migration';
 
 export const TYPEORM_ENTITIES = [
   UserEntity,
@@ -71,6 +72,7 @@ export const TYPEORM_MIGRATIONS = [
   RemoveLegacyDemoAdmin020Migration1762800000000,
   PeriodKindSpanishValues021Migration1762900000000,
   LevelingRunsAndStaging022Migration1763000000000,
+  LevelingRunSectionCourseCapacities023Migration1763100000000,
 ];
 
 export function createDataSourceOptionsFromEnv(): DataSourceOptions {

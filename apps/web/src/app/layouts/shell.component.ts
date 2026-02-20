@@ -198,6 +198,20 @@ interface PeriodView {
 
               <!-- Nav -->
               <nav class="flex items-center gap-1">
+                <a
+                  href="https://aulavirtual2.autonomadeica.edu.pe/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors"
+                >
+                  <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 6.75h15m-15 5.25h15m-15 5.25h9" />
+                  </svg>
+                  Aula Virtual
+                </a>
+
+                <div class="h-5 w-px bg-slate-200 mx-1"></div>
+
                 <!-- ALUMNO links -->
                 <ng-container *ngIf="u.role === Role.ALUMNO">
                   <a

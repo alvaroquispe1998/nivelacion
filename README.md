@@ -89,17 +89,31 @@ docker compose -f docker-compose.dev.yml exec -T api pnpm nx run api:migrate
 
 ### Local (sin Docker)
 
-1. Configura variables DB en tu entorno:
+1. Asegurate de estar en la raiz del workspace Nx:
+
+```powershell
+cd D:\SPIDER-DEV\UAI\nivelacion
+```
+
+2. Configura variables DB en tu entorno:
    - `DB_HOST`
    - `DB_PORT`
    - `DB_USER`
    - `DB_PASS`
    - `DB_NAME`
-2. Ejecuta:
+3. Ejecuta:
 
 ```sh
 npx nx run api:migrate
 ```
+
+Ejemplo completo en PowerShell:
+
+```powershell
+cd D:\SPIDER-DEV\UAI\nivelacion; $env:DB_HOST="127.0.0.1"; $env:DB_PORT="3306"; $env:DB_USER="uai"; $env:DB_PASS="uai_pass"; $env:DB_NAME="uai"; npx nx run api:migrate
+```
+
+Si ves `The current directory isn't part of an Nx workspace`, ejecutaste el comando fuera de la carpeta del proyecto.
 
 ## URLs (host)
 

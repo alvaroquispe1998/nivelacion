@@ -1110,7 +1110,7 @@ export class SectionsService {
       sex: string | null;
       fullName: string;
       dni: string;
-      teacherName: string;
+      teacherDni: string | null;
       courseId: string;
       courseAkademicId: string | null;
       courseName: string;
@@ -1127,7 +1127,7 @@ export class SectionsService {
         st.sex AS sex,
         st.fullName AS fullName,
         st.dni AS dni,
-        t.fullName AS teacherName,
+        t.dni AS teacherDni,
         c.id AS courseId,
         c.idakademic AS courseAkademicId,
         c.name AS courseName,
@@ -1166,10 +1166,10 @@ export class SectionsService {
           : parts.apellidoMaterno,
         DNI: String(row.dni ?? ''),
         Sexo: row.sex ? String(row.sex) : '',
-        Docente: String(row.teacherName ?? ''),
-        'Id Curso': row.courseAkademicId ? String(row.courseAkademicId) : String(row.courseId),
+        Docente: row.teacherDni ? String(row.teacherDni) : '',
+        'Id Curso': '',
         'Nombre Curso': String(row.courseName ?? ''),
-        'Codigo Curso': String(row.courseId ?? ''),
+        'Codigo Curso': row.courseAkademicId ? String(row.courseAkademicId) : '',
         'Codigo Seccion': row.sectionCode ? String(row.sectionCode) : '',
         'Periodo Academico': String(row.periodCode ?? ''),
       };

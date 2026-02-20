@@ -13,6 +13,23 @@ interface ActiveRunSummary {
   run: { id: string; status: string } | null;
 }
 
+interface AssignmentRow {
+  sectionCourseId: string;
+  sectionId: string;
+  sectionCode: string | null;
+  sectionName: string;
+  facultyGroup: string | null;
+  campusName: string | null;
+  modality: string | null;
+  scopeLabel: string;
+  courseName: string;
+  teacherName: string | null;
+  initialCapacity: number;
+  maxExtraCapacity: number;
+  assignedCount: number;
+  students: Array<{ studentId: string; studentCode?: string | null; studentName: string }>;
+}
+
 @Component({
   standalone: true,
   imports: [CommonModule, FormsModule],
@@ -78,7 +95,7 @@ interface ActiveRunSummary {
         <button
           class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
           [disabled]="!canGenerate || generating"
-          (click)="generateMatriculation()"
+          (click)="openGenerateConfirm()"
         >
           {{ generating ? 'Generando...' : 'Generar matricula' }}
         </button>
@@ -140,36 +157,45 @@ interface ActiveRunSummary {
       </div>
 
       <div class="rounded-2xl border border-slate-200 bg-white p-4">
-        <div class="text-sm font-semibold">Ver detalle por seccion ({{ preview.sections.length }})</div>
-        <div class="mt-3 overflow-x-auto">
-          <table class="min-w-full text-sm">
-            <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600">
-              <tr>
-                <th class="px-4 py-3">Codigo</th>
-                <th class="px-4 py-3">Facultad</th>
-                <th class="px-4 py-3">Sede</th>
-                <th class="px-4 py-3">Modalidad</th>
-                <th class="px-4 py-3">Cursos</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr *ngFor="let section of preview.sections; trackBy: trackSection" class="border-t border-slate-100">
-                <td class="px-4 py-3 font-semibold">{{ section.sectionCode || section.sectionName }}</td>
-                <td class="px-4 py-3">
-                  <div>{{ section.facultyGroup || '-' }}</div>
-                  <div class="text-xs text-slate-600">{{ section.facultyName || '-' }}</div>
-                </td>
-                <td class="px-4 py-3">{{ section.campusName || '-' }}</td>
-                <td class="px-4 py-3">{{ section.modality || '-' }}</td>
-                <td class="px-4 py-3 text-xs text-slate-600">{{ sectionCoursesLabel(section) }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
+        <div class="text-sm font-semibold">Asignacion por seccion-curso ({{ filteredAssignmentRows.length }})</div>
+        <div class="mt-3 grid gap-3 lg:grid-cols-3">
+          <label class="text-xs text-slate-700">
+            Facultad
+            <select
+              class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm"
+              [(ngModel)]="assignmentFilterFaculty"
+              [ngModelOptions]="{ standalone: true }"
+            >
+              <option value="">Todas</option>
+              <option *ngFor="let item of assignmentFacultyOptions" [value]="item">{{ item }}</option>
+            </select>
+          </label>
 
-      <div class="rounded-2xl border border-slate-200 bg-white p-4">
-        <div class="text-sm font-semibold">Asignacion por seccion-curso</div>
+          <label class="text-xs text-slate-700">
+            Sede - Modalidad
+            <select
+              class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm"
+              [(ngModel)]="assignmentFilterScope"
+              [ngModelOptions]="{ standalone: true }"
+            >
+              <option value="">Todas</option>
+              <option *ngFor="let item of assignmentScopeOptions" [value]="item">{{ item }}</option>
+            </select>
+          </label>
+
+          <label class="text-xs text-slate-700">
+            Curso
+            <select
+              class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm"
+              [(ngModel)]="assignmentFilterCourse"
+              [ngModelOptions]="{ standalone: true }"
+            >
+              <option value="">Todos</option>
+              <option *ngFor="let item of assignmentCourseOptions" [value]="item">{{ item }}</option>
+            </select>
+          </label>
+        </div>
+
         <div class="mt-3 overflow-x-auto">
           <table class="min-w-full text-sm">
             <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600">
@@ -183,23 +209,26 @@ interface ActiveRunSummary {
               </tr>
             </thead>
             <tbody>
-              <ng-container *ngFor="let section of preview.sections; trackBy: trackSection">
-                <tr *ngFor="let sc of section.sectionCourses; trackBy: trackSectionCourse" class="border-t border-slate-100">
-                  <td class="px-4 py-3 font-medium">{{ section.sectionCode || section.sectionName }}</td>
-                  <td class="px-4 py-3">{{ sc.courseName }}</td>
-                  <td class="px-4 py-3 text-xs">{{ sc.teacherName || '-' }}</td>
-                  <td class="px-4 py-3 text-xs">{{ sc.initialCapacity }} + {{ sc.maxExtraCapacity }}</td>
-                  <td class="px-4 py-3 font-semibold">{{ sc.assignedCount }}</td>
-                  <td class="px-4 py-3">
-                    <button
-                      class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
-                      (click)="openStudentsModal(section.sectionCode || section.sectionName, sc.courseName, sc.students)"
-                    >
-                      Ver alumnos ({{ sc.students.length }})
-                    </button>
-                  </td>
-                </tr>
-              </ng-container>
+              <tr *ngFor="let row of filteredAssignmentRows; trackBy: trackAssignmentRow" class="border-t border-slate-100">
+                <td class="px-4 py-3 font-medium">{{ row.sectionCode || row.sectionName }}</td>
+                <td class="px-4 py-3">{{ row.courseName }}</td>
+                <td class="px-4 py-3 text-xs">{{ row.teacherName || '-' }}</td>
+                <td class="px-4 py-3 text-xs">{{ sectionCourseCapacityLabel(row) }}</td>
+                <td class="px-4 py-3 font-semibold">{{ row.assignedCount }}</td>
+                <td class="px-4 py-3">
+                  <button
+                    class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
+                    (click)="openStudentsModal(row.sectionCode || row.sectionName, row.courseName, row.students)"
+                  >
+                    Ver alumnos ({{ row.students.length }})
+                  </button>
+                </td>
+              </tr>
+              <tr *ngIf="filteredAssignmentRows.length === 0" class="border-t border-slate-100">
+                <td class="px-4 py-4 text-sm text-slate-500" colspan="6">
+                  Sin resultados para los filtros seleccionados.
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -224,6 +253,59 @@ interface ActiveRunSummary {
               </tr>
             </tbody>
           </table>
+        </div>
+      </div>
+    </div>
+
+    <div
+      *ngIf="generateConfirmOpen"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+    >
+      <div class="w-full max-w-xl rounded-2xl border border-slate-200 bg-white shadow-2xl">
+        <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+          <div class="flex items-start gap-3">
+            <span
+              class="mt-0.5 inline-flex h-8 w-8 items-center justify-center rounded-full bg-slate-900 text-sm font-bold text-white"
+            >
+              !
+            </span>
+            <div>
+              <div class="text-base font-semibold text-slate-900">Confirmar generacion de matricula</div>
+              <div class="text-xs text-slate-500">Facultad: {{ selectedFaculty || '-' }}</div>
+            </div>
+          </div>
+          <button
+            type="button"
+            class="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            [disabled]="generating"
+            (click)="closeGenerateConfirm()"
+          >
+            Cerrar
+          </button>
+        </div>
+
+        <div class="px-5 py-4 text-sm text-slate-700">
+          Se ejecutara la matricula automatica para <b>{{ selectedFaculty }}</b>.
+          Esta accion reemplaza la matricula previa de esta facultad en la corrida activa.
+        </div>
+
+        <div class="flex items-center justify-end gap-2 px-5 pb-5">
+          <button
+            type="button"
+            class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            [disabled]="generating"
+            (click)="closeGenerateConfirm()"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+            [disabled]="generating"
+            (click)="confirmGenerateMatriculation()"
+          >
+            {{ generating ? 'Generando...' : 'Confirmar y generar' }}
+          </button>
         </div>
       </div>
     </div>
@@ -277,6 +359,10 @@ export class AdminMatriculaPage {
 
   preview: LevelingMatriculationPreviewResponse | null = null;
   selectedFaculty = '';
+  assignmentFilterFaculty = '';
+  assignmentFilterScope = '';
+  assignmentFilterCourse = '';
+  generateConfirmOpen = false;
 
   studentsModalOpen = false;
   studentsModalTitle = '';
@@ -301,15 +387,95 @@ export class AdminMatriculaPage {
     );
   }
 
+  get assignmentRows(): AssignmentRow[] {
+    if (!this.preview) return [];
+    const rows: AssignmentRow[] = [];
+    for (const section of this.preview.sections ?? []) {
+      for (const course of section.sectionCourses ?? []) {
+        rows.push({
+          sectionCourseId: String(course.sectionCourseId),
+          sectionId: String(section.sectionId),
+          sectionCode: section.sectionCode ? String(section.sectionCode) : null,
+          sectionName: String(section.sectionName ?? ''),
+          facultyGroup: section.facultyGroup ? String(section.facultyGroup) : null,
+          campusName: section.campusName ? String(section.campusName) : null,
+          modality: section.modality ? String(section.modality) : null,
+          scopeLabel: `${section.campusName || '-'} - ${section.modality || '-'}`,
+          courseName: String(course.courseName ?? ''),
+          teacherName: course.teacherName ? String(course.teacherName) : null,
+          initialCapacity: Number(course.initialCapacity ?? 0),
+          maxExtraCapacity: Number(course.maxExtraCapacity ?? 0),
+          assignedCount: Number(course.assignedCount ?? 0),
+          students: (course.students ?? []).map((student) => ({
+            studentId: String(student.studentId),
+            studentCode: student.studentCode ? String(student.studentCode) : null,
+            studentName: String(student.studentName ?? ''),
+          })),
+        });
+      }
+    }
+    return rows;
+  }
+
+  get assignmentFacultyOptions() {
+    return Array.from(
+      new Set(
+        this.assignmentRows
+          .map((row) => String(row.facultyGroup ?? '').trim())
+          .filter((value) => value.length > 0)
+      )
+    ).sort((a, b) => this.scopeKey(a).localeCompare(this.scopeKey(b)));
+  }
+
+  get assignmentScopeOptions() {
+    return Array.from(
+      new Set(
+        this.assignmentRows
+          .map((row) => String(row.scopeLabel ?? '').trim())
+          .filter((value) => value.length > 0)
+      )
+    ).sort((a, b) => this.scopeKey(a).localeCompare(this.scopeKey(b)));
+  }
+
+  get assignmentCourseOptions() {
+    return Array.from(
+      new Set(
+        this.assignmentRows
+          .map((row) => String(row.courseName ?? '').trim())
+          .filter((value) => value.length > 0)
+      )
+    ).sort((a, b) => this.scopeKey(a).localeCompare(this.scopeKey(b)));
+  }
+
+  get filteredAssignmentRows() {
+    return this.assignmentRows.filter((row) => {
+      if (
+        this.assignmentFilterFaculty &&
+        this.scopeKey(row.facultyGroup) !== this.scopeKey(this.assignmentFilterFaculty)
+      ) {
+        return false;
+      }
+      if (
+        this.assignmentFilterScope &&
+        this.scopeKey(row.scopeLabel) !== this.scopeKey(this.assignmentFilterScope)
+      ) {
+        return false;
+      }
+      if (
+        this.assignmentFilterCourse &&
+        this.scopeKey(row.courseName) !== this.scopeKey(this.assignmentFilterCourse)
+      ) {
+        return false;
+      }
+      return true;
+    });
+  }
+
   async ngOnInit() {
     await this.loadContext();
   }
 
-  trackSection(_: number, row: { sectionId: string }) {
-    return row.sectionId;
-  }
-
-  trackSectionCourse(_: number, row: { sectionCourseId: string }) {
+  trackAssignmentRow(_: number, row: AssignmentRow) {
     return row.sectionCourseId;
   }
 
@@ -335,10 +501,33 @@ export class AdminMatriculaPage {
     return labels[Number(dayOfWeek) || 0] ?? String(dayOfWeek);
   }
 
-  sectionCoursesLabel(section: {
-    sectionCourses: Array<{ courseName: string }>;
+  sectionCourseCapacityLabel(sectionCourse: {
+    modality?: string | null;
+    initialCapacity: number;
+    maxExtraCapacity: number;
+    assignedCount: number;
   }) {
-    return section.sectionCourses.map((sc) => sc.courseName).join(', ') || '-';
+    const modality = String(sectionCourse.modality ?? '').toUpperCase();
+    if (modality.includes('VIRTUAL')) {
+      return 'Sin aforo (virtual)';
+    }
+    const initial = Math.max(0, Number(sectionCourse.initialCapacity ?? 0));
+    const extra = Math.max(0, Number(sectionCourse.maxExtraCapacity ?? 0));
+    const assigned = Math.max(0, Number(sectionCourse.assignedCount ?? 0));
+    const total = initial + extra;
+    if (total <= 0) return 'Sin limite';
+    const available = Math.max(0, total - assigned);
+    return `${total} (disp. ${available})`;
+  }
+
+  private scopeKey(value: string | null | undefined) {
+    return String(value ?? '').trim().toUpperCase();
+  }
+
+  private resetAssignmentFilters() {
+    this.assignmentFilterFaculty = this.selectedFaculty || '';
+    this.assignmentFilterScope = '';
+    this.assignmentFilterCourse = '';
   }
 
   runStatusLabel(status: string | null | undefined) {
@@ -393,6 +582,7 @@ export class AdminMatriculaPage {
     } else {
       this.selectedFaculty = '';
     }
+    this.resetAssignmentFilters();
   }
 
   async previewMatriculation() {
@@ -407,6 +597,7 @@ export class AdminMatriculaPage {
           { params }
         )
       );
+      this.resetAssignmentFilters();
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo previsualizar la matricula';
     } finally {
@@ -417,10 +608,6 @@ export class AdminMatriculaPage {
 
   async generateMatriculation() {
     if (!this.canGenerate || !this.runId || !this.selectedFaculty) return;
-    const ok = window.confirm(
-      `Se ejecutara la matricula automatica para ${this.selectedFaculty}. Continuar?`
-    );
-    if (!ok) return;
 
     this.generating = true;
     this.error = null;
@@ -439,6 +626,22 @@ export class AdminMatriculaPage {
       this.generating = false;
       this.cdr.detectChanges();
     }
+  }
+
+  openGenerateConfirm() {
+    if (!this.canGenerate || !this.selectedFaculty) return;
+    this.generateConfirmOpen = true;
+  }
+
+  closeGenerateConfirm() {
+    if (this.generating) return;
+    this.generateConfirmOpen = false;
+  }
+
+  async confirmGenerateMatriculation() {
+    if (!this.generateConfirmOpen) return;
+    this.generateConfirmOpen = false;
+    await this.generateMatriculation();
   }
 
   openStudentsModal(

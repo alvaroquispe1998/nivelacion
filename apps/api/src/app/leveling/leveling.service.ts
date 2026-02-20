@@ -915,6 +915,35 @@ export class LevelingService {
       }
 
       const targetFaculty = facultyGroup ? String(facultyGroup).trim() : null;
+      const hasPlannedCapacityTable = await this.tableExists(
+        manager,
+        'leveling_run_section_course_capacities'
+      );
+      const capacityInitialExpr = hasPlannedCapacityTable
+        ? `
+          CASE
+            WHEN UPPER(COALESCE(s.modality, '')) LIKE '%VIRTUAL%' THEN s.initialCapacity
+            WHEN lrscc.plannedCapacity IS NOT NULL THEN lrscc.plannedCapacity
+            ELSE s.initialCapacity
+          END
+        `
+        : `s.initialCapacity`;
+      const capacityExtraExpr = hasPlannedCapacityTable
+        ? `
+          CASE
+            WHEN UPPER(COALESCE(s.modality, '')) LIKE '%VIRTUAL%' THEN s.maxExtraCapacity
+            WHEN lrscc.plannedCapacity IS NOT NULL THEN 0
+            ELSE s.maxExtraCapacity
+          END
+        `
+        : `s.maxExtraCapacity`;
+      const plannedCapacityJoin = hasPlannedCapacityTable
+        ? `
+        LEFT JOIN leveling_run_section_course_capacities lrscc
+          ON lrscc.runId = ?
+         AND lrscc.sectionCourseId = sc.id
+        `
+        : '';
 
       const sectionCourseRows: Array<{
         sectionCourseId: string;
@@ -941,8 +970,8 @@ export class LevelingService {
           s.facultyGroup AS facultyGroup,
           s.campusName AS campusName,
           s.modality AS modality,
-          s.initialCapacity AS initialCapacity,
-          s.maxExtraCapacity AS maxExtraCapacity,
+          ${capacityInitialExpr} AS initialCapacity,
+          ${capacityExtraExpr} AS maxExtraCapacity,
           CASE
             WHEN s.teacherId IS NOT NULL THEN 1
             WHEN EXISTS (
@@ -956,6 +985,7 @@ export class LevelingService {
         FROM section_courses sc
         INNER JOIN sections s ON s.id = sc.sectionId
         INNER JOIN courses c ON c.id = sc.courseId
+        ${plannedCapacityJoin}
         WHERE s.levelingRunId = ?
           AND sc.periodId = ?
           ${targetFaculty ? 'AND s.facultyGroup = ?' : ''}
@@ -964,7 +994,12 @@ export class LevelingService {
           s.name ASC,
           c.name ASC
         `,
-        [run.id, run.periodId, ...(targetFaculty ? [targetFaculty] : [])]
+        [
+          ...(hasPlannedCapacityTable ? [run.id] : []),
+          run.id,
+          run.periodId,
+          ...(targetFaculty ? [targetFaculty] : []),
+        ]
       );
       if (sectionCourseRows.length === 0) {
         throw new BadRequestException(
@@ -1106,16 +1141,33 @@ export class LevelingService {
       }
 
       const demandWithCandidates = demands.map((demand) => {
-        const sameScope = (candidatesByCourse.get(String(demand.courseId)) ?? []).filter(
+        const allCourseCandidates = candidatesByCourse.get(String(demand.courseId)) ?? [];
+        const sameFaculty = allCourseCandidates.filter(
           (candidate) =>
-            this.scopeKey(candidate.facultyGroup) === this.scopeKey(demand.facultyGroup) &&
+            this.scopeKey(candidate.facultyGroup) === this.scopeKey(demand.facultyGroup)
+        );
+        const sameScope = sameFaculty.filter(
+          (candidate) =>
             this.scopeKey(candidate.campusName) === this.scopeKey(demand.campusName)
         );
-        const allCourseCandidates = candidatesByCourse.get(String(demand.courseId)) ?? [];
-        const candidates = sameScope.length > 0 ? sameScope : allCourseCandidates;
+        const virtualFacultyFallback = sameFaculty.filter((candidate) =>
+          this.isVirtualModality(candidate.modality)
+        );
+
+        // Keep same-scope candidates first, but always allow virtual sections in the
+        // same faculty as fallback (virtual has no hard cap by design).
+        const prioritized =
+          sameScope.length > 0
+            ? [...sameScope, ...virtualFacultyFallback]
+            : allCourseCandidates;
+        const dedup = new Map<string, Candidate>();
+        for (const candidate of prioritized) {
+          dedup.set(candidate.sectionCourseId, candidate);
+        }
+
         return {
           ...demand,
-          candidates,
+          candidates: [...dedup.values()],
         };
       });
 
@@ -1133,8 +1185,6 @@ export class LevelingService {
       });
 
       const assignedBlocksByStudent = new Map<string, ScheduleBlockWindow[]>();
-      // Tracks the modality locked for each student after their first assignment
-      const modalityByStudent = new Map<string, string>();
       const rowsToInsert: Array<{
         id: string;
         sectionCourseId: string;
@@ -1176,37 +1226,17 @@ export class LevelingService {
         }
 
         const studentId = String(demand.studentId);
-        const lockedModality = modalityByStudent.get(studentId) ?? null;
         const studentBlocks = getStudentBlocks(studentId);
 
-        // Filter candidates: capacity OK + no schedule conflict + modality lock
+        // Filter candidates: capacity OK + no schedule conflict
         const available = demand.candidates.filter((candidate) => {
           if (this.isCapacityBlocked(candidate)) return false;
           if (this.hasScheduleOverlap(studentBlocks, candidate.blocks)) return false;
-          // Modality lock: once a student has an assigned modality, only match it
-          if (lockedModality !== null && candidate.modality !== null) {
-            const isPresencial = (m: string) => m.includes('PRESENCIAL');
-            const isVirtual = (m: string) => m.includes('VIRTUAL');
-            const lockedIsPresencial = isPresencial(lockedModality);
-            const lockedIsVirtual = isVirtual(lockedModality);
-            const candidateIsPresencial = isPresencial(candidate.modality);
-            const candidateIsVirtual = isVirtual(candidate.modality);
-            // Block mixing: if student is presencial, skip virtual candidates and vice-versa
-            if (lockedIsPresencial && candidateIsVirtual) return false;
-            if (lockedIsVirtual && candidateIsPresencial) return false;
-          }
           return true;
         });
 
         if (available.length === 0) {
-          // Determine the best reason for non-assignment
-          const candidatesIgnoringModality = demand.candidates.filter((candidate) => {
-            if (this.isCapacityBlocked(candidate)) return false;
-            return !this.hasScheduleOverlap(studentBlocks, candidate.blocks);
-          });
-          const blockedByModality = lockedModality !== null && candidatesIgnoringModality.length > 0;
           const blockedByCapacity =
-            !blockedByModality &&
             demand.candidates.every((candidate) => this.isCapacityBlocked(candidate)) &&
             demand.candidates.length > 0;
           unassigned.push({
@@ -1217,27 +1247,14 @@ export class LevelingService {
             courseName: String(demand.courseName ?? ''),
             facultyGroup: demand.facultyGroup ? String(demand.facultyGroup) : null,
             campusName: demand.campusName ? String(demand.campusName) : null,
-            reason: blockedByModality
-              ? `Alumno bloqueado en modalidad ${lockedModality} y no hay secciones de ese tipo disponibles`
-              : blockedByCapacity
-                ? 'No hay capacidad disponible en las secciones-curso candidatas'
-                : 'Cruce de horario con cursos ya asignados',
+            reason: blockedByCapacity
+              ? 'No hay capacidad disponible en las secciones-curso candidatas'
+              : 'Cruce de horario con cursos ya asignados',
           });
           continue;
         }
 
-        // Fill-first: prioritize sections with HIGHEST occupancy ratio (fill one before moving to next)
-        available.sort((a, b) => {
-          const ratioA = this.capacityRatio(a);
-          const ratioB = this.capacityRatio(b);
-          // Higher ratio = more occupied = fill it first
-          if (Math.abs(ratioA - ratioB) > 0.001) return ratioB - ratioA;
-          // Tie-break: section code alphabetically (deterministic order)
-          const codeA = this.scopeKey(a.sectionCode ?? a.sectionName);
-          const codeB = this.scopeKey(b.sectionCode ?? b.sectionName);
-          if (codeA !== codeB) return codeA.localeCompare(codeB);
-          return this.scopeKey(a.courseName).localeCompare(this.scopeKey(b.courseName));
-        });
+        this.sortCandidatesForAssignment(available);
         const selected = available[0];
 
         rowsToInsert.push({
@@ -1250,10 +1267,6 @@ export class LevelingService {
         selected.assignedCount += 1;
         studentBlocks.push(...selected.blocks);
 
-        // Lock modality for this student after first assignment
-        if (selected.modality !== null && !modalityByStudent.has(studentId)) {
-          modalityByStudent.set(studentId, selected.modality);
-        }
       }
 
       await this.bulkInsertSectionStudentCoursesIgnore(manager, rowsToInsert);
@@ -3003,6 +3016,45 @@ export class LevelingService {
       for (const row of sectionCourseRows) {
         sectionCourseIdByKey.set(`${row.sectionId}:${row.courseId}`, row.id);
       }
+
+      const runSectionCourseCapacityById = new Map<
+        string,
+        { id: string; runId: string; sectionCourseId: string; plannedCapacity: number }
+      >();
+      for (const sec of params.sections) {
+        const section = sectionByCode.get(sec.code);
+        if (!section) continue;
+        const uniqueCourses = new Set<CourseName>(sec.neededCourses);
+        for (const courseName of uniqueCourses) {
+          const courseId = courseIdByName.get(this.courseKey(courseName));
+          if (!courseId) continue;
+          const sectionCourseId = sectionCourseIdByKey.get(`${section.id}:${courseId}`);
+          if (!sectionCourseId) continue;
+          let plannedCapacity = 0;
+          for (const assignedCourses of sec.studentCoursesByDni.values()) {
+            if (assignedCourses.has(courseName)) {
+              plannedCapacity += 1;
+            }
+          }
+          runSectionCourseCapacityById.set(sectionCourseId, {
+            id: randomUUID(),
+            runId,
+            sectionCourseId,
+            plannedCapacity,
+          });
+        }
+      }
+      const hasPlannedCapacityTable = await this.tableExists(
+        manager,
+        'leveling_run_section_course_capacities'
+      );
+      if (hasPlannedCapacityTable) {
+        await this.bulkUpsertLevelingRunSectionCourseCapacities(
+          manager,
+          Array.from(runSectionCourseCapacityById.values())
+        );
+      }
+
       const sectionCourseIds = Array.from(sectionCourseIdByKey.values());
       await this.deleteSectionStudentCoursesBySectionCourseIds(manager, sectionCourseIds);
 
@@ -3278,6 +3330,51 @@ export class LevelingService {
     }
   }
 
+  private async bulkUpsertLevelingRunSectionCourseCapacities(
+    manager: EntityManager,
+    rows: Array<{
+      id: string;
+      runId: string;
+      sectionCourseId: string;
+      plannedCapacity: number;
+    }>
+  ) {
+    if (rows.length === 0) return;
+    const batchSize = 1000;
+    for (let i = 0; i < rows.length; i += batchSize) {
+      const batch = rows.slice(i, i + batchSize);
+      const placeholders = batch
+        .map(() => '(?, ?, ?, ?, NOW(6), NOW(6))')
+        .join(', ');
+      const params: Array<string | number> = [];
+      for (const row of batch) {
+        params.push(
+          row.id,
+          row.runId,
+          row.sectionCourseId,
+          Math.max(0, Number(row.plannedCapacity ?? 0))
+        );
+      }
+      await manager.query(
+        `
+        INSERT INTO leveling_run_section_course_capacities (
+          id,
+          runId,
+          sectionCourseId,
+          plannedCapacity,
+          createdAt,
+          updatedAt
+        )
+        VALUES ${placeholders}
+        ON DUPLICATE KEY UPDATE
+          plannedCapacity = VALUES(plannedCapacity),
+          updatedAt = NOW(6)
+        `,
+        params
+      );
+    }
+  }
+
   private async getRunOrThrow(runId: string, manager?: EntityManager) {
     const db = manager ?? this.dataSource;
     const rows: Array<{
@@ -3321,6 +3418,19 @@ export class LevelingService {
       createdAt: this.toIsoDateTime(row.createdAt),
       updatedAt: this.toIsoDateTime(row.updatedAt),
     };
+  }
+
+  private async tableExists(db: EntityManager | DataSource, tableName: string) {
+    const rows: Array<{ c: number }> = await db.query(
+      `
+      SELECT COUNT(*) AS c
+      FROM information_schema.TABLES
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = ?
+      `,
+      [tableName]
+    );
+    return Number(rows[0]?.c ?? 0) > 0;
   }
 
   private parseRunConfig(value: unknown) {
@@ -3399,6 +3509,36 @@ export class LevelingService {
     runId: string;
     periodId: string;
   }) {
+    const hasPlannedCapacityTable = await this.tableExists(
+      this.dataSource,
+      'leveling_run_section_course_capacities'
+    );
+    const capacityInitialExpr = hasPlannedCapacityTable
+      ? `
+        CASE
+          WHEN UPPER(COALESCE(s.modality, '')) LIKE '%VIRTUAL%' THEN s.initialCapacity
+          WHEN lrscc.plannedCapacity IS NOT NULL THEN lrscc.plannedCapacity
+          ELSE s.initialCapacity
+        END
+      `
+      : `s.initialCapacity`;
+    const capacityExtraExpr = hasPlannedCapacityTable
+      ? `
+        CASE
+          WHEN UPPER(COALESCE(s.modality, '')) LIKE '%VIRTUAL%' THEN s.maxExtraCapacity
+          WHEN lrscc.plannedCapacity IS NOT NULL THEN 0
+          ELSE s.maxExtraCapacity
+        END
+      `
+      : `s.maxExtraCapacity`;
+    const plannedCapacityJoin = hasPlannedCapacityTable
+      ? `
+      LEFT JOIN leveling_run_section_course_capacities lrscc
+        ON lrscc.runId = ?
+       AND lrscc.sectionCourseId = sc.id
+      `
+      : '';
+
     const sectionCourseRows: Array<{
       sectionCourseId: string;
       sectionId: string;
@@ -3428,8 +3568,8 @@ export class LevelingService {
         s.facultyName AS facultyName,
         s.campusName AS campusName,
         s.modality AS modality,
-        s.initialCapacity AS initialCapacity,
-        s.maxExtraCapacity AS maxExtraCapacity,
+        ${capacityInitialExpr} AS initialCapacity,
+        ${capacityExtraExpr} AS maxExtraCapacity,
         COALESCE(tc.id, ts.id) AS teacherId,
         COALESCE(tc.fullName, ts.fullName) AS teacherName,
         CASE
@@ -3439,6 +3579,7 @@ export class LevelingService {
       FROM section_courses sc
       INNER JOIN sections s ON s.id = sc.sectionId
       INNER JOIN courses c ON c.id = sc.courseId
+      ${plannedCapacityJoin}
       LEFT JOIN section_course_teachers sct ON sct.sectionCourseId = sc.id
       LEFT JOIN users tc ON tc.id = sct.teacherId
       LEFT JOIN users ts ON ts.id = s.teacherId
@@ -3449,7 +3590,11 @@ export class LevelingService {
         s.name ASC,
         c.name ASC
       `,
-      [params.runId, params.periodId]
+      [
+        ...(hasPlannedCapacityTable ? [params.runId] : []),
+        params.runId,
+        params.periodId,
+      ]
     );
 
     const sectionCourseIds = sectionCourseRows.map((x) => String(x.sectionCourseId));
@@ -3630,16 +3775,33 @@ export class LevelingService {
     }
 
     const demandWithCandidates = demands.map((demand) => {
-      const sameScope = (candidatesByCourse.get(String(demand.courseId)) ?? []).filter(
+      const allCourseCandidates = candidatesByCourse.get(String(demand.courseId)) ?? [];
+      const sameFaculty = allCourseCandidates.filter(
         (candidate) =>
-          this.scopeKey(candidate.facultyGroup) === this.scopeKey(demand.facultyGroup) &&
+          this.scopeKey(candidate.facultyGroup) === this.scopeKey(demand.facultyGroup)
+      );
+      const sameScope = sameFaculty.filter(
+        (candidate) =>
           this.scopeKey(candidate.campusName) === this.scopeKey(demand.campusName)
       );
-      const allCourseCandidates = candidatesByCourse.get(String(demand.courseId)) ?? [];
-      const candidates = sameScope.length > 0 ? sameScope : allCourseCandidates;
+      const virtualFacultyFallback = sameFaculty.filter((candidate) =>
+        this.isVirtualModality(candidate.modality)
+      );
+
+      // Keep same-scope candidates first, but always allow virtual sections in the
+      // same faculty as fallback (virtual has no hard cap by design).
+      const prioritized =
+        sameScope.length > 0
+          ? [...sameScope, ...virtualFacultyFallback]
+          : allCourseCandidates;
+      const dedup = new Map<string, Candidate>();
+      for (const candidate of prioritized) {
+        dedup.set(candidate.sectionCourseId, candidate);
+      }
+
       return {
         ...demand,
-        candidates,
+        candidates: [...dedup.values()],
       };
     });
 
@@ -3657,8 +3819,6 @@ export class LevelingService {
     });
 
     const assignedBlocksByStudent = new Map<string, ScheduleBlockWindow[]>();
-    // Tracks the modality locked for each student after their first assignment
-    const modalityByStudent = new Map<string, string>();
     const rowsToInsert: Array<{
       id: string;
       sectionCourseId: string;
@@ -3717,37 +3877,17 @@ export class LevelingService {
         continue;
       }
 
-      const lockedModality = modalityByStudent.get(studentId) ?? null;
       const studentBlocks = getStudentBlocks(studentId);
 
-      // Filter candidates: capacity OK + no schedule conflict + modality lock
+      // Filter candidates: capacity OK + no schedule conflict
       const available = demand.candidates.filter((candidate) => {
         if (this.isCapacityBlocked(candidate)) return false;
         if (this.hasScheduleOverlap(studentBlocks, candidate.blocks)) return false;
-        // Modality lock: once a student has an assigned modality, only match it
-        if (lockedModality !== null && candidate.modality !== null) {
-          const isPresencial = (m: string) => m.includes('PRESENCIAL');
-          const isVirtual = (m: string) => m.includes('VIRTUAL');
-          const lockedIsPresencial = isPresencial(lockedModality);
-          const lockedIsVirtual = isVirtual(lockedModality);
-          const candidateIsPresencial = isPresencial(candidate.modality);
-          const candidateIsVirtual = isVirtual(candidate.modality);
-          // Block mixing: if student is presencial, skip virtual candidates and vice-versa
-          if (lockedIsPresencial && candidateIsVirtual) return false;
-          if (lockedIsVirtual && candidateIsPresencial) return false;
-        }
         return true;
       });
 
       if (available.length === 0) {
-        // Determine the best reason for non-assignment
-        const candidatesIgnoringModality = demand.candidates.filter((candidate) => {
-          if (this.isCapacityBlocked(candidate)) return false;
-          return !this.hasScheduleOverlap(studentBlocks, candidate.blocks);
-        });
-        const blockedByModality = lockedModality !== null && candidatesIgnoringModality.length > 0;
         const blockedByCapacity =
-          !blockedByModality &&
           demand.candidates.every((candidate) => this.isCapacityBlocked(candidate)) &&
           demand.candidates.length > 0;
         unassigned.push({
@@ -3758,27 +3898,14 @@ export class LevelingService {
           courseName: String(demand.courseName ?? ''),
           facultyGroup: demand.facultyGroup ? String(demand.facultyGroup) : null,
           campusName: demand.campusName ? String(demand.campusName) : null,
-          reason: blockedByModality
-            ? `Alumno bloqueado en modalidad ${lockedModality} y no hay secciones de ese tipo disponibles`
-            : blockedByCapacity
-              ? 'No hay capacidad disponible en las secciones-curso candidatas'
-              : 'Cruce de horario con cursos ya asignados',
+          reason: blockedByCapacity
+            ? 'No hay capacidad disponible en las secciones-curso candidatas'
+            : 'Cruce de horario con cursos ya asignados',
         });
         continue;
       }
 
-      // Fill-first: prioritize sections with HIGHEST occupancy ratio (fill one before moving to next)
-      available.sort((a, b) => {
-        const ratioA = this.capacityRatio(a);
-        const ratioB = this.capacityRatio(b);
-        // Higher ratio = more occupied = fill it first
-        if (Math.abs(ratioA - ratioB) > 0.001) return ratioB - ratioA;
-        // Tie-break: section code alphabetically (deterministic order)
-        const codeA = this.scopeKey(a.sectionCode ?? a.sectionName);
-        const codeB = this.scopeKey(b.sectionCode ?? b.sectionName);
-        if (codeA !== codeB) return codeA.localeCompare(codeB);
-        return this.scopeKey(a.courseName).localeCompare(this.scopeKey(b.courseName));
-      });
+      this.sortCandidatesForAssignment(available);
       const selected = available[0];
 
       rowsToInsert.push({
@@ -3790,11 +3917,6 @@ export class LevelingService {
       });
       selected.assignedCount += 1;
       studentBlocks.push(...selected.blocks);
-
-      // Lock modality for this student after first assignment
-      if (selected.modality !== null && !modalityByStudent.has(studentId)) {
-        modalityByStudent.set(studentId, selected.modality);
-      }
 
       if (!studentsBySectionCourse.has(selected.sectionCourseId)) {
         studentsBySectionCourse.set(selected.sectionCourseId, []);
@@ -4006,7 +4128,11 @@ export class LevelingService {
     assignedCount: number;
     initialCapacity: number;
     maxExtraCapacity: number;
+    modality?: string | null;
   }) {
+    if (this.isVirtualModality(params.modality)) {
+      return false;
+    }
     const assigned = Math.max(0, Number(params.assignedCount ?? 0));
     const initial = Math.max(0, Number(params.initialCapacity ?? 0));
     const maxExtra = Math.max(0, Number(params.maxExtraCapacity ?? 0));
@@ -4029,6 +4155,45 @@ export class LevelingService {
       return assigned / Math.max(initial, 1);
     }
     return assigned / Math.max(initial + maxExtra, 1);
+  }
+
+  private modalityPriority(modality: string | null | undefined) {
+    const value = this.scopeKey(modality);
+    if (value.includes('PRESENCIAL')) return 0;
+    if (value.includes('VIRTUAL')) return 1;
+    return 2;
+  }
+
+  private isVirtualModality(modality: string | null | undefined) {
+    return this.modalityPriority(modality) === 1;
+  }
+
+  private sortCandidatesForAssignment<
+    T extends {
+      modality: string | null;
+      assignedCount: number;
+      initialCapacity: number;
+      maxExtraCapacity: number;
+      sectionCode: string | null;
+      sectionName: string;
+      courseName: string;
+    }
+  >(candidates: T[]) {
+    candidates.sort((a, b) => {
+      const modalityDiff = this.modalityPriority(a.modality) - this.modalityPriority(b.modality);
+      // Always prioritize PRESENCIAL candidates, fallback to VIRTUAL.
+      if (modalityDiff !== 0) return modalityDiff;
+
+      // Fill-first inside same modality.
+      const ratioA = this.capacityRatio(a);
+      const ratioB = this.capacityRatio(b);
+      if (Math.abs(ratioA - ratioB) > 0.001) return ratioB - ratioA;
+
+      const codeA = this.scopeKey(a.sectionCode ?? a.sectionName);
+      const codeB = this.scopeKey(b.sectionCode ?? b.sectionName);
+      if (codeA !== codeB) return codeA.localeCompare(codeB);
+      return this.scopeKey(a.courseName).localeCompare(this.scopeKey(b.courseName));
+    });
   }
 
   private hasScheduleOverlap(existing: ScheduleBlockWindow[], next: ScheduleBlockWindow[]) {
