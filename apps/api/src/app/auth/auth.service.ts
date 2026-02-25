@@ -7,6 +7,7 @@ import { JwtService } from '@nestjs/jwt';
 import { Role } from '@uai/shared';
 import * as bcrypt from 'bcrypt';
 import { UsersService } from '../users/users.service';
+import { UserEntity } from '../users/user.entity';
 
 @Injectable()
 export class AuthService {
@@ -18,12 +19,36 @@ export class AuthService {
   async login(body: { usuario: string; password: string }) {
     const usuario = String(body.usuario ?? '').trim();
     const password = String(body.password ?? '');
+    const usuarioLower = usuario.toLowerCase();
+    const isAdminLogin = usuarioLower === 'administrador';
+    const isNumericLogin = /^\d{8,15}$/.test(usuario);
+    const isStudentCodeLogin = /^[a-zA-Z]\d{5,20}$/.test(usuario);
 
     if (!usuario || !password) {
       throw new BadRequestException('usuario and password are required');
     }
 
-    const alumno = await this.usersService.findAlumnoByCodigoAlumno(usuario);
+    if (!isAdminLogin && !isNumericLogin && !isStudentCodeLogin) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    let alumno: UserEntity | null = null;
+    let user: UserEntity | null = null;
+
+    // Fast path: avoid expensive lookups that do not apply to this login input.
+    if (isAdminLogin) {
+      user = await this.usersService.findAdminByDni('administrador');
+    } else if (isNumericLogin) {
+      [user, alumno] = await Promise.all([
+        this.usersService.findStaffByDni(usuario),
+        this.usersService.findAlumnoByDni(usuario),
+      ]);
+    } else {
+      alumno = await this.usersService.findAlumnoByCodigoAlumno(
+        usuario.toUpperCase()
+      );
+    }
+
     if (alumno) {
       if (password !== alumno.dni) {
         throw new UnauthorizedException('Invalid credentials');
@@ -31,7 +56,6 @@ export class AuthService {
       return this.buildAuthResponse(alumno);
     }
 
-    const user = await this.usersService.findStaffByDni(usuario);
     if (!user) throw new UnauthorizedException('Invalid credentials');
 
     if (user.role === Role.DOCENTE) {
@@ -55,12 +79,12 @@ export class AuthService {
     return this.buildAuthResponse(user);
   }
 
-  private async buildAuthResponse(user: {
-    id: string;
-    role: Role;
-    fullName: string;
-    dni: string;
-  }) {
+  async me(userId: string) {
+    const user = await this.usersService.getByIdOrThrow(userId);
+    return { user: this.toAuthUser(user) };
+  }
+
+  private async buildAuthResponse(user: UserEntity) {
     const payload = {
       sub: user.id,
       role: user.role,
@@ -69,7 +93,21 @@ export class AuthService {
     };
     return {
       accessToken: await this.jwtService.signAsync(payload),
-      user: { id: user.id, fullName: user.fullName, role: user.role },
+      user: this.toAuthUser(user),
+    };
+  }
+
+  private toAuthUser(user: UserEntity) {
+    return {
+      id: user.id,
+      fullName: user.fullName,
+      role: user.role,
+      dni: user.dni,
+      codigoAlumno: user.codigoAlumno ?? null,
+      email: user.email ?? null,
+      names: user.names ?? null,
+      paternalLastName: user.paternalLastName ?? null,
+      maternalLastName: user.maternalLastName ?? null,
     };
   }
 

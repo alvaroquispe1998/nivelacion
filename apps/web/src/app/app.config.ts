@@ -3,6 +3,7 @@ import { HTTP_INTERCEPTORS, provideHttpClient, withInterceptorsFromDi } from '@a
 import { provideRouter } from '@angular/router';
 import { appRoutes } from './app.routes';
 import { AuthInterceptor } from './core/auth/auth.interceptor';
+import { AdminPeriodInterceptor } from './core/workflow/admin-period.interceptor';
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -13,6 +14,11 @@ export const appConfig: ApplicationConfig = {
       provide: HTTP_INTERCEPTORS,
       useClass: AuthInterceptor,
       multi: true,
-    }
+    },
+    {
+      provide: HTTP_INTERCEPTORS,
+      useClass: AdminPeriodInterceptor,
+      multi: true,
+    },
   ]
 };

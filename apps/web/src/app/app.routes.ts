@@ -115,6 +115,15 @@ export const appRoutes: Route[] = [
           ),
       },
       {
+        path: 'admin/classrooms',
+        canActivate: [roleGuard],
+        data: { roles: [Role.ADMIN] },
+        loadComponent: () =>
+          import('./pages/admin-classrooms.page').then(
+            (m) => m.AdminClassroomsPage
+          ),
+      },
+      {
         // Step 3 - preview/execute matricula by faculty
         path: 'admin/matricula',
         canActivate: [roleGuard, workflowStepGuard],
@@ -141,6 +150,24 @@ export const appRoutes: Route[] = [
         loadComponent: () =>
           import('./pages/admin-section-schedule.page').then(
             (m) => m.AdminSectionSchedulePage
+          ),
+      },
+      {
+        path: 'admin/reports/program',
+        canActivate: [roleGuard, workflowStepGuard],
+        data: { roles: [Role.ADMIN], workflowStep: 'reports-program' },
+        loadComponent: () =>
+          import('./pages/admin-reports-program.page').then(
+            (m) => m.AdminReportsProgramPage
+          ),
+      },
+      {
+        path: 'admin/reports/summary',
+        canActivate: [roleGuard, workflowStepGuard],
+        data: { roles: [Role.ADMIN], workflowStep: 'reports-summary' },
+        loadComponent: () =>
+          import('./pages/admin-reports-summary.page').then(
+            (m) => m.AdminReportsSummaryPage
           ),
       },
       {

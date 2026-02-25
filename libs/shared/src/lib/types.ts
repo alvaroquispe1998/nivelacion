@@ -11,6 +11,12 @@ export interface AuthUser {
   id: Uuid;
   fullName: string;
   role: Role;
+  dni?: string | null;
+  codigoAlumno?: string | null;
+  email?: string | null;
+  names?: string | null;
+  paternalLastName?: string | null;
+  maternalLastName?: string | null;
 }
 
 export interface AuthLoginResponse {
@@ -29,6 +35,9 @@ export interface StudentScheduleItem {
   courseName: string;
   sectionName: string;
   teacherName?: string | null;
+  modality?: string | null;
+  classroomCode?: string | null;
+  classroomName?: string | null;
   zoomUrl?: string | null;
   location?: string | null;
 }
@@ -57,6 +66,66 @@ export interface AdminSection {
   teacherName?: string | null;
   scheduleSummary?: string | null;
   hasSchedule?: boolean;
+  classroomId?: Uuid | null;
+  classroomCode?: string | null;
+  classroomName?: string | null;
+  classroomCapacity?: number | null;
+  classroomPavilionCode?: string | null;
+  classroomPavilionName?: string | null;
+  classroomLevelName?: string | null;
+  capacitySource?: 'VIRTUAL' | 'AULA' | 'SIN_AULA' | 'AULA_INACTIVA' | null;
+  planningStatus?: 'OK' | 'FALTA_AULA' | 'CRUCE_AULA' | 'CRUCE_DOCENTE' | null;
+  planningStatusLabel?: string | null;
+  hasClassroomConflict?: boolean;
+  hasTeacherConflict?: boolean;
+  availableSeats?: number | null;
+}
+
+export interface AdminCourseScopeProgress {
+  facultyGroup: string;
+  campusName: string;
+  courseName: string;
+  demandaTotal: number;
+  matriculados: number;
+  porMatricular: number;
+  capacidadPlanificada: number;
+  brecha: number;
+  exceso: number;
+  capacidadSuficiente: boolean;
+}
+
+export interface AdminFacultyFilterOption {
+  facultyGroup: string;
+  facultyName: string;
+}
+
+export interface AdminClassroom {
+  id: Uuid;
+  campusId?: Uuid | null;
+  campusName: string;
+  pavilionId?: Uuid | null;
+  pavilionCode?: string | null;
+  pavilionName?: string | null;
+  code: string;
+  name: string;
+  capacity: number;
+  levelName?: string | null;
+  type: 'AULA' | 'LABORATORIO' | 'AUDITORIO';
+  status: 'ACTIVA' | 'INACTIVA';
+  notes?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface AdminPavilion {
+  id: Uuid;
+  campusId: Uuid;
+  campusName?: string | null;
+  code: string;
+  name: string;
+  status: 'ACTIVO' | 'INACTIVO';
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface AdminTeacher {
@@ -102,6 +171,14 @@ export interface AdminReassignmentOption {
   projectedStudents: number;
   initialCapacity: number;
   maxExtraCapacity: number;
+  classroomId?: Uuid | null;
+  classroomCode?: string | null;
+  classroomName?: string | null;
+  classroomCapacity?: number | null;
+  classroomPavilionCode?: string | null;
+  classroomPavilionName?: string | null;
+  classroomLevelName?: string | null;
+  capacitySource?: 'VIRTUAL' | 'AULA' | 'SIN_AULA' | 'AULA_INACTIVA' | null;
   createsConflict: boolean;
   overCapacity: boolean;
 }
@@ -165,6 +242,24 @@ export interface LevelingAppliedStructure {
   sectionCoursesOmitted: number;
   demandsCreated: number;
   demandsOmitted: number;
+  sectionsCreatedByExpansion: number;
+  sectionCoursesCreatedByExpansion: number;
+  offersReused: number;
+  pendingDemandsEvaluated: number;
+}
+
+export interface LevelingAppendPreview {
+  runId?: Uuid | null;
+  runStatus?: LevelingRunStatus | null;
+  demandsCreated: number;
+  demandsOmitted: number;
+  sectionsCreatedByExpansion: number;
+  sectionCoursesCreatedByExpansion: number;
+  offersReused: number;
+  pendingDemandsEvaluated: number;
+  existingFreeSeatsDetected?: number;
+  newRequiredSeats?: number;
+  groupsConvertedToVirtual?: number;
 }
 
 export interface LevelingSectionPreview {
@@ -237,6 +332,12 @@ export interface LevelingPlanResponse {
             id: string;
             size: number;
             modality: 'PRESENCIAL' | 'VIRTUAL';
+            origin?: 'EXISTING_FREE' | 'NEW_REQUIRED';
+            sectionCourseId?: string;
+            availableSeats?: number;
+            hasExistingVirtual?: boolean;
+            sectionCode?: string;
+            sectionCampusName?: string;
           }>
         >;
       }>;
@@ -246,6 +347,7 @@ export interface LevelingPlanResponse {
   runId?: Uuid | null;
   runStatus?: LevelingRunStatus | null;
   applied: null | LevelingAppliedStructure;
+  appendPreview?: LevelingAppendPreview | null;
 }
 
 export interface LevelingRunDetailsResponse {
@@ -326,6 +428,14 @@ export interface LevelingMatriculationSectionSummaryItem {
   assignedCount: number;
   initialCapacity: number;
   maxExtraCapacity: number;
+  classroomId?: Uuid | null;
+  classroomCode?: string | null;
+  classroomName?: string | null;
+  classroomCapacity?: number | null;
+  classroomPavilionCode?: string | null;
+  classroomPavilionName?: string | null;
+  classroomLevelName?: string | null;
+  capacitySource?: 'VIRTUAL' | 'AULA' | 'SIN_AULA' | 'AULA_INACTIVA' | null;
 }
 
 export interface LevelingMatriculationResult {
@@ -351,6 +461,7 @@ export interface LevelingMatriculationFacultyStatus {
   totalSectionCourses: number;
   withSchedule: number;
   withTeacher: number;
+  pendingDemands: number;
   ready: boolean;
 }
 
@@ -371,6 +482,14 @@ export interface LevelingMatriculationPreviewSectionCourse {
   teacherName?: string | null;
   initialCapacity: number;
   maxExtraCapacity: number;
+  classroomId?: Uuid | null;
+  classroomCode?: string | null;
+  classroomName?: string | null;
+  classroomCapacity?: number | null;
+  classroomPavilionCode?: string | null;
+  classroomPavilionName?: string | null;
+  classroomLevelName?: string | null;
+  capacitySource?: 'VIRTUAL' | 'AULA' | 'SIN_AULA' | 'AULA_INACTIVA' | null;
   hasSchedule: boolean;
   hasTeacher: boolean;
   assignedCount: number;

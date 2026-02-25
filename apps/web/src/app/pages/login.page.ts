@@ -67,11 +67,17 @@ export class LoginPage {
   });
 
   async submit() {
+    const usuario = String(this.form.value.usuario ?? '').trim();
+    const password = String(this.form.value.password ?? '');
+
+    if (!this.isSupportedLoginIdentifier(usuario)) {
+      this.error = 'Credenciales no validas.';
+      return;
+    }
+
     this.loading = true;
     this.error = null;
     try {
-      const usuario = String(this.form.value.usuario ?? '').trim();
-      const password = String(this.form.value.password ?? '');
       const res = await this.auth.login({ usuario, password });
       await this.router.navigateByUrl(
         res.user.role === Role.ADMIN
@@ -81,9 +87,24 @@ export class LoginPage {
             : '/student/schedule'
       );
     } catch (e: any) {
-      this.error = e?.error?.message ?? 'No se pudo ingresar';
+      if (e?.name === 'TimeoutError') {
+        this.error = 'La validacion tardo demasiado. Intente nuevamente.';
+      } else if (e?.status === 401) {
+        this.error = 'Credenciales no validas.';
+      } else if (e?.status === 0) {
+        this.error = 'No se pudo conectar con el servidor.';
+      } else {
+        this.error = e?.error?.message ?? 'No se pudo ingresar';
+      }
     } finally {
       this.loading = false;
     }
+  }
+
+  private isSupportedLoginIdentifier(usuario: string) {
+    const lower = usuario.toLowerCase();
+    if (lower === 'administrador') return true;
+    if (/^\d{8,15}$/.test(usuario)) return true;
+    return /^[a-zA-Z]\d{5,20}$/.test(usuario);
   }
 }

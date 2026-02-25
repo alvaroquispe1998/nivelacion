@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { PeriodsService } from '../periods/periods.service';
 import { SectionsService } from '../sections/sections.service';
 import { timesOverlap } from '../common/utils/time.util';
 import { ScheduleBlockEntity } from './schedule-block.entity';
@@ -15,7 +16,8 @@ export class ScheduleBlocksService {
   constructor(
     @InjectRepository(ScheduleBlockEntity)
     private readonly blocksRepo: Repository<ScheduleBlockEntity>,
-    private readonly sectionsService: SectionsService
+    private readonly sectionsService: SectionsService,
+    private readonly periodsService: PeriodsService
   ) {}
 
   async listBySection(sectionId: string, courseName?: string) {
@@ -94,7 +96,7 @@ export class ScheduleBlocksService {
 
     if (overlaps) {
       throw new ConflictException(
-        'Schedule block overlaps with another course block in this section'
+        'El bloque horario se cruza con otro bloque de esta seccion'
       );
     }
   }
@@ -112,10 +114,10 @@ export class ScheduleBlocksService {
     location?: string | null;
   }) {
     if (body.startTime >= body.endTime) {
-      throw new BadRequestException('startTime must be before endTime');
+      throw new BadRequestException('La hora de inicio debe ser menor a la hora de fin');
     }
     if (body.startDate && body.endDate && body.startDate > body.endDate) {
-      throw new BadRequestException('startDate must be <= endDate');
+      throw new BadRequestException('La fecha de inicio debe ser menor o igual a la fecha fin');
     }
 
     const section = await this.sectionsService.getByIdOrThrow(body.sectionId);
@@ -127,12 +129,12 @@ export class ScheduleBlocksService {
         });
     if (!sectionCourse) {
       throw new BadRequestException(
-        `Section-course relation not found for section ${section.id} and course ${body.courseName}`
+        `No existe relacion seccion-curso para la seccion ${section.id} y curso ${body.courseName}`
       );
     }
     if (sectionCourse.sectionId !== section.id) {
       throw new BadRequestException(
-        `sectionCourseId ${sectionCourse.id} does not belong to section ${section.id}`
+        `El sectionCourseId ${sectionCourse.id} no pertenece a la seccion ${section.id}`
       );
     }
 
@@ -141,6 +143,30 @@ export class ScheduleBlocksService {
       dayOfWeek: body.dayOfWeek,
       startTime: body.startTime,
       endTime: body.endTime,
+    });
+
+    const teacherId = await this.sectionsService.getEffectiveTeacherIdBySectionCourse(
+      sectionCourse.id
+    );
+    if (teacherId) {
+      await this.sectionsService.assertTeacherScheduleAvailabilityForBlock({
+        teacherId,
+        sectionCourseId: sectionCourse.id,
+        dayOfWeek: body.dayOfWeek,
+        startTime: body.startTime,
+        endTime: body.endTime,
+        startDate: body.startDate ?? null,
+        endDate: body.endDate ?? null,
+      });
+    }
+
+    await this.sectionsService.assertClassroomScheduleAvailabilityForBlock({
+      sectionCourseId: sectionCourse.id,
+      dayOfWeek: body.dayOfWeek,
+      startTime: body.startTime,
+      endTime: body.endTime,
+      startDate: body.startDate ?? null,
+      endDate: body.endDate ?? null,
     });
 
     const block = this.blocksRepo.create({
@@ -189,10 +215,10 @@ export class ScheduleBlocksService {
     };
 
     if (next.startTime >= next.endTime) {
-      throw new BadRequestException('startTime must be before endTime');
+      throw new BadRequestException('La hora de inicio debe ser menor a la hora de fin');
     }
     if (next.startDate && next.endDate && next.startDate > next.endDate) {
-      throw new BadRequestException('startDate must be <= endDate');
+      throw new BadRequestException('La fecha de inicio debe ser menor o igual a la fecha fin');
     }
 
     const nextSectionCourse = await this.sectionsService.resolveSectionCourseByName({
@@ -201,7 +227,7 @@ export class ScheduleBlocksService {
     });
     if (!nextSectionCourse) {
       throw new BadRequestException(
-        `Section-course relation not found for section ${block.section.id} and course ${next.courseName}`
+        `No existe relacion seccion-curso para la seccion ${block.section.id} y curso ${next.courseName}`
       );
     }
 
@@ -211,6 +237,32 @@ export class ScheduleBlocksService {
       startTime: next.startTime,
       endTime: next.endTime,
       excludeId: block.id,
+    });
+
+    const teacherId = await this.sectionsService.getEffectiveTeacherIdBySectionCourse(
+      nextSectionCourse.id
+    );
+    if (teacherId) {
+      await this.sectionsService.assertTeacherScheduleAvailabilityForBlock({
+        teacherId,
+        sectionCourseId: nextSectionCourse.id,
+        dayOfWeek: next.dayOfWeek,
+        startTime: next.startTime,
+        endTime: next.endTime,
+        startDate: next.startDate ?? null,
+        endDate: next.endDate ?? null,
+        excludeBlockId: block.id,
+      });
+    }
+
+    await this.sectionsService.assertClassroomScheduleAvailabilityForBlock({
+      sectionCourseId: nextSectionCourse.id,
+      dayOfWeek: next.dayOfWeek,
+      startTime: next.startTime,
+      endTime: next.endTime,
+      startDate: next.startDate ?? null,
+      endDate: next.endDate ?? null,
+      excludeBlockId: block.id,
     });
 
     block.sectionCourseId = nextSectionCourse.id;
@@ -234,19 +286,6 @@ export class ScheduleBlocksService {
   }
 
   private async loadActivePeriodIdOrThrow() {
-    const rows: Array<{ id: string }> = await this.blocksRepo.manager.query(
-      `
-      SELECT id
-      FROM periods
-      WHERE status = 'ACTIVE'
-      ORDER BY updatedAt DESC, createdAt DESC
-      LIMIT 1
-      `
-    );
-    const id = String(rows[0]?.id ?? '').trim();
-    if (!id) {
-      throw new BadRequestException('No active period configured');
-    }
-    return id;
+    return this.periodsService.getOperationalPeriodIdOrThrow();
   }
 }

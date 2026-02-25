@@ -1,5 +1,5 @@
 import { Transform, Type } from 'class-transformer';
-import { IsBoolean, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 
 export class LevelingPlanDto {
   @IsOptional()
@@ -31,4 +31,9 @@ export class LevelingPlanDto {
   @IsOptional()
   @IsString()
   groupModalityOverrides?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => String(value ?? '').trim().toUpperCase())
+  @IsIn(['REPLACE', 'APPEND'])
+  mode?: 'REPLACE' | 'APPEND';
 }

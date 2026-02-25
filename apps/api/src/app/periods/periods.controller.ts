@@ -5,13 +5,14 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { CreatePeriodDto } from './dto/create-period.dto';
+import { UpdatePeriodDto } from './dto/update-period.dto';
 import { PeriodsService } from './periods.service';
 
 @ApiTags('admin')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(Role.ADMIN)
-@Controller('admin/periods')
+@Controller(['admin/periods', 'admin/peridos'])
 export class PeriodsController {
   constructor(private readonly periodsService: PeriodsService) { }
 
@@ -37,6 +38,24 @@ export class PeriodsController {
       code: dto.code,
       name: dto.name,
       kind: dto.kind,
+      startsAt: dto.startsAt ?? null,
+      endsAt: dto.endsAt ?? null,
+    });
+    return {
+      id: row.id,
+      code: row.code,
+      name: row.name,
+      kind: row.kind,
+      status: row.status,
+      startsAt: row.startsAt,
+      endsAt: row.endsAt,
+    };
+  }
+
+  @Patch(':id')
+  async update(@Param('id') id: string, @Body() dto: UpdatePeriodDto) {
+    const row = await this.periodsService.update(id, {
+      name: dto.name,
       startsAt: dto.startsAt ?? null,
       endsAt: dto.endsAt ?? null,
     });

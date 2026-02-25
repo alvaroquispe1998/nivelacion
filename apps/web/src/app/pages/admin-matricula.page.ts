@@ -8,26 +8,10 @@ import type {
   LevelingMatriculationResult,
   LevelingRunConflictItem,
 } from '@uai/shared';
+import { WorkflowStateService } from '../core/workflow/workflow-state.service';
 
 interface ActiveRunSummary {
   run: { id: string; status: string } | null;
-}
-
-interface AssignmentRow {
-  sectionCourseId: string;
-  sectionId: string;
-  sectionCode: string | null;
-  sectionName: string;
-  facultyGroup: string | null;
-  campusName: string | null;
-  modality: string | null;
-  scopeLabel: string;
-  courseName: string;
-  teacherName: string | null;
-  initialCapacity: number;
-  maxExtraCapacity: number;
-  assignedCount: number;
-  students: Array<{ studentId: string; studentCode?: string | null; studentName: string }>;
 }
 
 @Component({
@@ -38,7 +22,7 @@ interface AssignmentRow {
       <div>
         <div class="text-xl font-semibold">Matricula</div>
         <div class="text-sm text-slate-600">
-          Previsualiza por facultad y ejecuta la matricula automatica sin cruces de horario.
+          Previsualiza por facultad y ejecuta solo la matricula de alumnos-curso pendientes, sin cruces de horario.
         </div>
       </div>
       <button
@@ -78,7 +62,7 @@ interface AssignmentRow {
             [ngModelOptions]="{ standalone: true }"
           >
             <option value="" disabled>Selecciona facultad</option>
-            <option *ngFor="let fac of readyFaculties" [value]="fac.facultyGroup">
+            <option *ngFor="let fac of matriculableFaculties" [value]="fac.facultyGroup">
               {{ fac.facultyGroup }} ({{ fac.totalSectionCourses }} cursos-seccion)
             </option>
           </select>
@@ -101,8 +85,8 @@ interface AssignmentRow {
         </button>
       </div>
 
-      <div *ngIf="readyFaculties.length === 0" class="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-        No hay facultades listas. Debes completar horarios y docentes en todas sus secciones-curso.
+      <div *ngIf="matriculableFaculties.length === 0" class="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+        {{ noMatriculableFacultiesMessage }}
       </div>
     </div>
 
@@ -122,6 +106,55 @@ interface AssignmentRow {
             <div class="text-xs text-slate-600">No asignados</div>
             <div class="text-base font-semibold">{{ preview.unassigned.length }}</div>
           </div>
+        </div>
+      </div>
+
+      <div class="rounded-2xl border border-slate-200 bg-white p-4">
+        <div class="text-sm font-semibold">Asignacion simulada por seccion-curso</div>
+        <div *ngIf="hiddenPreviewSectionCourseCount > 0" class="mt-2 text-xs text-slate-500">
+          Se ocultaron {{ hiddenPreviewSectionCourseCount }} seccion(es)-curso sin alumnos simulados.
+        </div>
+        <div class="mt-3 max-h-[460px] overflow-auto rounded-xl border border-slate-200">
+          <table class="min-w-full text-xs">
+            <thead class="bg-slate-50 text-left text-slate-700">
+              <tr>
+                <th class="px-3 py-2">Seccion</th>
+                <th class="px-3 py-2">Curso</th>
+                <th class="px-3 py-2">Docente</th>
+                <th class="px-3 py-2">Aula</th>
+                <th class="px-3 py-2">Aforo</th>
+                <th class="px-3 py-2">Asignados</th>
+                <th class="px-3 py-2">Accion</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                *ngFor="let row of previewAssignedSectionCourseRows; trackBy: trackPreviewSectionCourse"
+                class="border-t border-slate-100"
+              >
+                <td class="px-3 py-2 font-semibold">{{ row.sectionCode || row.sectionName }}</td>
+                <td class="px-3 py-2">{{ row.courseName }}</td>
+                <td class="px-3 py-2">{{ row.teacherName || row.sectionTeacherName || '-' }}</td>
+                <td class="px-3 py-2">{{ classroomLabel(row.modality, row.classroomCode, row.classroomPavilionCode, row.classroomLevelName, row.classroomCapacity, row.capacitySource) }}</td>
+                <td class="px-3 py-2">{{ capacityLabel(row.modality, row.initialCapacity, row.maxExtraCapacity, row.classroomCapacity, row.capacitySource, row.assignedCount) }}</td>
+                <td class="px-3 py-2 font-semibold">{{ row.assignedCount }}</td>
+                <td class="px-3 py-2">
+                  <button
+                    type="button"
+                    class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
+                    (click)="openStudentsModal(row.sectionCode || row.sectionName, row.courseName, row.students)"
+                  >
+                    Ver alumnos ({{ row.students.length }})
+                  </button>
+                </td>
+              </tr>
+              <tr *ngIf="previewAssignedSectionCourseRows.length === 0" class="border-t border-slate-100">
+                <td class="px-3 py-3 text-slate-500" colspan="7">
+                  No hay secciones-curso para mostrar en esta previsualizacion.
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 
@@ -156,83 +189,7 @@ interface AssignmentRow {
         </div>
       </div>
 
-      <div class="rounded-2xl border border-slate-200 bg-white p-4">
-        <div class="text-sm font-semibold">Asignacion por seccion-curso ({{ filteredAssignmentRows.length }})</div>
-        <div class="mt-3 grid gap-3 lg:grid-cols-3">
-          <label class="text-xs text-slate-700">
-            Facultad
-            <select
-              class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm"
-              [(ngModel)]="assignmentFilterFaculty"
-              [ngModelOptions]="{ standalone: true }"
-            >
-              <option value="">Todas</option>
-              <option *ngFor="let item of assignmentFacultyOptions" [value]="item">{{ item }}</option>
-            </select>
-          </label>
 
-          <label class="text-xs text-slate-700">
-            Sede - Modalidad
-            <select
-              class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm"
-              [(ngModel)]="assignmentFilterScope"
-              [ngModelOptions]="{ standalone: true }"
-            >
-              <option value="">Todas</option>
-              <option *ngFor="let item of assignmentScopeOptions" [value]="item">{{ item }}</option>
-            </select>
-          </label>
-
-          <label class="text-xs text-slate-700">
-            Curso
-            <select
-              class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm"
-              [(ngModel)]="assignmentFilterCourse"
-              [ngModelOptions]="{ standalone: true }"
-            >
-              <option value="">Todos</option>
-              <option *ngFor="let item of assignmentCourseOptions" [value]="item">{{ item }}</option>
-            </select>
-          </label>
-        </div>
-
-        <div class="mt-3 overflow-x-auto">
-          <table class="min-w-full text-sm">
-            <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600">
-              <tr>
-                <th class="px-4 py-3">Seccion</th>
-                <th class="px-4 py-3">Curso</th>
-                <th class="px-4 py-3">Docente</th>
-                <th class="px-4 py-3">Aforo</th>
-                <th class="px-4 py-3">Asignados</th>
-                <th class="px-4 py-3">Accion</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr *ngFor="let row of filteredAssignmentRows; trackBy: trackAssignmentRow" class="border-t border-slate-100">
-                <td class="px-4 py-3 font-medium">{{ row.sectionCode || row.sectionName }}</td>
-                <td class="px-4 py-3">{{ row.courseName }}</td>
-                <td class="px-4 py-3 text-xs">{{ row.teacherName || '-' }}</td>
-                <td class="px-4 py-3 text-xs">{{ sectionCourseCapacityLabel(row) }}</td>
-                <td class="px-4 py-3 font-semibold">{{ row.assignedCount }}</td>
-                <td class="px-4 py-3">
-                  <button
-                    class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
-                    (click)="openStudentsModal(row.sectionCode || row.sectionName, row.courseName, row.students)"
-                  >
-                    Ver alumnos ({{ row.students.length }})
-                  </button>
-                </td>
-              </tr>
-              <tr *ngIf="filteredAssignmentRows.length === 0" class="border-t border-slate-100">
-                <td class="px-4 py-4 text-sm text-slate-500" colspan="6">
-                  Sin resultados para los filtros seleccionados.
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
 
       <div *ngIf="preview.unassigned.length > 0" class="rounded-2xl border border-amber-200 bg-amber-50 p-4">
         <div class="text-sm font-semibold text-amber-900">No asignados</div>
@@ -286,7 +243,7 @@ interface AssignmentRow {
 
         <div class="px-5 py-4 text-sm text-slate-700">
           Se ejecutara la matricula automatica para <b>{{ selectedFaculty }}</b>.
-          Esta accion reemplaza la matricula previa de esta facultad en la corrida activa.
+          Esta accion agregara solo asignaciones pendientes, sin borrar matriculas previas ni crear oferta nueva.
         </div>
 
         <div class="flex items-center justify-end gap-2 px-5 pb-5">
@@ -343,11 +300,14 @@ interface AssignmentRow {
         </div>
       </div>
     </div>
+
+
   `,
 })
 export class AdminMatriculaPage {
   private readonly http = inject(HttpClient);
   private readonly cdr = inject(ChangeDetectorRef);
+  private readonly workflowState = inject(WorkflowStateService);
 
   loading = false;
   previewLoading = false;
@@ -359,9 +319,6 @@ export class AdminMatriculaPage {
 
   preview: LevelingMatriculationPreviewResponse | null = null;
   selectedFaculty = '';
-  assignmentFilterFaculty = '';
-  assignmentFilterScope = '';
-  assignmentFilterCourse = '';
   generateConfirmOpen = false;
 
   studentsModalOpen = false;
@@ -372,8 +329,19 @@ export class AdminMatriculaPage {
     studentName: string;
   }> = [];
 
-  get readyFaculties() {
-    return (this.preview?.faculties ?? []).filter((f) => f.ready);
+  get matriculableFaculties() {
+    return (this.preview?.faculties ?? []).filter(
+      (f) => f.ready && Math.max(0, Number(f.pendingDemands ?? 0)) > 0
+    );
+  }
+
+  get noMatriculableFacultiesMessage() {
+    const faculties = this.preview?.faculties ?? [];
+    const hasReady = faculties.some((f) => f.ready);
+    if (hasReady) {
+      return 'No hay alumnos pendientes por matricular en este periodo.';
+    }
+    return 'No hay facultades listas. Debes completar horarios, docentes y aula en presencial.';
   }
 
   get canGenerate() {
@@ -387,97 +355,77 @@ export class AdminMatriculaPage {
     );
   }
 
-  get assignmentRows(): AssignmentRow[] {
-    if (!this.preview) return [];
-    const rows: AssignmentRow[] = [];
-    for (const section of this.preview.sections ?? []) {
+  get previewSectionCourseRows() {
+    const out: Array<{
+      sectionCourseId: string;
+      sectionCode?: string | null;
+      sectionName: string;
+      sectionTeacherName?: string | null;
+      courseName: string;
+      teacherName?: string | null;
+      modality?: string | null;
+      initialCapacity: number;
+      maxExtraCapacity: number;
+      classroomCode?: string | null;
+      classroomPavilionCode?: string | null;
+      classroomLevelName?: string | null;
+      classroomCapacity?: number | null;
+      capacitySource?: 'VIRTUAL' | 'AULA' | 'SIN_AULA' | 'AULA_INACTIVA' | null;
+      assignedCount: number;
+      students: Array<{
+        studentId: string;
+        studentCode?: string | null;
+        studentName: string;
+      }>;
+    }> = [];
+
+    for (const section of this.preview?.sections ?? []) {
       for (const course of section.sectionCourses ?? []) {
-        rows.push({
+        out.push({
           sectionCourseId: String(course.sectionCourseId),
-          sectionId: String(section.sectionId),
-          sectionCode: section.sectionCode ? String(section.sectionCode) : null,
-          sectionName: String(section.sectionName ?? ''),
-          facultyGroup: section.facultyGroup ? String(section.facultyGroup) : null,
-          campusName: section.campusName ? String(section.campusName) : null,
-          modality: section.modality ? String(section.modality) : null,
-          scopeLabel: `${section.campusName || '-'} - ${section.modality || '-'}`,
-          courseName: String(course.courseName ?? ''),
-          teacherName: course.teacherName ? String(course.teacherName) : null,
-          initialCapacity: Number(course.initialCapacity ?? 0),
-          maxExtraCapacity: Number(course.maxExtraCapacity ?? 0),
+          sectionCode: section.sectionCode ?? course.sectionCode ?? null,
+          sectionName: section.sectionName || course.sectionName || '-',
+          sectionTeacherName: section.teacherName ?? null,
+          courseName: course.courseName,
+          teacherName: course.teacherName ?? null,
+          modality: section.modality ?? null,
+          initialCapacity: Number(course.initialCapacity ?? section.initialCapacity ?? 0),
+          maxExtraCapacity: Number(course.maxExtraCapacity ?? section.maxExtraCapacity ?? 0),
+          classroomCode: course.classroomCode ?? null,
+          classroomPavilionCode: course.classroomPavilionCode ?? null,
+          classroomLevelName: course.classroomLevelName ?? null,
+          classroomCapacity: course.classroomCapacity ?? null,
+          capacitySource: course.capacitySource ?? null,
           assignedCount: Number(course.assignedCount ?? 0),
-          students: (course.students ?? []).map((student) => ({
-            studentId: String(student.studentId),
-            studentCode: student.studentCode ? String(student.studentCode) : null,
-            studentName: String(student.studentName ?? ''),
-          })),
+          students: (course.students ?? []).slice(),
         });
       }
     }
-    return rows;
-  }
 
-  get assignmentFacultyOptions() {
-    return Array.from(
-      new Set(
-        this.assignmentRows
-          .map((row) => String(row.facultyGroup ?? '').trim())
-          .filter((value) => value.length > 0)
-      )
-    ).sort((a, b) => this.scopeKey(a).localeCompare(this.scopeKey(b)));
-  }
-
-  get assignmentScopeOptions() {
-    return Array.from(
-      new Set(
-        this.assignmentRows
-          .map((row) => String(row.scopeLabel ?? '').trim())
-          .filter((value) => value.length > 0)
-      )
-    ).sort((a, b) => this.scopeKey(a).localeCompare(this.scopeKey(b)));
-  }
-
-  get assignmentCourseOptions() {
-    return Array.from(
-      new Set(
-        this.assignmentRows
-          .map((row) => String(row.courseName ?? '').trim())
-          .filter((value) => value.length > 0)
-      )
-    ).sort((a, b) => this.scopeKey(a).localeCompare(this.scopeKey(b)));
-  }
-
-  get filteredAssignmentRows() {
-    return this.assignmentRows.filter((row) => {
-      if (
-        this.assignmentFilterFaculty &&
-        this.scopeKey(row.facultyGroup) !== this.scopeKey(this.assignmentFilterFaculty)
-      ) {
-        return false;
-      }
-      if (
-        this.assignmentFilterScope &&
-        this.scopeKey(row.scopeLabel) !== this.scopeKey(this.assignmentFilterScope)
-      ) {
-        return false;
-      }
-      if (
-        this.assignmentFilterCourse &&
-        this.scopeKey(row.courseName) !== this.scopeKey(this.assignmentFilterCourse)
-      ) {
-        return false;
-      }
-      return true;
+    out.sort((a, b) => {
+      const sectionCmp = String(a.sectionCode ?? a.sectionName)
+        .localeCompare(String(b.sectionCode ?? b.sectionName));
+      if (sectionCmp !== 0) return sectionCmp;
+      return String(a.courseName).localeCompare(String(b.courseName));
     });
+    return out;
   }
+
+  get previewAssignedSectionCourseRows() {
+    return this.previewSectionCourseRows.filter((row) => row.assignedCount > 0);
+  }
+
+  get hiddenPreviewSectionCourseCount() {
+    return Math.max(0, this.previewSectionCourseRows.length - this.previewAssignedSectionCourseRows.length);
+  }
+
+
 
   async ngOnInit() {
     await this.loadContext();
   }
 
-  trackAssignmentRow(_: number, row: AssignmentRow) {
-    return row.sectionCourseId;
-  }
+
 
   trackUnassigned(_: number, row: { studentId: string; courseId: string }) {
     return `${row.studentId}:${row.courseId}`;
@@ -491,9 +439,62 @@ export class AdminMatriculaPage {
     return row.studentId;
   }
 
+  trackPreviewSectionCourse(_: number, row: { sectionCourseId: string }) {
+    return row.sectionCourseId;
+  }
+
   studentCode(code: string | null | undefined) {
     const value = String(code ?? '').trim();
     return value || 'SIN CODIGO';
+  }
+
+  capacityLabel(
+    modality: string | null | undefined,
+    initialCapacity: number,
+    maxExtraCapacity: number,
+    classroomCapacity: number | null | undefined,
+    capacitySource: string | null | undefined,
+    assignedCount: number
+  ) {
+    void initialCapacity;
+    void maxExtraCapacity;
+    const mod = String(modality ?? '').trim().toUpperCase();
+    if (mod.includes('VIRTUAL')) {
+      return 'Sin aforo (virtual)';
+    }
+    const source = String(capacitySource ?? '').trim().toUpperCase();
+    const classroomCap = Math.max(0, Number(classroomCapacity ?? 0));
+    if (classroomCap > 0) {
+      const available = Math.max(0, classroomCap - Number(assignedCount ?? 0));
+      return `${classroomCap} (disp. ${available})`;
+    }
+    if (source === 'AULA_INACTIVA') return 'Aula inactiva';
+    return 'Sin aula';
+  }
+
+  classroomLabel(
+    modality: string | null | undefined,
+    classroomCode: string | null | undefined,
+    classroomPavilionCode: string | null | undefined,
+    classroomLevelName: string | null | undefined,
+    classroomCapacity: number | null | undefined,
+    capacitySource: string | null | undefined
+  ) {
+    const mod = String(modality ?? '').trim().toUpperCase();
+    if (mod.includes('VIRTUAL')) return 'Virtual';
+    if (String(classroomCode ?? '').trim()) {
+      const chunks: string[] = [String(classroomCode ?? '').trim()];
+      const pavilion = String(classroomPavilionCode ?? '').trim();
+      const level = String(classroomLevelName ?? '').trim();
+      if (pavilion) chunks.push(pavilion);
+      if (level) chunks.push(level);
+      const cap = Math.max(0, Number(classroomCapacity ?? 0));
+      if (cap > 0) chunks.push(String(cap));
+      return chunks.join(' | ');
+    }
+    const source = String(capacitySource ?? '').trim().toUpperCase();
+    if (source === 'AULA_INACTIVA') return 'Aula inactiva';
+    return 'Sin aula';
   }
 
   dayLabel(dayOfWeek: number) {
@@ -501,34 +502,7 @@ export class AdminMatriculaPage {
     return labels[Number(dayOfWeek) || 0] ?? String(dayOfWeek);
   }
 
-  sectionCourseCapacityLabel(sectionCourse: {
-    modality?: string | null;
-    initialCapacity: number;
-    maxExtraCapacity: number;
-    assignedCount: number;
-  }) {
-    const modality = String(sectionCourse.modality ?? '').toUpperCase();
-    if (modality.includes('VIRTUAL')) {
-      return 'Sin aforo (virtual)';
-    }
-    const initial = Math.max(0, Number(sectionCourse.initialCapacity ?? 0));
-    const extra = Math.max(0, Number(sectionCourse.maxExtraCapacity ?? 0));
-    const assigned = Math.max(0, Number(sectionCourse.assignedCount ?? 0));
-    const total = initial + extra;
-    if (total <= 0) return 'Sin limite';
-    const available = Math.max(0, total - assigned);
-    return `${total} (disp. ${available})`;
-  }
 
-  private scopeKey(value: string | null | undefined) {
-    return String(value ?? '').trim().toUpperCase();
-  }
-
-  private resetAssignmentFilters() {
-    this.assignmentFilterFaculty = this.selectedFaculty || '';
-    this.assignmentFilterScope = '';
-    this.assignmentFilterCourse = '';
-  }
 
   runStatusLabel(status: string | null | undefined) {
     const value = String(status ?? '').trim().toUpperCase();
@@ -569,11 +543,12 @@ export class AdminMatriculaPage {
     if (!this.runId) return;
     this.preview = await firstValueFrom(
       this.http.get<LevelingMatriculationPreviewResponse>(
-        `/api/admin/leveling/runs/${encodeURIComponent(this.runId)}/matriculate-preview`
+        `/api/admin/leveling/runs/${encodeURIComponent(this.runId)}/matriculate-preview`,
+        { params: new HttpParams().set('strategy', 'INCREMENTAL') }
       )
     );
 
-    const ready = this.readyFaculties;
+    const ready = this.matriculableFaculties;
     if (ready.length > 0) {
       const exists = ready.some((row) => row.facultyGroup === this.selectedFaculty);
       if (!exists) {
@@ -582,22 +557,31 @@ export class AdminMatriculaPage {
     } else {
       this.selectedFaculty = '';
     }
-    this.resetAssignmentFilters();
   }
 
   async previewMatriculation() {
     if (!this.runId || !this.selectedFaculty) return;
+    if (
+      !this.matriculableFaculties.some((row) => row.facultyGroup === this.selectedFaculty)
+    ) {
+      this.error = 'La facultad seleccionada no tiene alumnos pendientes por matricular.';
+      this.preview = null;
+      this.selectedFaculty = '';
+      this.cdr.detectChanges();
+      return;
+    }
     this.previewLoading = true;
     this.error = null;
     try {
-      const params = new HttpParams().set('facultyGroup', this.selectedFaculty);
+      const params = new HttpParams()
+        .set('facultyGroup', this.selectedFaculty)
+        .set('strategy', 'INCREMENTAL');
       this.preview = await firstValueFrom(
         this.http.get<LevelingMatriculationPreviewResponse>(
           `/api/admin/leveling/runs/${encodeURIComponent(this.runId)}/matriculate-preview`,
           { params }
         )
       );
-      this.resetAssignmentFilters();
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo previsualizar la matricula';
     } finally {
@@ -615,11 +599,12 @@ export class AdminMatriculaPage {
       const result = await firstValueFrom(
         this.http.post<LevelingMatriculationResult>(
           `/api/admin/leveling/runs/${encodeURIComponent(this.runId)}/matriculate`,
-          { facultyGroup: this.selectedFaculty }
+          { facultyGroup: this.selectedFaculty, strategy: 'INCREMENTAL' }
         )
       );
       this.runStatus = result.status;
       await this.previewMatriculation();
+      this.workflowState.notifyWorkflowChanged();
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo generar la matricula';
     } finally {
@@ -659,4 +644,6 @@ export class AdminMatriculaPage {
     this.studentsModalTitle = '';
     this.studentsModalRows = [];
   }
+
+
 }

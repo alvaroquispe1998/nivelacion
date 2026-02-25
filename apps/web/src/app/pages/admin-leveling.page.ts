@@ -1,8 +1,9 @@
-import { CommonModule } from '@angular/common';
+﻿import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { Router, RouterLink } from '@angular/router';
 import { ChangeDetectorRef, Component, inject } from '@angular/core';
 import { FormBuilder, FormsModule, ReactiveFormsModule, Validators } from '@angular/forms';
+import { WorkflowStateService } from '../core/workflow/workflow-state.service';
 import type {
   LevelingConfig,
   LevelingManualSectionCourseResult,
@@ -25,6 +26,12 @@ interface EditableGroupItem {
   id: string;
   size: number;
   modality: Modality;
+  origin?: 'EXISTING_FREE' | 'NEW_REQUIRED';
+  sectionCourseId?: string;
+  availableSeats?: number;
+  hasExistingVirtual?: boolean;
+  sectionCode?: string;
+  sectionCampusName?: string;
 }
 
 const PREFERRED_COURSE_ORDER = [
@@ -65,7 +72,7 @@ const PREFERRED_COURSE_ORDER = [
           <div class="text-sm font-semibold">Configuracion de aforo</div>
           <form class="mt-3 space-y-2" [formGroup]="configForm" (ngSubmit)="saveConfig()">
             <label class="block text-xs text-slate-700">
-              Aforo inicial por seccion
+              Aforo por seccion
               <input
                 type="number"
                 min="1"
@@ -73,15 +80,7 @@ const PREFERRED_COURSE_ORDER = [
                 formControlName="initialCapacity"
               />
             </label>
-            <label class="block text-xs text-slate-700">
-              Maximo extra por seccion (0 = sin extra)
-              <input
-                type="number"
-                min="0"
-                class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
-                formControlName="maxExtraCapacity"
-              />
-            </label>
+            <div class="hidden"><label class="block text-xs text-slate-700">Maximo extra por seccion (0 = sin extra)<input type="number" min="0" class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400" formControlName="maxExtraCapacity"/></label></div>
             <button
               class="w-full rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
               [disabled]="configForm.invalid || savingConfig"
@@ -164,34 +163,92 @@ const PREFERRED_COURSE_ORDER = [
           </div>
 
           <div
-            *ngIf="result.applied"
+            *ngIf="result.applied || result.appendPreview"
             class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-900"
           >
             <div class="flex items-center gap-2 mb-3">
               <div class="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></div>
-              <div class="font-semibold text-sm">Estructura Generada Exitosamente</div>
+              <div class="font-semibold text-sm">
+                {{ result.applied ? 'Estructura Generada Exitosamente' : 'Previsualizacion incremental (sin aplicar)' }}
+              </div>
             </div>
             
-            <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
+                        <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-4 text-xs">
               <div class="bg-white/60 rounded-lg p-2 border border-emerald-100/50">
                 <div class="text-emerald-700/70 font-medium">Secciones</div>
-                <div class="text-lg font-bold text-emerald-800">{{ result.applied.sectionsCreated + result.applied.sectionsUpdated }}</div>
+                <div class="text-lg font-bold text-emerald-800">
+                  {{ result.applied ? (result.applied.sectionsCreated + result.applied.sectionsUpdated) : result.sections.length }}
+                </div>
               </div>
               <div class="bg-white/60 rounded-lg p-2 border border-emerald-100/50">
-                <div class="text-emerald-700/70 font-medium">Cursos-Sección</div>
-                <div class="text-lg font-bold text-emerald-800">{{ result.applied.sectionCoursesCreated }}</div>
+                <div class="text-emerald-700/70 font-medium">Cursos-Seccion</div>
+                <div class="text-lg font-bold text-emerald-800">
+                  {{ result.applied ? result.applied.sectionCoursesCreated : 0 }}
+                </div>
               </div>
               <div class="bg-white/60 rounded-lg p-2 border border-emerald-100/50">
                 <div class="text-emerald-700/70 font-medium">Demandas Alumnos</div>
-                <div class="text-lg font-bold text-emerald-800">{{ result.applied.demandsCreated }}</div>
+                <div class="text-lg font-bold text-emerald-800">
+                  {{ result.applied ? result.applied.demandsCreated : (result.appendPreview?.demandsCreated || 0) }}
+                </div>
+              </div>
+              <div class="bg-white/60 rounded-lg p-2 border border-emerald-100/50">
+                <div class="text-emerald-700/70 font-medium">Pendientes evaluados</div>
+                <div class="text-lg font-bold text-emerald-800">
+                  {{ result.applied ? result.applied.pendingDemandsEvaluated : (result.appendPreview?.pendingDemandsEvaluated || 0) }}
+                </div>
+              </div>
+              <div class="bg-white/60 rounded-lg p-2 border border-emerald-100/50">
+                <div class="text-emerald-700/70 font-medium">Cupos existentes</div>
+                <div class="text-lg font-bold text-emerald-800">
+                  {{ result.appendPreview?.existingFreeSeatsDetected || 0 }}
+                </div>
+              </div>
+              <div class="bg-white/60 rounded-lg p-2 border border-emerald-100/50">
+                <div class="text-emerald-700/70 font-medium">Nuevos requeridos</div>
+                <div class="text-lg font-bold text-emerald-800">
+                  {{ result.appendPreview?.newRequiredSeats || 0 }}
+                </div>
+              </div>
+              <div class="bg-white/60 rounded-lg p-2 border border-emerald-100/50">
+                <div class="text-emerald-700/70 font-medium">Grupos en virtual</div>
+                <div class="text-lg font-bold text-emerald-800">
+                  {{ result.appendPreview?.groupsConvertedToVirtual || 0 }}
+                </div>
+              </div>
+              <div class="bg-white/60 rounded-lg p-2 border border-emerald-100/50">
+                <div class="text-emerald-700/70 font-medium">Oferta reutilizada</div>
+                <div class="text-lg font-bold text-emerald-800">
+                  {{ result.applied ? result.applied.offersReused : (result.appendPreview?.offersReused || 0) }}
+                </div>
+              </div>
+              <div class="bg-white/60 rounded-lg p-2 border border-emerald-100/50">
+                <div class="text-emerald-700/70 font-medium">Secciones por expansion</div>
+                <div class="text-lg font-bold text-emerald-800">
+                  {{ result.applied ? result.applied.sectionsCreatedByExpansion : (result.appendPreview?.sectionsCreatedByExpansion || 0) }}
+                </div>
+              </div>
+              <div class="bg-white/60 rounded-lg p-2 border border-emerald-100/50">
+                <div class="text-emerald-700/70 font-medium">Cursos-seccion por expansion</div>
+                <div class="text-lg font-bold text-emerald-800">
+                  {{ result.applied ? result.applied.sectionCoursesCreatedByExpansion : (result.appendPreview?.sectionCoursesCreatedByExpansion || 0) }}
+                </div>
               </div>
               <div class="bg-white/60 rounded-lg p-2 border border-emerald-100/50">
                 <div class="text-emerald-700/70 font-medium">Omitidos</div>
-                <div class="text-lg font-bold text-emerald-800">{{ result.applied.sectionCoursesOmitted + result.applied.demandsOmitted }}</div>
+                <div class="text-lg font-bold text-emerald-800">
+                  {{ result.applied ? (result.applied.sectionCoursesOmitted + result.applied.demandsOmitted) : (result.appendPreview?.demandsOmitted || 0) }}
+                </div>
               </div>
             </div>
 
-            <div class="mt-4">
+            <div class="mt-3 rounded-lg border border-emerald-200 bg-white/70 px-3 py-2 text-xs text-emerald-800">
+              {{ result.applied
+                ? 'Se amplio oferta automaticamente para pendientes de matricula en este periodo.'
+                : 'Estimacion de expansion automatica para pendientes de matricula (aun sin aplicar cambios).' }}
+            </div>
+
+            <div class="mt-4" *ngIf="result.applied">
               <div class="flex justify-between text-[10px] font-medium text-emerald-700 mb-1">
                 <span>Proceso completado</span>
                 <span>100%</span>
@@ -334,7 +391,7 @@ const PREFERRED_COURSE_ORDER = [
                     <button
                       *ngFor="let g of row.courses[c.key]; trackBy: trackGroup"
                       type="button"
-                      class="rounded-md px-2 py-1 text-[11px] font-semibold border"
+                      class="rounded-md px-2 py-1 text-[11px] font-semibold border flex items-center gap-1"
                       [ngClass]="
                         g.modality === 'VIRTUAL'
                           ? 'border-blue-300 bg-blue-50 text-blue-800'
@@ -342,7 +399,19 @@ const PREFERRED_COURSE_ORDER = [
                       "
                       (click)="toggleGroupModality(g)"
                     >
-                      {{ g.size }} {{ g.modality === 'VIRTUAL' ? 'V' : 'P' }}
+                      <span>{{ g.size }} {{ g.modality === 'VIRTUAL' ? 'V' : 'P' }}</span>
+                      <span
+                        *ngIf="isGroupExisting(g)"
+                        class="rounded bg-emerald-100 px-1 py-0.5 text-[10px] font-semibold text-emerald-800"
+                      >
+                        Existente
+                      </span>
+                      <span
+                        *ngIf="!isGroupExisting(g) && g.origin === 'NEW_REQUIRED'"
+                        class="rounded bg-amber-100 px-1 py-0.5 text-[10px] font-semibold text-amber-800"
+                      >
+                        Nuevo
+                      </span>
                     </button>
                     <span *ngIf="!row.courses[c.key] || row.courses[c.key].length === 0" class="text-xs text-slate-400">
                       -
@@ -356,7 +425,7 @@ const PREFERRED_COURSE_ORDER = [
       </div>
     </div>
 
-    <div *ngIf="result && result.summary.byFaculty.length > 0" class="mt-5 space-y-4">
+    <div *ngIf="result && result.summary.byFaculty.length > 0 && lastPlanMode !== 'APPEND'" class="mt-5 space-y-4">
       <div
         *ngFor="let fac of result.summary.byFaculty; trackBy: trackFaculty"
         class="rounded-2xl border border-slate-200 bg-white p-4"
@@ -506,18 +575,18 @@ const PREFERRED_COURSE_ORDER = [
           </table>
         </div>
       </details>
-    <div *ngIf="runId" class="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+    <div *ngIf="runId && result.applied" class="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
       <div class="flex items-center gap-2">
         <svg class="h-5 w-5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
           <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
-        <div class="text-sm font-semibold text-emerald-800">Estructura aplicada — Run ID: <span class="font-mono text-xs">{{ runId }}</span></div>
+        <div class="text-sm font-semibold text-emerald-800">Estructura aplicada</div>
       </div>
       <div class="mt-2 text-xs text-emerald-700 leading-relaxed">
         Los pasos siguientes son:
         <ol class="mt-1 list-decimal list-inside space-y-1">
-          <li>Ve a <a routerLink="/admin/sections" class="underline font-semibold cursor-pointer">Horarios y Docentes</a> para asignar horarios y docentes a cada sección-curso.</li>
-          <li>Una vez listos todos los horarios, regresa aquí para <b>Ejecutar Matrícula</b>.</li>
+          <li>Ve a <a routerLink="/admin/sections" class="underline font-semibold cursor-pointer">Horarios y Docentes</a> para asignar horarios y docentes a cada secciÃ³n-curso.</li>
+          <li>Una vez listos todos los horarios, regresa aquÃ­ para <b>Ejecutar MatrÃ­cula</b>.</li>
         </ol>
       </div>
 
@@ -581,6 +650,7 @@ export class AdminLevelingPage {
   private readonly fb = inject(FormBuilder);
   private readonly cdr = inject(ChangeDetectorRef);
   private readonly router = inject(Router);
+  private readonly workflowState = inject(WorkflowStateService);
 
   error: string | null = null;
   result: LevelingPlanResponse | null = null;
@@ -595,6 +665,7 @@ export class AdminLevelingPage {
   sectionFacultyFilter = 'ALL';
   sectionSiteModalityFilter = 'ALL';
   sectionCourseFilter = 'ALL';
+  lastPlanMode: 'REPLACE' | 'APPEND' | null = null;
   runId: string | null = null;
   runDetails: LevelingRunDetailsResponse | null = null;
   runSections: LevelingRunSectionView[] = [];
@@ -728,7 +799,17 @@ export class AdminLevelingPage {
 
   get courseColumns(): CourseColumn[] {
     const keys = Object.keys(this.result?.needsByCourse ?? {});
-    const unique = Array.from(new Set(keys.map((x) => String(x || '').trim()).filter(Boolean)));
+    const planKeys: string[] = [];
+    if (this.result) {
+      for (const fac of this.result.groupPlan.byFaculty ?? []) {
+        for (const row of fac.rows ?? []) {
+          planKeys.push(...Object.keys(row.courses ?? {}));
+        }
+      }
+    }
+    const unique = Array.from(
+      new Set([...keys, ...planKeys].map((x) => String(x || '').trim()).filter(Boolean))
+    );
     unique.sort((a, b) => {
       const ai = PREFERRED_COURSE_ORDER.indexOf(a);
       const bi = PREFERRED_COURSE_ORDER.indexOf(b);
@@ -974,11 +1055,6 @@ export class AdminLevelingPage {
     this.programCampusFilter = 'ALL';
     this.programModalityFilter = 'ALL';
     this.sectionCourseFilter = 'ALL';
-    this.runId = null;
-    this.runDetails = null;
-    this.runSections = [];
-    this.runConflictRows = [];
-    this.matriculationResult = null;
   }
 
   openStudentsModal(
@@ -1065,20 +1141,29 @@ export class AdminLevelingPage {
       this.cdr.detectChanges();
       return;
     }
+    const mode: 'REPLACE' | 'APPEND' = this.runId ? 'APPEND' : 'REPLACE';
     if (apply) {
       this.askConfirmation(
-        'Confirmar aplicacion de estructura',
-        'Se aplicara la estructura (usuarios/secciones/seccion-curso) sin matricular alumnos. Deseas continuar?',
-        () => this.executeRunPlan(apply, useCurrentGroupOverrides)
+        mode === 'APPEND' ? 'Confirmar carga incremental' : 'Confirmar aplicacion de estructura',
+        mode === 'APPEND'
+          ? 'Se agregaran alumnos y demandas al proceso activo, sin borrar matriculas actuales. Deseas continuar?'
+          : 'Se aplicara la estructura (usuarios/secciones/seccion-curso) sin matricular alumnos. Deseas continuar?',
+        () => this.executeRunPlan(apply, useCurrentGroupOverrides, mode)
       );
       return;
     }
-    this.executeRunPlan(apply, useCurrentGroupOverrides);
+    this.executeRunPlan(apply, useCurrentGroupOverrides, mode);
   }
 
-  async executeRunPlan(apply: boolean, useCurrentGroupOverrides: boolean) {
+  async executeRunPlan(
+    apply: boolean,
+    useCurrentGroupOverrides: boolean,
+    mode: 'REPLACE' | 'APPEND'
+  ) {
     this.running = true;
     this.error = null;
+    this.lastPlanMode = mode;
+    const currentRunId = this.runId;
     try {
       if (!useCurrentGroupOverrides) {
         this.groupModalityOverrides = {};
@@ -1090,6 +1175,7 @@ export class AdminLevelingPage {
       formData.append('initialCapacity', String(Number(value.initialCapacity)));
       formData.append('maxExtraCapacity', String(Number(value.maxExtraCapacity)));
       formData.append('apply', apply ? 'true' : 'false');
+      formData.append('mode', mode);
 
       const overrideKeys = Object.keys(this.groupModalityOverrides);
       if (overrideKeys.length > 0) {
@@ -1114,12 +1200,16 @@ export class AdminLevelingPage {
       this.sectionsDirty = false;
       this.matriculationResult = null;
       this.runConflictRows = [];
-      this.runId = String(this.result.runId ?? '').trim() || null;
+      const responseRunId = String(this.result.runId ?? '').trim();
+      this.runId = responseRunId || (mode === 'APPEND' ? currentRunId : null);
       if (this.runId) {
         await this.loadRunContext(this.runId);
       } else {
         this.runDetails = null;
         this.runSections = [];
+      }
+      if (apply) {
+        await this.syncWorkflowMenuAfterApply();
       }
     } catch (e: any) {
       this.result = null;
@@ -1128,6 +1218,35 @@ export class AdminLevelingPage {
       this.running = false;
       this.cdr.detectChanges();
     }
+  }
+
+  private async syncWorkflowMenuAfterApply() {
+    this.workflowState.notifyWorkflowChanged();
+    let synced = false;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        const summary = await firstValueFrom(
+          this.http.get<any>(`/api/admin/leveling/active-run-summary?t=${Date.now()}`)
+        );
+        const hasActivePeriod = Boolean(summary?.activePeriod);
+        const hasRun = Boolean(summary?.run);
+        this.workflowState.notifyWorkflowChanged();
+        if (hasActivePeriod && hasRun) {
+          synced = true;
+          break;
+        }
+      } catch {
+        // ignore transient errors and continue retries
+      }
+      await this.sleep(450);
+    }
+    if (!synced) {
+      window.location.reload();
+    }
+  }
+
+  private sleep(ms: number) {
+    return new Promise<void>((resolve) => setTimeout(resolve, ms));
   }
 
   async loadRunContext(runId: string) {
@@ -1321,6 +1440,7 @@ export class AdminLevelingPage {
       );
       await this.loadRunContext(this.runId);
       await this.loadRunConflicts();
+      this.workflowState.notifyWorkflowChanged();
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo matricular automaticamente';
     } finally {
@@ -1372,6 +1492,12 @@ export class AdminLevelingPage {
     this.groupModalityOverrides = out;
   }
 
+  isGroupExisting(group: EditableGroupItem) {
+    if (group.origin === 'EXISTING_FREE') return true;
+    if (group.modality === 'VIRTUAL' && Boolean(group.hasExistingVirtual)) return true;
+    return false;
+  }
+
   private filterSectionStudentsByCourse(
     section: LevelingPlanResponse['sections'][number]
   ): LevelingPlanResponse['sections'][number]['students'] {
@@ -1380,3 +1506,5 @@ export class AdminLevelingPage {
     return students.filter((st) => (st.sectionCourses ?? []).includes(this.sectionCourseFilter));
   }
 }
+
+

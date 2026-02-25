@@ -4,6 +4,8 @@ import type { DataSourceOptions } from 'typeorm';
 
 import { AttendanceRecordEntity } from '../attendance/attendance-record.entity';
 import { AttendanceSessionEntity } from '../attendance/attendance-session.entity';
+import { ClassroomEntity } from '../classrooms/classroom.entity';
+import { PavilionEntity } from '../classrooms/pavilion.entity';
 import { PeriodEntity } from '../periods/period.entity';
 import { ScheduleBlockEntity } from '../schedule-blocks/schedule-block.entity';
 import { LevelingRunEntity } from '../leveling/leveling-run.entity';
@@ -35,12 +37,23 @@ import { RemoveLegacyDemoAdmin020Migration1762800000000 } from './migrations/020
 import { PeriodKindSpanishValues021Migration1762900000000 } from './migrations/021-period-kind-spanish-values.migration';
 import { LevelingRunsAndStaging022Migration1763000000000 } from './migrations/022-leveling-runs-and-staging.migration';
 import { LevelingRunSectionCourseCapacities023Migration1763100000000 } from './migrations/023-leveling-run-section-course-capacities.migration';
+import { SectionCourseCapacity024Migration1763200000000 } from './migrations/024-section-course-capacity.migration';
+import { LevelingRunReports025Migration1763300000000 } from './migrations/025-leveling-run-reports.migration';
+import { UsersCareerName026Migration1763400000000 } from './migrations/026-users-career-name.migration';
+import { StudentsExamDate027Migration1771682907120 } from './migrations/027-students-exam-date.migration';
+import { LevelingRunDemandExamAndModality028Migration1772500000000 } from './migrations/028-leveling-run-demand-exam-and-modality.migration';
+import { ClassroomsAndPhysicalCapacity029Migration1773500000000 } from './migrations/029-classrooms-and-physical-capacity.migration';
+import { ClassroomsCampusRelation030Migration1773600000000 } from './migrations/030-classrooms-campus-relation.migration';
+import { PavilionsAndClassroomLevel031Migration1773700000000 } from './migrations/031-pavilions-and-classroom-level.migration';
+import { RenameFicaFacultyName032Migration1773800000000 } from './migrations/032-rename-fica-faculty-name.migration';
 
 export const TYPEORM_ENTITIES = [
   UserEntity,
   PeriodEntity,
   SectionEntity,
   SectionCourseTeacherEntity,
+  ClassroomEntity,
+  PavilionEntity,
   TeacherEntity,
   ScheduleBlockEntity,
   LevelingRunEntity,
@@ -73,6 +86,15 @@ export const TYPEORM_MIGRATIONS = [
   PeriodKindSpanishValues021Migration1762900000000,
   LevelingRunsAndStaging022Migration1763000000000,
   LevelingRunSectionCourseCapacities023Migration1763100000000,
+  SectionCourseCapacity024Migration1763200000000,
+  LevelingRunReports025Migration1763300000000,
+  UsersCareerName026Migration1763400000000,
+  StudentsExamDate027Migration1771682907120,
+  LevelingRunDemandExamAndModality028Migration1772500000000,
+  ClassroomsAndPhysicalCapacity029Migration1773500000000,
+  ClassroomsCampusRelation030Migration1773600000000,
+  PavilionsAndClassroomLevel031Migration1773700000000,
+  RenameFicaFacultyName032Migration1773800000000,
 ];
 
 export function createDataSourceOptionsFromEnv(): DataSourceOptions {

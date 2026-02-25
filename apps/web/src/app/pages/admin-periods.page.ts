@@ -44,25 +44,38 @@ interface AdminPeriod {
 
     <div class="mt-5 grid gap-4 lg:grid-cols-3">
       <div class="rounded-2xl border border-slate-200 bg-white p-4">
-        <div class="text-sm font-semibold">Nuevo periodo</div>
-        <form class="mt-3 space-y-2" [formGroup]="form" (ngSubmit)="createPeriod()">
-          <input
-            class="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
-            formControlName="code"
-            placeholder="Codigo (ej: 2026-1)"
-          />
+        <div class="text-sm font-semibold">{{ editingId ? 'Editar periodo' : 'Nuevo periodo' }}</div>
+        <p *ngIf="editingId" class="mt-2 text-xs text-slate-600">
+          Edita solo nombre y vigencia. Para volver a crear, pulsa "Cancelar edicion".
+        </p>
+        <form class="mt-3 space-y-2" [formGroup]="form" (ngSubmit)="onSubmitPeriod()">
+          <ng-container *ngIf="!editingId; else readonlyStructureFields">
+            <input
+              class="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+              formControlName="code"
+              placeholder="Codigo (ej: 2026-1)"
+            />
+            <select
+              class="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+              formControlName="kind"
+            >
+              <option value="NIVELACION">NIVELACION</option>
+              <option value="REGULAR">REGULAR</option>
+            </select>
+          </ng-container>
+          <ng-template #readonlyStructureFields>
+            <div class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              <span class="font-semibold">Codigo:</span> {{ form.controls.code.value || '-' }}
+            </div>
+            <div class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              <span class="font-semibold">Tipo:</span> {{ form.controls.kind.value || '-' }}
+            </div>
+          </ng-template>
           <input
             class="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
             formControlName="name"
             placeholder="Nombre (ej: Nivelacion 2026-I)"
           />
-          <select
-            class="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
-            formControlName="kind"
-          >
-            <option value="NIVELACION">NIVELACION</option>
-            <option value="REGULAR">REGULAR</option>
-          </select>
           <div class="grid grid-cols-2 gap-2">
             <label class="text-xs text-slate-600">
               Inicio
@@ -83,9 +96,24 @@ interface AdminPeriod {
           </div>
           <button
             class="w-full rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-            [disabled]="form.invalid || loadingCreate"
+            [disabled]="form.invalid || loadingCreate || loadingEdit"
           >
-            {{ loadingCreate ? 'Guardando...' : 'Crear periodo' }}
+            {{
+              loadingCreate || loadingEdit
+                ? 'Guardando...'
+                : editingId
+                  ? 'Guardar cambios'
+                  : 'Crear periodo'
+            }}
+          </button>
+          <button
+            *ngIf="editingId"
+            type="button"
+            class="w-full rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            (click)="cancelEdit()"
+            [disabled]="loadingEdit"
+          >
+            Cancelar edicion
           </button>
         </form>
       </div>
@@ -122,6 +150,13 @@ interface AdminPeriod {
               <td class="px-4 py-3">
                 <button
                   class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50 disabled:opacity-60"
+                  [disabled]="loadingEdit"
+                  (click)="startEdit(p)"
+                >
+                  {{ editingId === p.id ? '...' : 'Editar' }}
+                </button>
+                <button
+                  class="ml-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50 disabled:opacity-60"
                   [disabled]="p.status === 'ACTIVE' || activatingId === p.id"
                   (click)="activatePeriod(p.id)"
                 >
@@ -183,6 +218,8 @@ export class AdminPeriodsPage {
   loadingCreate = false;
   activatingId: string | null = null;
   clearingId: string | null = null;
+  editingId: string | null = null;
+  loadingEdit = false;
   confirmState = {
     isOpen: false,
     title: '',
@@ -223,6 +260,14 @@ export class AdminPeriodsPage {
     } finally {
       this.cdr.detectChanges();
     }
+  }
+
+  async onSubmitPeriod() {
+    if (this.editingId) {
+      await this.updatePeriod();
+      return;
+    }
+    await this.createPeriod();
   }
 
   async createPeriod() {
@@ -267,6 +312,46 @@ export class AdminPeriodsPage {
     }
   }
 
+  startEdit(period: AdminPeriod) {
+    this.editingId = period.id;
+    this.form.reset({
+      code: period.code,
+      name: period.name,
+      kind: (period.kind as 'NIVELACION' | 'REGULAR') ?? 'NIVELACION',
+      startsAt: period.startsAt ?? '',
+      endsAt: period.endsAt ?? '',
+    });
+  }
+
+  cancelEdit() {
+    if (this.loadingEdit) return;
+    this.editingId = null;
+    this.form.reset({ code: '', name: '', kind: 'NIVELACION', startsAt: '', endsAt: '' });
+  }
+
+  async updatePeriod() {
+    if (!this.editingId || this.form.invalid) return;
+    this.loadingEdit = true;
+    this.error = null;
+    try {
+      const v = this.form.value;
+      await firstValueFrom(
+        this.http.patch(`/api/admin/periods/${encodeURIComponent(this.editingId)}`, {
+          name: String(v.name ?? '').trim(),
+          startsAt: String(v.startsAt ?? '').trim() || null,
+          endsAt: String(v.endsAt ?? '').trim() || null,
+        })
+      );
+      this.cancelEdit();
+      await this.load();
+    } catch (e: any) {
+      this.error = e?.error?.message ?? 'No se pudo actualizar periodo';
+    } finally {
+      this.loadingEdit = false;
+      this.cdr.detectChanges();
+    }
+  }
+
   askConfirmation(title: string, message: string, onConfirm: () => void) {
     this.confirmState = {
       isOpen: true,
@@ -282,8 +367,8 @@ export class AdminPeriodsPage {
 
   clearData(id: string) {
     this.askConfirmation(
-      'Eliminar Datos del Periodo',
-      '¿Estás seguro de ELIMINAR TODOS LOS DATOS (secciones, alumnos, horarios, matrículas) de este periodo? Esta acción NO se puede deshacer.',
+      'Eliminar periodo',
+      'Estas seguro de eliminar este periodo y todos sus datos (secciones, alumnos, horarios y matriculas)? Esta accion no se puede deshacer.',
       () => this.executeClearData(id)
     );
   }
@@ -298,7 +383,7 @@ export class AdminPeriodsPage {
       // Wait a moment before reloading or just reload
       window.location.reload();
     } catch (e: any) {
-      this.error = e?.error?.message ?? 'No se pudo eliminar datos del periodo';
+      this.error = e?.error?.message ?? 'No se pudo eliminar el periodo';
       this.clearingId = null;
       this.cdr.detectChanges();
     }

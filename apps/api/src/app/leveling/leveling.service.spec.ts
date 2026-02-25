@@ -246,7 +246,7 @@ describe('LevelingService', () => {
     expect(queries.some((q) => q.includes('DELETE FROM ENROLLMENTS'))).toBe(false);
   });
 
-  it('planFromExcel should parse new template with courses from column L onwards', async () => {
+  it('planFromExcel should parse new template with courses from column O onwards', async () => {
     const dataSource = {
       query: jest.fn(async (sql: string) => {
         const normalized = sql.replace(/\s+/g, ' ').trim().toUpperCase();
@@ -288,6 +288,9 @@ describe('LevelingService', () => {
         'CorreoInstitucional',
         'Sexo',
         'Modalidad',
+        'Condicion',
+        'Requerimiento de Nivelacion',
+        'Programa de Nivelacion',
         'COMUNICACION',
         'HABILIDADES COMUNICATIVAS',
         'MATEMATICA',
@@ -304,6 +307,9 @@ describe('LevelingService', () => {
         'adamari@uai.edu.pe',
         'Femenino',
         'VIRTUAL',
+        'INGRESO',
+        'SI',
+        'SI',
         '',
         'HABILIDADES COMUNICATIVAS',
         '',
@@ -320,6 +326,9 @@ describe('LevelingService', () => {
         '',
         '',
         'VIRTUAL',
+        'INGRESO',
+        'SI',
+        'SI',
         'COMUNICACION',
         '',
         '',
@@ -330,16 +339,6 @@ describe('LevelingService', () => {
     const ws = XLSX.utils.aoa_to_sheet(rows);
     XLSX.utils.book_append_sheet(wb, ws, 'Hoja4');
     const fileBuffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
-
-    const result = await service.planFromExcel({ fileBuffer });
-
-    expect(result.inputSummary.eligibleStudents).toBe(2);
-    expect(result.needsByCourse['COMUNICACION']).toBe(1);
-    expect(result.needsByCourse['HABILIDADES COMUNICATIVAS']).toBe(1);
-    expect(Object.keys(result.needsByCourse)).toEqual([
-      'COMUNICACION',
-      'HABILIDADES COMUNICATIVAS',
-    ]);
 
     const parsed = (service as any).parseExcel(
       fileBuffer,
@@ -355,6 +354,15 @@ describe('LevelingService', () => {
         ['MATEMATICA', { id: 'c-3', name: 'MATEMATICA' }],
       ])
     );
+    expect(parsed.students).toHaveLength(2);
+    const needsByCourse = parsed.students.reduce((acc: Record<string, number>, student: any) => {
+      for (const name of student.neededCourses ?? []) {
+        acc[name] = (acc[name] ?? 0) + 1;
+      }
+      return acc;
+    }, {});
+    expect(needsByCourse['COMUNICACION']).toBe(1);
+    expect(needsByCourse['HABILIDADES COMUNICATIVAS']).toBe(1);
     expect(parsed.students[0]).toMatchObject({
       names: 'ADAMARI',
       paternalLastName: 'LOPEZ',

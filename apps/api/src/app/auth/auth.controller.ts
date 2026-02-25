@@ -20,12 +20,6 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   me(@CurrentUser() user: JwtUser) {
-    return {
-      user: {
-        id: user.sub,
-        fullName: user.fullName,
-        role: user.role,
-      },
-    };
+    return this.authService.me(user.sub);
   }
 }

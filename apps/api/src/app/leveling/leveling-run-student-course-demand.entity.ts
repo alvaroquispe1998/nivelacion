@@ -26,6 +26,12 @@ export class LevelingRunStudentCourseDemandEntity {
   @Column({ type: 'varchar', length: 120, nullable: true })
   campusName!: string | null;
 
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  sourceModality!: string | null;
+
+  @Column({ type: 'varchar', length: 32, nullable: true })
+  examDate!: string | null;
+
   @Column({ type: 'boolean', default: true })
   required!: boolean;
 

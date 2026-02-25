@@ -3,12 +3,15 @@ import {
   Component,
   EventEmitter,
   Input,
+  OnDestroy,
   OnInit,
   Output,
   inject,
 } from '@angular/core';
 import { NgClass, NgFor, NgIf } from '@angular/common';
 import { RouterLink, RouterLinkActive } from '@angular/router';
+import { Subscription } from 'rxjs';
+import { WorkflowStateService } from '../core/workflow/workflow-state.service';
 
 // ─── Menu model ───────────────────────────────────────────────────────────────
 
@@ -117,6 +120,12 @@ export const ADMIN_SIDEBAR_GROUPS: SidebarGroup[] = [
         icon: ICON.users,
         tooltip: 'Gestión de docentes',
       },
+      {
+        label: 'Pabellon y Aulas',
+        route: '/admin/classrooms',
+        icon: ICON.home,
+        tooltip: 'Pabellón y Aulas',
+      },
     ],
   },
   {
@@ -142,6 +151,13 @@ export const ADMIN_SIDEBAR_GROUPS: SidebarGroup[] = [
         icon: ICON.academic,
         tooltip: 'Matrícula',
       },
+      {
+        label: 'Alumnos por Sección',
+        route: '/admin/sections',
+        queryParams: { view: 'students' },
+        icon: ICON.users,
+        tooltip: 'Alumnos por Sección',
+      },
     ],
   },
   {
@@ -149,17 +165,22 @@ export const ADMIN_SIDEBAR_GROUPS: SidebarGroup[] = [
     step: 4,
     items: [
       {
+        label: 'Inteligencia / Base',
+        route: '/admin/reports/program',
+        icon: ICON.academic,
+        tooltip: 'Mapeo Académico y Necesidades Generales',
+      },
+      {
+        label: 'Visión Ejecutiva',
+        route: '/admin/reports/summary',
+        icon: ICON.clock,
+        tooltip: 'Panorámica por Facultades',
+      },
+      {
         label: 'Exportar',
         route: '/admin/export',
         icon: ICON.arrowUp,
         tooltip: 'Exportar resultados',
-      },
-      {
-        label: 'Alumnos por Sección',
-        route: '/admin/sections',
-        queryParams: { view: 'students' },
-        icon: ICON.users,
-        tooltip: 'Alumnos por Sección',
       },
     ],
   },
@@ -464,7 +485,7 @@ const BADGE_CLASSES: Record<BadgeTone, string> = {
     }
   `],
 })
-export class AdminSidebarComponent implements OnInit {
+export class AdminSidebarComponent implements OnInit, OnDestroy {
   /** User full name shown in the bottom card */
   @Input() userName = '';
 
@@ -472,6 +493,10 @@ export class AdminSidebarComponent implements OnInit {
   @Output() collapsedChange = new EventEmitter<boolean>();
 
   private http = inject(HttpClient);
+  private workflowState = inject(WorkflowStateService);
+  private workflowSub?: Subscription;
+  private refreshRequestId = 0;
+  private readonly resizeHandler = () => this.checkMobile();
 
   readonly chevronLeft = ICON.chevronLeft;
   readonly chevronRight = ICON.chevronRight;
@@ -499,72 +524,89 @@ export class AdminSidebarComponent implements OnInit {
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
+  
   ngOnInit() {
     this.collapsed = localStorage.getItem(STORAGE_KEY) === 'true';
     this.checkMobile();
-    window.addEventListener('resize', () => this.checkMobile());
+    window.addEventListener('resize', this.resizeHandler);
     this.collapsedChange.emit(this.collapsed);
+    this.workflowSub = this.workflowState.changes$.subscribe(() => this.refreshStatus());
 
     this.refreshStatus();
+  }
+
+  ngOnDestroy() {
+    this.workflowSub?.unsubscribe();
+    window.removeEventListener('resize', this.resizeHandler);
   }
 
   // ── Workflow Status ──────────────────────────────────────────────────────
 
   refreshStatus() {
-    this.http.get<any>('/api/admin/leveling/active-run-summary').subscribe({
-      next: (summary) => this.updateMenu(summary),
-      error: () => console.warn('Could not fetch workflow status for sidebar'),
-    });
+    const requestId = ++this.refreshRequestId;
+    this.http
+      .get<any>(`/api/admin/leveling/active-run-summary?t=${Date.now()}`)
+      .subscribe({
+      next: (summary) => {
+        if (requestId !== this.refreshRequestId) return;
+        this.updateMenu(summary);
+      },
+      error: () => {
+        if (requestId !== this.refreshRequestId) return;
+        console.warn('Could not fetch workflow status for sidebar');
+      },
+      });
   }
 
   updateMenu(s: any) {
     const nextGroups = JSON.parse(JSON.stringify(ADMIN_SIDEBAR_GROUPS));
 
-    const disable = (route: string, queryParamKey?: string, queryParamValue?: string) => {
+    const disable = (route: string, queryParams?: Record<string, any>) => {
       for (const g of nextGroups) {
         for (const item of g.items) {
           if (item.route !== route) continue;
-          // If a specific queryParam filter is provided, only disable that item
-          if (queryParamKey !== undefined) {
-            if (item.queryParams?.[queryParamKey] === queryParamValue) {
-              item.disabled = true;
-            }
-          } else {
+          if (!queryParams) {
+            item.disabled = true;
+            continue;
+          }
+          const matches = Object.entries(queryParams).every(
+            ([key, value]) => item.queryParams?.[key] === value
+          );
+          if (matches) {
             item.disabled = true;
           }
         }
       }
     };
 
-    // Step 1: Nivelación requires an active period
-    if (!s.activePeriod) {
+    const hasActivePeriod = Boolean(s?.activePeriod);
+    const hasRun = Boolean(s?.run);
+    const readyFaculties = Number(s?.metrics?.readyFaculties ?? 0);
+    const assigned = Number(s?.metrics?.assignedInPeriod ?? s?.metrics?.assigned ?? 0);
+
+    if (!hasActivePeriod) {
       disable('/admin/leveling');
     }
 
-    // Step 2a: Sections (main view) requires an active run
-    // i.e. a plan has been applied (run exists)
-    if (!s.activePeriod || !s.run) {
-      disable('/admin/sections');
+    if (!hasActivePeriod || !hasRun) {
+      disable('/admin/sections', { view: 'schedule' });
     }
 
-    // Step 2b: 'Horarios y Docentes' (schedule view) also requires an active run
-    // It's the same route but with queryParam view=schedule
-    // Already covered by the disable above since it matches all /admin/sections items
-
-    // Step 3: Matrícula requires at least one faculty with complete schedule + teacher
-    // OR the run is already MATRICULATED (allow viewing results again)
-    const readyFaculties = Number(s.metrics?.readyFaculties ?? 0);
-    if (!s.activePeriod || !s.run || (readyFaculties <= 0 && s.run?.status !== 'MATRICULATED')) {
-      disable('/admin/matricula');
+    if (!hasActivePeriod || !hasRun || assigned <= 0) {
+      disable('/admin/sections', { view: 'students' });
     }
 
-    // Step 4: 'Exportar' and 'Alumnos por Sección' require a completed matriculation
-    const isMatriculated = s.run?.status === 'MATRICULATED';
-    const hasAssigned = Number(s.metrics?.assigned ?? 0) > 0;
-    if (!s.activePeriod || !s.run || !isMatriculated || !hasAssigned) {
+    if (!hasActivePeriod || !hasRun) {
+      disable('/admin/reports/program');
+      disable('/admin/reports/summary');
+    }
+
+    if (!hasActivePeriod || !hasRun || (readyFaculties <= 0 && assigned <= 0)) {
       disable('/admin/export');
-      // Only disable 'Alumnos por Sección' (view=students), not the general sections page
-      disable('/admin/sections', 'view', 'students');
+    }
+
+    if (!hasActivePeriod || !hasRun || readyFaculties <= 0) {
+      disable('/admin/matricula');
     }
 
     this.groups = nextGroups;
@@ -600,3 +642,4 @@ export class AdminSidebarComponent implements OnInit {
     }
   }
 }
+

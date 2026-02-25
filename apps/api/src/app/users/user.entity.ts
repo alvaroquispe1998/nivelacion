@@ -39,6 +39,12 @@ export class UserEntity {
   @Column({ type: 'varchar', length: 20, nullable: true })
   sex!: string | null;
 
+  @Column({ type: 'varchar', length: 200, nullable: true })
+  careerName!: string | null;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  examDate!: string | null;
+
   @Column({ type: 'enum', enum: Role })
   role!: Role;
 

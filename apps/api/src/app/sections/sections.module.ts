@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ClassroomEntity } from '../classrooms/classroom.entity';
 import { SectionCourseTeacherEntity } from './section-course-teacher.entity';
 import { SectionEntity } from './section.entity';
 import { SectionsService } from './sections.service';
@@ -9,7 +10,12 @@ import { UserEntity } from '../users/user.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([SectionEntity, UserEntity, SectionCourseTeacherEntity]),
+    TypeOrmModule.forFeature([
+      SectionEntity,
+      UserEntity,
+      SectionCourseTeacherEntity,
+      ClassroomEntity,
+    ]),
     PeriodsModule,
   ],
   controllers: [SectionsController],

@@ -17,7 +17,15 @@ docker compose -f docker-compose.dev.yml up --build -d
 
 ```sh
 docker compose -f docker-compose.dev.yml exec -T api pnpm nx run api:migrate
-```
+
+
+cd D:\SPIDER-DEV\UAI\nivelacion
+$env:DB_HOST="127.0.0.1"
+$env:DB_PORT="3307"
+$env:DB_USER="uai"
+$env:DB_PASS="uai_pass"
+$env:DB_NAME="uai"
+npx nx run api:migrate
 
 ## Levantar en desarrollo por terminal (sin Docker para web/api)
 
@@ -41,6 +49,10 @@ Si quieres solo MySQL en Docker:
 ```sh
 docker compose -f docker-compose.dev.yml up -d mysql adminer
 ```
+
+Si la API corre en tu host (sin Docker), conecta a MySQL Docker con:
+- `DB_HOST=127.0.0.1`
+- `DB_PORT=3307`
 
 ### Solo API (terminal)
 
@@ -110,10 +122,17 @@ npx nx run api:migrate
 Ejemplo completo en PowerShell:
 
 ```powershell
-cd D:\SPIDER-DEV\UAI\nivelacion; $env:DB_HOST="127.0.0.1"; $env:DB_PORT="3306"; $env:DB_USER="uai"; $env:DB_PASS="uai_pass"; $env:DB_NAME="uai"; npx nx run api:migrate
+cd D:\SPIDER-DEV\UAI\nivelacion; $env:DB_HOST="127.0.0.1"; $env:DB_PORT="3307"; $env:DB_USER="uai"; $env:DB_PASS="uai_pass"; $env:DB_NAME="uai"; npx nx run api:migrate
 ```
 
 Si ves `The current directory isn't part of an Nx workspace`, ejecutaste el comando fuera de la carpeta del proyecto.
+
+Si al final aparece `"pnpm" no se reconoce...` pero `NX Successfully ran target migrate`, la migracion si se ejecuto. Para corregir ese mensaje en Windows:
+
+```powershell
+corepack enable
+corepack prepare pnpm@10.30.0 --activate
+```
 
 ## URLs (host)
 
@@ -130,7 +149,8 @@ Si ves `The current directory isn't part of an Nx workspace`, ejecutaste el coma
 MySQL (desde Adminer o cliente):
 - Host Docker: `mysql`
 - Host local: `localhost`
-- Puerto: `3306`
+- Puerto local (Docker): `3307`
+- Puerto interno contenedor: `3306`
 - DB: `uai`
 - User: `uai`
 - Pass: `uai_pass`

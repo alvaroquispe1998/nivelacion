@@ -1,7 +1,15 @@
-import { Module } from '@nestjs/common';
+import {
+  MiddlewareConsumer,
+  Module,
+  NestModule,
+  RequestMethod,
+} from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AttendanceModule } from './attendance/attendance.module';
 import { AuthModule } from './auth/auth.module';
+import { ClassroomsModule } from './classrooms/classrooms.module';
+import { AdminPeriodContextModule } from './common/context/admin-period-context.module';
+import { AdminPeriodContextMiddleware } from './common/context/admin-period-context.middleware';
 import { DatabaseModule } from './database/database.module';
 import { IntegrationsModule } from './integrations/integrations.module';
 import { LevelingModule } from './leveling/leveling.module';
@@ -17,7 +25,9 @@ import { AppController } from './app.controller';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    AdminPeriodContextModule,
     DatabaseModule,
+    ClassroomsModule,
     UsersModule,
     AuthModule,
     PeriodsModule,
@@ -31,6 +41,15 @@ import { AppController } from './app.controller';
     TeacherModule,
   ],
   controllers: [AppController],
-  providers: [],
+  providers: [AdminPeriodContextMiddleware],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer
+      .apply(AdminPeriodContextMiddleware)
+      .forRoutes(
+        { path: 'admin', method: RequestMethod.ALL },
+        { path: 'admin/(.*)', method: RequestMethod.ALL }
+      );
+  }
+}

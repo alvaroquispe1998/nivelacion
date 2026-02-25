@@ -1,7 +1,13 @@
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
-import { ChangeDetectorRef, Component, inject } from '@angular/core';
-import { firstValueFrom } from 'rxjs';
+import {
+  ChangeDetectorRef,
+  Component,
+  OnDestroy,
+  inject,
+} from '@angular/core';
+import { Subscription, firstValueFrom, skip } from 'rxjs';
+import { AdminPeriodContextService } from '../core/workflow/admin-period-context.service';
 
 interface AssignedSectionCourseRow {
   sectionCourseId: string;
@@ -22,6 +28,7 @@ interface ActivePeriod {
   id: string;
   code: string;
   name: string;
+  status?: string;
 }
 
 @Component({
@@ -57,7 +64,7 @@ interface ActivePeriod {
     <div class="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <div class="text-sm text-slate-700">
-          Periodo activo:
+          Periodo de trabajo:
           <b>{{ activePeriod ? activePeriod.code + ' - ' + activePeriod.name : '-' }}</b>
         </div>
         <button
@@ -106,7 +113,7 @@ interface ActivePeriod {
           </tr>
           <tr *ngIf="rows.length === 0" class="border-t border-slate-100">
             <td class="px-4 py-5 text-slate-500" colspan="5">
-              No hay seccion-curso con docente asignado en el periodo activo.
+              No hay seccion-curso con docente asignado en el periodo seleccionado.
             </td>
           </tr>
         </tbody>
@@ -114,9 +121,11 @@ interface ActivePeriod {
     </div>
   `,
 })
-export class AdminExportAssignedPage {
+export class AdminExportAssignedPage implements OnDestroy {
   private readonly http = inject(HttpClient);
   private readonly cdr = inject(ChangeDetectorRef);
+  private readonly adminPeriodContext = inject(AdminPeriodContextService);
+  private periodSub?: Subscription;
 
   rows: AssignedSectionCourseRow[] = [];
   activePeriod: ActivePeriod | null = null;
@@ -129,6 +138,13 @@ export class AdminExportAssignedPage {
 
   async ngOnInit() {
     await this.load();
+    this.periodSub = this.adminPeriodContext.changes$
+      .pipe(skip(1))
+      .subscribe(() => void this.load());
+  }
+
+  ngOnDestroy() {
+    this.periodSub?.unsubscribe();
   }
 
   trackRow(_: number, row: AssignedSectionCourseRow) {
@@ -138,11 +154,16 @@ export class AdminExportAssignedPage {
   async load() {
     this.error = null;
     try {
+      const selectedPeriod = await this.resolvePeriodContext();
       const [rows, activePeriod] = await Promise.all([
         firstValueFrom(
           this.http.get<AssignedSectionCourseRow[]>('/api/admin/sections/export/assigned-courses')
         ),
-        firstValueFrom(this.http.get<ActivePeriod>('/api/periods/active')),
+        Promise.resolve({
+          id: selectedPeriod.id,
+          code: selectedPeriod.code,
+          name: selectedPeriod.name,
+        }),
       ]);
       this.rows = rows;
       this.activePeriod = activePeriod;
@@ -151,6 +172,17 @@ export class AdminExportAssignedPage {
     } finally {
       this.cdr.detectChanges();
     }
+  }
+
+  private async resolvePeriodContext() {
+    const selected = this.adminPeriodContext.getSelectedPeriod();
+    if (selected?.id) return selected;
+    const rows = await firstValueFrom(this.http.get<ActivePeriod[]>('/api/admin/periods'));
+    const resolved = this.adminPeriodContext.resolveFromPeriodList(rows);
+    if (!resolved?.id) {
+      throw new Error('No hay periodos disponibles para trabajar.');
+    }
+    return resolved;
   }
 
   async downloadExcel() {
@@ -180,4 +212,3 @@ export class AdminExportAssignedPage {
     }
   }
 }
-

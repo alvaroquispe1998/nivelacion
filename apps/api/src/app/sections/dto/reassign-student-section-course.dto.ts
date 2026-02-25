@@ -1,4 +1,11 @@
-import { IsBoolean, IsNotEmpty, IsOptional, IsUUID } from 'class-validator';
+import {
+  IsBoolean,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MaxLength,
+} from 'class-validator';
 
 export class ReassignStudentSectionCourseDto {
   @IsUUID()
@@ -16,4 +23,9 @@ export class ReassignStudentSectionCourseDto {
   @IsOptional()
   @IsBoolean()
   confirmOverCapacity?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
 }

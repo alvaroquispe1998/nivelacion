@@ -62,6 +62,7 @@ export class LevelingController {
       initialCapacity: dto.initialCapacity,
       maxExtraCapacity: dto.maxExtraCapacity,
       apply: dto.apply,
+      mode: dto.mode,
       groupModalityOverrides: dto.groupModalityOverrides,
       createdById: String(req?.user?.id ?? '').trim() || null,
     });
@@ -75,6 +76,38 @@ export class LevelingController {
   @Get('runs/:runId/sections')
   listRunSections(@Param('runId') runId: string) {
     return this.levelingService.listRunSections(runId);
+  }
+
+  @Get('runs/:runId/reports')
+  getRunReports(@Param('runId') runId: string) {
+    return this.levelingService.getRunReports(runId);
+  }
+
+  @Get('reports/program-needs')
+  getProgramNeedsDynamic(
+    @Query('periodId') periodId?: string,
+    @Query('examDate') examDate?: string,
+    @Query('facultyGroup') facultyGroup?: string,
+    @Query('campusName') campusName?: string,
+    @Query('modality') modality?: string
+  ) {
+    return this.levelingService.getProgramNeedsDynamic({
+      periodId,
+      examDate,
+      facultyGroup,
+      campusName,
+      modality,
+    });
+  }
+
+  @Get('reports/exam-dates')
+  getExamDates(@Query('periodId') periodId?: string) {
+    return this.levelingService.getExamDates(periodId);
+  }
+
+  @Get('reports/executive-summary')
+  getExecutiveSummaryGlobal(@Query('periodId') periodId?: string) {
+    return this.levelingService.getExecutiveSummaryGlobal(periodId);
   }
 
   @Post('runs/:runId/manual-section-courses')
@@ -96,17 +129,22 @@ export class LevelingController {
   @Post('runs/:runId/matriculate')
   matriculateRun(
     @Param('runId') runId: string,
-    @Body() body: { facultyGroup?: string }
+    @Body() body: { facultyGroup?: string; strategy?: 'FULL_REBUILD' | 'INCREMENTAL' }
   ) {
-    return this.levelingService.matriculateRun(runId, body?.facultyGroup);
+    return this.levelingService.matriculateRun(
+      runId,
+      body?.facultyGroup,
+      body?.strategy
+    );
   }
 
   @Get('runs/:runId/matriculate-preview')
   getRunMatriculationPreview(
     @Param('runId') runId: string,
-    @Query('facultyGroup') facultyGroup?: string
+    @Query('facultyGroup') facultyGroup?: string,
+    @Query('strategy') strategy?: 'FULL_REBUILD' | 'INCREMENTAL'
   ) {
-    return this.levelingService.getRunMatriculationPreview(runId, facultyGroup);
+    return this.levelingService.getRunMatriculationPreview(runId, facultyGroup, strategy);
   }
 
   @Get('runs/:runId/conflicts')

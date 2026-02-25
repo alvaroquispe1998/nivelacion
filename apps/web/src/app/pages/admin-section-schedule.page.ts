@@ -6,7 +6,17 @@ import { ActivatedRoute } from '@angular/router';
 import type { AdminScheduleBlock } from '@uai/shared';
 import { combineLatest, firstValueFrom } from 'rxjs';
 import type { Subscription } from 'rxjs';
+import { AdminPeriodContextService } from '../core/workflow/admin-period-context.service';
 import { DAYS } from '../shared/days';
+import { WorkflowStateService } from '../core/workflow/workflow-state.service';
+
+interface ActivePeriod {
+  id: string;
+  code: string;
+  name: string;
+  startsAt?: string | null;
+  endsAt?: string | null;
+}
 
 const COURSE_CONTEXT_STORAGE_KEY = 'admin.sections.selectedCourseName';
 
@@ -156,6 +166,8 @@ export class AdminSectionSchedulePage {
   private readonly route = inject(ActivatedRoute);
   private readonly fb = inject(FormBuilder);
   private readonly cdr = inject(ChangeDetectorRef);
+  private readonly adminPeriodContext = inject(AdminPeriodContextService);
+  private readonly workflowState = inject(WorkflowStateService);
 
   readonly days = DAYS;
   sectionId = '';
@@ -167,6 +179,7 @@ export class AdminSectionSchedulePage {
   selectedCourseName = '';
   contextCourseName = '';
   editingBlockId: string | null = null;
+  period: ActivePeriod | null = null;
 
   get visibleBlocks() {
     const course = this.selectedCourseName.trim();
@@ -217,19 +230,29 @@ export class AdminSectionSchedulePage {
   async load() {
     this.error = null;
     try {
-      const allCourses = await firstValueFrom(
-        this.http.get<string[]>(
-          `/api/admin/sections/${encodeURIComponent(this.sectionId)}/courses`
-        )
-      );
-      this.blocks = await firstValueFrom(
-        this.http.get<AdminScheduleBlock[]>(
-          `/api/admin/schedule-blocks?sectionId=${encodeURIComponent(this.sectionId)}`
-        )
-      );
+      const [allCourses, blocks, period] = await Promise.all([
+        firstValueFrom(
+          this.http.get<string[]>(
+            `/api/admin/sections/${encodeURIComponent(this.sectionId)}/courses`
+          )
+        ),
+        firstValueFrom(
+          this.http.get<AdminScheduleBlock[]>(
+            `/api/admin/schedule-blocks?sectionId=${encodeURIComponent(this.sectionId)}`
+          )
+        ),
+        this.resolvePeriodContext(),
+      ]);
+
+      this.period = period;
+      this.blocks = blocks;
       const selectedCourseName = this.resolveCourseContext(allCourses);
       this.selectedCourseName = selectedCourseName;
-      this.form.patchValue({ courseName: selectedCourseName });
+      this.form.patchValue({
+        courseName: selectedCourseName,
+        startDate: this.form.get('startDate')?.value || this.period?.startsAt || '',
+        endDate: this.form.get('endDate')?.value || this.period?.endsAt || '',
+      });
       if (selectedCourseName) {
         this.saveStoredCourseName(selectedCourseName);
       }
@@ -244,6 +267,32 @@ export class AdminSectionSchedulePage {
     } finally {
       this.cdr.detectChanges();
     }
+  }
+
+  private async resolvePeriodContext(): Promise<ActivePeriod | null> {
+    const selected = this.adminPeriodContext.getSelectedPeriod();
+    if (selected?.id && (selected.startsAt || selected.endsAt)) {
+      return {
+        id: selected.id,
+        code: selected.code,
+        name: selected.name,
+        startsAt: selected.startsAt ?? null,
+        endsAt: selected.endsAt ?? null,
+      };
+    }
+    const rows = await firstValueFrom(
+      this.http.get<Array<ActivePeriod & { status?: string }>>('/api/admin/periods')
+    );
+    const resolved = this.adminPeriodContext.resolveFromPeriodList(rows);
+    if (!resolved?.id) return null;
+    const row = rows.find((p) => String(p.id ?? '').trim() === resolved.id) ?? null;
+    return {
+      id: resolved.id,
+      code: resolved.code,
+      name: resolved.name,
+      startsAt: row?.startsAt ?? resolved.startsAt ?? null,
+      endsAt: row?.endsAt ?? resolved.endsAt ?? null,
+    };
   }
 
   async saveBlock() {
@@ -275,8 +324,8 @@ export class AdminSectionSchedulePage {
       dayOfWeek: 1,
       startTime: '08:00',
       endTime: '10:00',
-      startDate: '',
-      endDate: '',
+      startDate: this.period?.startsAt || '',
+      endDate: this.period?.endsAt || '',
     });
     if (detectChanges) {
       this.cdr.detectChanges();
@@ -301,6 +350,7 @@ export class AdminSectionSchedulePage {
       );
       this.cancelEdit(false);
       await this.load();
+      this.workflowState.notifyWorkflowChanged();
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo crear bloque';
     } finally {
@@ -326,6 +376,7 @@ export class AdminSectionSchedulePage {
       );
       this.cancelEdit(false);
       await this.load();
+      this.workflowState.notifyWorkflowChanged();
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo actualizar bloque';
     } finally {
@@ -339,6 +390,7 @@ export class AdminSectionSchedulePage {
     try {
       await firstValueFrom(this.http.delete(`/api/admin/schedule-blocks/${id}`));
       await this.load();
+      this.workflowState.notifyWorkflowChanged();
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo eliminar bloque';
     } finally {

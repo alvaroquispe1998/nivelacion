@@ -1,4 +1,4 @@
-import {
+﻿import {
   BadRequestException,
   ConflictException,
   Injectable,
@@ -8,6 +8,7 @@ import { createHash, randomUUID } from 'crypto';
 import { Role } from '@uai/shared';
 import * as XLSX from 'xlsx';
 import { DataSource, EntityManager, In } from 'typeorm';
+import { PeriodsService } from '../periods/periods.service';
 import { SectionEntity } from '../sections/section.entity';
 import { UserEntity } from '../users/user.entity';
 import { CreateLevelingManualSectionCourseDto } from './dto/create-leveling-manual-section-course.dto';
@@ -31,7 +32,7 @@ const PREFERRED_COURSE_ORDER = [
 ] as const;
 const FIRST_COURSE_COLUMN_INDEX = 14; // O
 
-const FICA_NAME = 'INGENIERIA, CIENCIAS Y HUMANIDADES';
+const FICA_NAME = 'INGENIERÍA, CIENCIAS Y ADMINISTRACIÓN';
 const SALUD_NAME = 'CIENCIAS DE LA SALUD';
 const HOURS_PER_GROUP = 4;
 const PRICE_PER_HOUR = 116;
@@ -53,6 +54,7 @@ interface ParsedStudent {
   modality: 'VIRTUAL' | 'PRESENCIAL';
   modalityChar: 'V' | 'P';
   sourceModality: 'VIRTUAL' | 'PRESENCIAL' | 'SIN DATO';
+  examDate: string | null;
   neededCourses: CourseName[];
 }
 
@@ -98,8 +100,15 @@ interface CourseGroupUnit {
   facultyGroup: 'FICA' | 'SALUD';
   campusName: string;
   courseName: CourseName;
+  courseId?: string;
   size: number;
   modality: 'PRESENCIAL' | 'VIRTUAL';
+  origin?: 'EXISTING_FREE' | 'NEW_REQUIRED';
+  sectionCourseId?: string | null;
+  availableSeats?: number | null;
+  hasExistingVirtual?: boolean;
+  sectionCode?: string | null;
+  sectionCampusName?: string | null;
 }
 
 interface GroupPlanPayload {
@@ -113,6 +122,12 @@ interface GroupPlanPayload {
           id: string;
           size: number;
           modality: 'PRESENCIAL' | 'VIRTUAL';
+          origin?: 'EXISTING_FREE' | 'NEW_REQUIRED';
+          sectionCourseId?: string;
+          availableSeats?: number;
+          hasExistingVirtual?: boolean;
+          sectionCode?: string;
+          sectionCampusName?: string;
         }>
       >;
     }>;
@@ -120,13 +135,14 @@ interface GroupPlanPayload {
 }
 
 interface ProgramNeedsPayload {
+  facultyGroups: string[];
   campuses: string[];
   modalities: string[];
   rows: Array<{
     careerName: string;
-    facultyGroup: 'FICA' | 'SALUD';
+    facultyGroup: string;
     campusName: string;
-    sourceModality: 'VIRTUAL' | 'PRESENCIAL' | 'SIN DATO';
+    sourceModality: string;
     needsByCourse: Record<CourseName, number>;
     totalNeeds: number;
   }>;
@@ -145,6 +161,43 @@ interface ApplyStructureResult {
   sectionCoursesOmitted: number;
   demandsCreated: number;
   demandsOmitted: number;
+  sectionsCreatedByExpansion: number;
+  sectionCoursesCreatedByExpansion: number;
+  offersReused: number;
+  pendingDemandsEvaluated: number;
+}
+
+interface PendingDemandForExpansion {
+  studentId: string;
+  courseId: string;
+  facultyGroup: string | null;
+  campusName: string | null;
+}
+
+interface ExpandOfferResult {
+  sectionsCreatedByExpansion: number;
+  sectionCoursesCreatedByExpansion: number;
+  offersReused: number;
+  pendingDemandsEvaluated: number;
+}
+
+interface AppendPreviewResult {
+  runId: string | null;
+  runStatus: LevelingRunStatus | null;
+  demandsCreated: number;
+  demandsOmitted: number;
+  sectionsCreatedByExpansion: number;
+  sectionCoursesCreatedByExpansion: number;
+  offersReused: number;
+  pendingDemandsEvaluated: number;
+  existingFreeSeatsDetected: number;
+  newRequiredSeats: number;
+  groupsConvertedToVirtual: number;
+}
+
+interface AppendPreviewBundle {
+  preview: AppendPreviewResult;
+  groupUnits: CourseGroupUnit[];
 }
 
 interface StudentDemandItem {
@@ -189,7 +242,10 @@ interface ExcelColumns {
 
 @Injectable()
 export class LevelingService {
-  constructor(private readonly dataSource: DataSource) { }
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly periodsService: PeriodsService
+  ) {}
 
   async getConfig() {
     const rows = await this.dataSource.query(
@@ -209,12 +265,25 @@ export class LevelingService {
    * in a single call to drive the admin sequential progress panel.
    */
   async getActiveRunSummary() {
-    // 1. Active period
-    const periodRows: Array<{ id: string; code: string; name: string; kind: string }> =
-      await this.dataSource.query(
-        `SELECT id, code, name, kind FROM periods WHERE status = 'ACTIVE' LIMIT 1`
-      );
-    const activePeriod = periodRows[0] ?? null;
+    // 1. Operational period (admin context period or active period fallback)
+    let activePeriod: {
+      id: string;
+      code: string;
+      name: string;
+      kind?: string;
+    } | null = null;
+    try {
+      activePeriod = await this.periodsService.getOperationalPeriodOrThrow();
+    } catch (error) {
+      if (
+        error instanceof BadRequestException &&
+        String(error.message ?? '').includes('No active period configured')
+      ) {
+        activePeriod = null;
+      } else {
+        throw error;
+      }
+    }
 
     if (!activePeriod) {
       return {
@@ -253,8 +322,8 @@ export class LevelingService {
       scheduledRows,
       teacherRows,
       assignedRows,
+      assignedInPeriodRows,
       demandRows,
-      facultyRows,
     ] =
       await Promise.all([
         this.dataSource.query<Array<{ c: number }>>(
@@ -298,54 +367,39 @@ export class LevelingService {
           [run.id, run.periodId]
         ),
         this.dataSource.query<Array<{ c: number }>>(
+          `SELECT COUNT(*) AS c
+         FROM section_student_courses ssc
+         INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
+         WHERE sc.periodId = ?`,
+          [activePeriod.id]
+        ),
+        this.dataSource.query<Array<{ c: number }>>(
           `SELECT COUNT(*) AS c FROM leveling_run_student_course_demands WHERE runId = ?`,
           [run.id]
-        ),
-        this.dataSource.query<
-          Array<{
-            facultyGroup: string | null;
-            totalSectionCourses: number;
-            withSchedule: number;
-            withTeacher: number;
-          }>
-        >(
-          `
-          SELECT
-            s.facultyGroup AS facultyGroup,
-            COUNT(DISTINCT sc.id) AS totalSectionCourses,
-            COUNT(DISTINCT IF(sb.id IS NOT NULL, sc.id, NULL)) AS withSchedule,
-            COUNT(
-              DISTINCT IF(s.teacherId IS NOT NULL OR sct.teacherId IS NOT NULL, sc.id, NULL)
-            ) AS withTeacher
-          FROM section_courses sc
-          INNER JOIN sections s ON s.id = sc.sectionId
-          LEFT JOIN schedule_blocks sb ON sb.sectionCourseId = sc.id
-          LEFT JOIN section_course_teachers sct ON sct.sectionCourseId = sc.id
-          WHERE s.levelingRunId = ?
-            AND sc.periodId = ?
-          GROUP BY s.facultyGroup
-          `,
-          [run.id, run.periodId]
         ),
       ]);
 
     const totalSectionCourses = Number(sectionCourseRows[0]?.c ?? 0);
     const withSchedule = Number(scheduledRows[0]?.c ?? 0);
     const withTeacher = Number(teacherRows[0]?.c ?? 0);
-    const faculties = facultyRows.map((row) => {
-      const total = Number(row.totalSectionCourses ?? 0);
-      const withScheduleCount = Number(row.withSchedule ?? 0);
-      const withTeacherCount = Number(row.withTeacher ?? 0);
-      return {
-        facultyGroup: String(row.facultyGroup ?? '').trim() || 'SIN_FACULTAD',
-        totalSectionCourses: total,
-        withSchedule: withScheduleCount,
-        withTeacher: withTeacherCount,
-        ready:
-          total > 0 &&
-          withScheduleCount === total &&
-          withTeacherCount === total,
-      };
+    const { sectionCourseRows: summarySectionCourseRows, blocksBySectionCourse } =
+      await this.loadMatriculationPreviewContext({
+        runId: run.id,
+        periodId: run.periodId,
+      });
+    const pendingDemandsByFaculty = await this.loadPendingDemandsByFaculty({
+      runId: run.id,
+      periodId: run.periodId,
+    });
+    const pendingDemandsByFacultyCourse = await this.loadPendingDemandsByFacultyCourse({
+      runId: run.id,
+      periodId: run.periodId,
+    });
+    const faculties = this.buildMatriculationFacultyStatuses({
+      sectionCourseRows: summarySectionCourseRows,
+      blocksBySectionCourse,
+      pendingDemandsByFaculty,
+      pendingDemandsByFacultyCourse,
     });
     const readyFaculties = faculties.filter((row) => row.ready).length;
 
@@ -357,6 +411,7 @@ export class LevelingService {
         sectionCourses: totalSectionCourses,
         demands: Number(demandRows[0]?.c ?? 0),
         assigned: Number(assignedRows[0]?.c ?? 0),
+        assignedInPeriod: Number(assignedInPeriodRows[0]?.c ?? 0),
         schedules: {
           withSchedule,
           withoutSchedule: Math.max(0, totalSectionCourses - withSchedule),
@@ -392,6 +447,7 @@ export class LevelingService {
     initialCapacity?: number;
     maxExtraCapacity?: number;
     apply?: boolean;
+    mode?: 'REPLACE' | 'APPEND';
     groupModalityOverrides?: string;
     createdById?: string | null;
   }) {
@@ -399,6 +455,9 @@ export class LevelingService {
     const initialCapacity = params.initialCapacity ?? cfg.initialCapacity;
     const maxExtraCapacity = params.maxExtraCapacity ?? cfg.maxExtraCapacity;
     const apply = Boolean(params.apply);
+    const mode = String(params.mode ?? 'REPLACE')
+      .trim()
+      .toUpperCase() as 'REPLACE' | 'APPEND';
 
     if (!params.fileBuffer || params.fileBuffer.length === 0) {
       throw new BadRequestException('Excel file is required');
@@ -411,11 +470,11 @@ export class LevelingService {
     }
 
 
-    if (apply) {
+    if (apply && mode !== 'APPEND') {
       const activeSummary = await this.getActiveRunSummary();
       if (activeSummary.run && activeSummary.run.status !== 'ARCHIVED') {
         throw new BadRequestException(
-          'Ya existe un proceso de nivelación activo para este periodo. ' +
+          'Ya existe un proceso de nivelaciÃ³n activo para este periodo. ' +
           'Por seguridad, debes eliminar los datos del periodo desde la pantalla de Periodos antes de volver a procesar.'
         );
       }
@@ -437,15 +496,22 @@ export class LevelingService {
     const groupModalityOverrides = this.parseGroupModalityOverrides(
       params.groupModalityOverrides
     );
-    const groupUnits = this.buildCourseGroupUnits({
+    const baseGroupModalityOverrides =
+      mode === 'APPEND'
+        ? (new Map<string, 'PRESENCIAL' | 'VIRTUAL'>() as Map<
+          string,
+          'PRESENCIAL' | 'VIRTUAL'
+        >)
+        : groupModalityOverrides;
+    const baseGroupUnits = this.buildCourseGroupUnits({
       students: parsed.students,
       courseNames: parsed.courseNames,
       sectionCapacity,
-      groupModalityOverrides,
+      groupModalityOverrides: baseGroupModalityOverrides,
     });
     const plannedSections = this.buildSectionsFromGroupUnits({
       students: parsed.students,
-      groupUnits,
+      groupUnits: baseGroupUnits,
       courseNames: parsed.courseNames,
       sectionCapacity,
       initialCapacity,
@@ -453,19 +519,32 @@ export class LevelingService {
     });
 
     let applied: null | ApplyStructureResult = null;
-
-    if (apply) {
-      applied = await this.applyPlan({
-        sections: plannedSections,
-        students: parsed.students,
-        configUsed: {
-          initialCapacity,
-          maxExtraCapacity,
-        },
-        sourceFileHash: this.hashBuffer(params.fileBuffer),
-        createdById: params.createdById ?? null,
+    let appendPlanning: AppendPreviewBundle | null = null;
+    if (mode === 'APPEND') {
+      appendPlanning = await this.previewAppendDemandsAndExpansion(parsed.students, {
+        sectionCapacity,
+        groupModalityOverrides,
       });
     }
+    const groupUnits =
+      mode === 'APPEND' ? appendPlanning?.groupUnits ?? [] : baseGroupUnits;
+    const sectionsForResponse =
+      mode === 'APPEND'
+        ? await this.buildAppendSectionsPreview({
+          groupUnits,
+          runId: appendPlanning?.preview?.runId ?? null,
+        })
+        : plannedSections;
+    const groupPlanCourseNames = this.sortCourseNames(
+      Array.from(
+        new Set([
+          ...parsed.courseNames,
+          ...groupUnits
+            .map((unit) => String(unit.courseName ?? '').trim())
+            .filter((value) => Boolean(value)),
+        ])
+      )
+    );
 
     const summaryByCourse = this.initCourseCountMap(parsed.courseNames);
     for (const s of parsed.students) {
@@ -473,10 +552,54 @@ export class LevelingService {
     }
     const courseGroupSummary = this.buildCourseGroupSummary({
       groupUnits,
-      courseNames: parsed.courseNames,
+      courseNames: groupPlanCourseNames,
     });
-    const groupPlan = this.buildGroupPlan(groupUnits, parsed.courseNames);
+    const groupPlan = this.buildGroupPlan(groupUnits, groupPlanCourseNames);
     const programNeeds = this.buildProgramNeeds(parsed.students, parsed.courseNames);
+    let appendPreview: AppendPreviewResult | null = null;
+
+    if (apply) {
+      if (mode === 'APPEND') {
+        const activeSummary = await this.getActiveRunSummary();
+        const activeRunId = String(activeSummary.run?.id ?? '').trim();
+        if (!activeRunId) {
+          throw new BadRequestException(
+            'No existe una corrida activa para usar modo APPEND'
+          );
+        }
+        applied = await this.appendDemandsToRun({
+          runId: activeRunId,
+          students: parsed.students,
+          sectionCapacity,
+          groupModalityOverrides,
+          createdById: params.createdById ?? null,
+        });
+      } else {
+        applied = await this.applyPlan({
+          sections: plannedSections,
+          students: parsed.students,
+          configUsed: {
+            initialCapacity,
+            maxExtraCapacity,
+          },
+          sourceFileHash: this.hashBuffer(params.fileBuffer),
+          reportsJson: { summary: courseGroupSummary, programNeeds, groupPlan },
+          createdById: params.createdById ?? null,
+        });
+      }
+    } else if (mode === 'APPEND') {
+      appendPreview = appendPlanning?.preview ?? null;
+    }
+
+    if (apply && !applied && mode === 'APPEND') {
+      // if we want to save reports on APPEND, we'd need to fetch and merge
+      // but for now, the original problem is about REPLACE
+    } else if (apply && applied && mode !== 'APPEND') {
+      // already passed reportsJson to applyPlan above, but let's make sure it's accurate
+      // since courseGroupSummary etc were built AFTER applyPlan the first time.
+      // Wait, I put courseGroupSummary in applyPlan BEFORE computing it? 
+      // Ah! The original code computes it AFTER applyPlan.
+    }
 
     return {
       configUsed: {
@@ -492,7 +615,7 @@ export class LevelingService {
       programNeeds,
       summary: courseGroupSummary,
       groupPlan,
-      sections: plannedSections.map((s) => ({
+      sections: sectionsForResponse.map((s) => ({
         code: s.code,
         name: s.name,
         facultyGroup: s.facultyGroup,
@@ -527,9 +650,10 @@ export class LevelingService {
             ).sort(),
           })),
       })),
-      runId: applied?.runId ?? null,
-      runStatus: applied?.runStatus ?? null,
+      runId: applied?.runId ?? appendPreview?.runId ?? null,
+      runStatus: applied?.runStatus ?? appendPreview?.runStatus ?? null,
       applied,
+      appendPreview,
     };
   }
 
@@ -610,6 +734,11 @@ export class LevelingService {
         sectionCoursesWithoutSchedule: Math.max(0, sectionCourses - withSchedule),
       },
     };
+  }
+
+  async getRunReports(runId: string) {
+    const run = await this.getRunOrThrow(runId);
+    return run.reportsJson || null;
   }
 
   async listRunSections(runId: string) {
@@ -800,12 +929,21 @@ export class LevelingService {
           sectionId,
           courseId,
           idakademic,
+          initialCapacity,
+          maxExtraCapacity,
           createdAt,
           updatedAt
         )
-        VALUES (?, ?, ?, ?, NULL, NOW(6), NOW(6))
+        VALUES (?, ?, ?, ?, NULL, ?, ?, NOW(6), NOW(6))
         `,
-        [sectionCourseId, run.periodId, sectionId, course.id]
+        [
+          sectionCourseId,
+          run.periodId,
+          sectionId,
+          course.id,
+          initialCapacity,
+          maxExtraCapacity,
+        ]
       );
 
       return {
@@ -907,43 +1045,23 @@ export class LevelingService {
     });
   }
 
-  async matriculateRun(runId: string, facultyGroup?: string) {
+  async matriculateRun(
+    runId: string,
+    facultyGroup?: string,
+    strategy?: 'FULL_REBUILD' | 'INCREMENTAL'
+  ) {
     return this.dataSource.transaction(async (manager) => {
       const run = await this.getRunOrThrow(runId, manager);
       if (run.status === 'ARCHIVED') {
         throw new BadRequestException('No se puede matricular una corrida archivada');
       }
+      const assignStrategy = String(strategy ?? 'INCREMENTAL')
+        .trim()
+        .toUpperCase() as 'FULL_REBUILD' | 'INCREMENTAL';
 
       const targetFaculty = facultyGroup ? String(facultyGroup).trim() : null;
-      const hasPlannedCapacityTable = await this.tableExists(
-        manager,
-        'leveling_run_section_course_capacities'
-      );
-      const capacityInitialExpr = hasPlannedCapacityTable
-        ? `
-          CASE
-            WHEN UPPER(COALESCE(s.modality, '')) LIKE '%VIRTUAL%' THEN s.initialCapacity
-            WHEN lrscc.plannedCapacity IS NOT NULL THEN lrscc.plannedCapacity
-            ELSE s.initialCapacity
-          END
-        `
-        : `s.initialCapacity`;
-      const capacityExtraExpr = hasPlannedCapacityTable
-        ? `
-          CASE
-            WHEN UPPER(COALESCE(s.modality, '')) LIKE '%VIRTUAL%' THEN s.maxExtraCapacity
-            WHEN lrscc.plannedCapacity IS NOT NULL THEN 0
-            ELSE s.maxExtraCapacity
-          END
-        `
-        : `s.maxExtraCapacity`;
-      const plannedCapacityJoin = hasPlannedCapacityTable
-        ? `
-        LEFT JOIN leveling_run_section_course_capacities lrscc
-          ON lrscc.runId = ?
-         AND lrscc.sectionCourseId = sc.id
-        `
-        : '';
+      const capacityInitialExpr = `COALESCE(sc.initialCapacity, s.initialCapacity)`;
+      const capacityExtraExpr = `COALESCE(sc.maxExtraCapacity, s.maxExtraCapacity)`;
 
       const sectionCourseRows: Array<{
         sectionCourseId: string;
@@ -957,6 +1075,14 @@ export class LevelingService {
         modality: string | null;
         initialCapacity: number;
         maxExtraCapacity: number;
+        classroomId: string | null;
+        classroomCode: string | null;
+        classroomName: string | null;
+        classroomCapacity: number | null;
+        classroomPavilionCode: string | null;
+        classroomPavilionName: string | null;
+        classroomLevelName: string | null;
+        capacitySource: 'VIRTUAL' | 'AULA' | 'SIN_AULA' | 'AULA_INACTIVA';
         hasTeacher: number;
       }> = await manager.query(
         `
@@ -972,6 +1098,19 @@ export class LevelingService {
           s.modality AS modality,
           ${capacityInitialExpr} AS initialCapacity,
           ${capacityExtraExpr} AS maxExtraCapacity,
+          sc.classroomId AS classroomId,
+          cl.code AS classroomCode,
+          cl.name AS classroomName,
+          cl.capacity AS classroomCapacity,
+          pv.code AS classroomPavilionCode,
+          pv.name AS classroomPavilionName,
+          cl.levelName AS classroomLevelName,
+          CASE
+            WHEN UPPER(COALESCE(s.modality, '')) LIKE '%VIRTUAL%' THEN 'VIRTUAL'
+            WHEN sc.classroomId IS NULL THEN 'SIN_AULA'
+            WHEN cl.id IS NULL THEN 'AULA_INACTIVA'
+            ELSE 'AULA'
+          END AS capacitySource,
           CASE
             WHEN s.teacherId IS NOT NULL THEN 1
             WHEN EXISTS (
@@ -985,7 +1124,11 @@ export class LevelingService {
         FROM section_courses sc
         INNER JOIN sections s ON s.id = sc.sectionId
         INNER JOIN courses c ON c.id = sc.courseId
-        ${plannedCapacityJoin}
+        LEFT JOIN classrooms cl
+          ON cl.id = sc.classroomId
+         AND cl.status = 'ACTIVA'
+        LEFT JOIN pavilions pv
+          ON pv.id = cl.pavilionId
         WHERE s.levelingRunId = ?
           AND sc.periodId = ?
           ${targetFaculty ? 'AND s.facultyGroup = ?' : ''}
@@ -994,18 +1137,13 @@ export class LevelingService {
           s.name ASC,
           c.name ASC
         `,
-        [
-          ...(hasPlannedCapacityTable ? [run.id] : []),
-          run.id,
-          run.periodId,
-          ...(targetFaculty ? [targetFaculty] : []),
-        ]
+        [run.id, run.periodId, ...(targetFaculty ? [targetFaculty] : [])]
       );
       if (sectionCourseRows.length === 0) {
         throw new BadRequestException(
           targetFaculty
             ? `No hay secciones-curso para la facultad ${targetFaculty}`
-            : 'No hay secciones-curso para ejecutar matrícula'
+            : 'No hay secciones-curso para ejecutar matrÃ­cula'
         );
       }
 
@@ -1049,28 +1187,6 @@ export class LevelingService {
         });
       }
 
-      const withoutSchedule = sectionCourseRows.filter(
-        (row) => (blocksBySectionCourse.get(String(row.sectionCourseId)) ?? []).length === 0
-      );
-      if (withoutSchedule.length > 0) {
-        throw new BadRequestException(
-          `Cada sección-curso requiere al menos 1 bloque horario antes de matricular. Faltan: ${withoutSchedule
-            .map((x) => `${x.sectionCode ?? x.sectionName} - ${x.courseName}`)
-            .join(', ')}`
-        );
-      }
-
-      const withoutTeacher = sectionCourseRows.filter(
-        (row) => Number(row.hasTeacher ?? 0) === 0
-      );
-      if (withoutTeacher.length > 0) {
-        throw new BadRequestException(
-          `Cada sección-curso requiere docente asignado antes de matricular. Faltan: ${withoutTeacher
-            .map((x) => `${x.sectionCode ?? x.sectionName} - ${x.courseName}`)
-            .join(', ')}`
-        );
-      }
-
       const demands: StudentDemandItem[] = await manager.query(
         `
         SELECT
@@ -1086,20 +1202,88 @@ export class LevelingService {
         INNER JOIN courses c ON c.id = d.courseId
         WHERE d.runId = ?
           AND d.required = 1
+          AND NOT EXISTS (
+            SELECT 1
+            FROM section_student_courses sscx
+            INNER JOIN section_courses scx ON scx.id = sscx.sectionCourseId
+            WHERE sscx.studentId = d.studentId
+              AND scx.periodId = ?
+              AND scx.courseId = d.courseId
+          )
           ${targetFaculty ? 'AND d.facultyGroup = ?' : ''}
         ORDER BY u.fullName ASC, c.name ASC
         `,
-        [run.id, ...(targetFaculty ? [targetFaculty] : [])]
+        [run.id, run.periodId, ...(targetFaculty ? [targetFaculty] : [])]
       );
-      if (demands.length === 0) {
+
+      const pendingByCourse = new Map<string, number>();
+      for (const demand of demands) {
+        const courseId = String(demand.courseId ?? '').trim();
+        if (!courseId) continue;
+        pendingByCourse.set(courseId, (pendingByCourse.get(courseId) ?? 0) + 1);
+      }
+
+      const coverageDeficits: Array<{ courseName: string; missing: number }> = [];
+      for (const [courseId, pendingCount] of pendingByCourse.entries()) {
+        if (pendingCount <= 0) continue;
+        const courseRows = sectionCourseRows.filter(
+          (row) => String(row.courseId ?? '').trim() === courseId
+        );
+        let hasOperativeVirtual = false;
+        let presentialCapacity = 0;
+        for (const row of courseRows) {
+          const hasSchedule =
+            (blocksBySectionCourse.get(String(row.sectionCourseId)) ?? []).length > 0;
+          const hasTeacher = Number(row.hasTeacher ?? 0) > 0;
+          if (!hasSchedule || !hasTeacher) continue;
+          if (this.isVirtualModality(row.modality)) {
+            hasOperativeVirtual = true;
+            continue;
+          }
+          const classroomCapacity = Math.max(0, Number(row.classroomCapacity ?? 0));
+          if (classroomCapacity > 0) {
+            presentialCapacity += classroomCapacity;
+          }
+        }
+        if (!hasOperativeVirtual && presentialCapacity < pendingCount) {
+          const firstCourseName =
+            String(courseRows[0]?.courseName ?? demands.find((d) => d.courseId === courseId)?.courseName ?? courseId);
+          coverageDeficits.push({
+            courseName: firstCourseName,
+            missing: pendingCount - presentialCapacity,
+          });
+        }
+      }
+      if (coverageDeficits.length > 0) {
+        const detail = coverageDeficits
+          .map((item) => `${item.courseName} (faltan ${item.missing})`)
+          .join(', ');
         throw new BadRequestException(
-          targetFaculty
-            ? `No hay demandas pendientes alumno-curso para la facultad ${targetFaculty}`
-            : 'No hay demandas pendientes alumno-curso para matricular'
+          `No hay capacidad operativa suficiente para matricular. Completa horario/docente/aula en: ${detail}`
         );
       }
 
-      await this.deleteSectionStudentCoursesBySectionCourseIds(manager, sectionCourseIds);
+      if (assignStrategy === 'FULL_REBUILD') {
+        await this.deleteSectionStudentCoursesBySectionCourseIds(manager, sectionCourseIds);
+      }
+
+      const existingAssignedRows: Array<{ sectionCourseId: string; c: number }> =
+        await manager.query(
+          `
+          SELECT sectionCourseId, COUNT(*) AS c
+          FROM section_student_courses
+          WHERE sectionCourseId IN (${placeholders})
+          GROUP BY sectionCourseId
+          `,
+          sectionCourseIds
+        );
+      const existingAssignedBySectionCourse = new Map<string, number>();
+      for (const row of existingAssignedRows) {
+        existingAssignedBySectionCourse.set(
+          String(row.sectionCourseId),
+          Number(row.c ?? 0)
+        );
+      }
 
       type Candidate = {
         sectionCourseId: string;
@@ -1113,6 +1297,14 @@ export class LevelingService {
         modality: string | null;
         initialCapacity: number;
         maxExtraCapacity: number;
+        classroomId: string | null;
+        classroomCode: string | null;
+        classroomName: string | null;
+        classroomCapacity: number | null;
+        classroomPavilionCode: string | null;
+        classroomPavilionName: string | null;
+        classroomLevelName: string | null;
+        capacitySource: 'VIRTUAL' | 'AULA' | 'SIN_AULA' | 'AULA_INACTIVA' | null;
         assignedCount: number;
         blocks: ScheduleBlockWindow[];
       };
@@ -1135,7 +1327,25 @@ export class LevelingService {
           modality: row.modality ? String(row.modality).toUpperCase().trim() : null,
           initialCapacity: Number(row.initialCapacity ?? 45),
           maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
-          assignedCount: 0,
+          classroomId: row.classroomId ? String(row.classroomId) : null,
+          classroomCode: row.classroomCode ? String(row.classroomCode) : null,
+          classroomName: row.classroomName ? String(row.classroomName) : null,
+          classroomCapacity:
+            row.classroomCapacity !== null && row.classroomCapacity !== undefined
+              ? Number(row.classroomCapacity)
+              : null,
+          classroomPavilionCode: row.classroomPavilionCode
+            ? String(row.classroomPavilionCode)
+            : null,
+          classroomPavilionName: row.classroomPavilionName
+            ? String(row.classroomPavilionName)
+            : null,
+          classroomLevelName: row.classroomLevelName
+            ? String(row.classroomLevelName)
+            : null,
+          capacitySource: this.asCapacitySource(row.capacitySource),
+          assignedCount:
+            existingAssignedBySectionCourse.get(String(row.sectionCourseId)) ?? 0,
           blocks: blocksBySectionCourse.get(String(row.sectionCourseId)) ?? [],
         });
       }
@@ -1185,6 +1395,49 @@ export class LevelingService {
       });
 
       const assignedBlocksByStudent = new Map<string, ScheduleBlockWindow[]>();
+      const demandStudentIds = Array.from(
+        new Set(demands.map((demand) => String(demand.studentId)))
+      );
+      if (demandStudentIds.length > 0) {
+        const studentPlaceholders = demandStudentIds.map(() => '?').join(', ');
+        const existingBlockRows: Array<{
+          studentId: string;
+          dayOfWeek: number;
+          startTime: string;
+          endTime: string;
+          startDate: string | null;
+          endDate: string | null;
+        }> = await manager.query(
+          `
+          SELECT
+            ssc.studentId AS studentId,
+            sb.dayOfWeek AS dayOfWeek,
+            sb.startTime AS startTime,
+            sb.endTime AS endTime,
+            sb.startDate AS startDate,
+            sb.endDate AS endDate
+          FROM section_student_courses ssc
+          INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
+          INNER JOIN schedule_blocks sb ON sb.sectionCourseId = sc.id
+          WHERE sc.periodId = ?
+            AND ssc.studentId IN (${studentPlaceholders})
+          `,
+          [run.periodId, ...demandStudentIds]
+        );
+        for (const row of existingBlockRows) {
+          const studentId = String(row.studentId);
+          if (!assignedBlocksByStudent.has(studentId)) {
+            assignedBlocksByStudent.set(studentId, []);
+          }
+          assignedBlocksByStudent.get(studentId)!.push({
+            dayOfWeek: Number(row.dayOfWeek ?? 0),
+            startTime: String(row.startTime ?? ''),
+            endTime: String(row.endTime ?? ''),
+            startDate: this.toIsoDateOnly(row.startDate),
+            endDate: this.toIsoDateOnly(row.endDate),
+          });
+        }
+      }
       const rowsToInsert: Array<{
         id: string;
         sectionCourseId: string;
@@ -1220,7 +1473,7 @@ export class LevelingService {
             courseName: String(demand.courseName ?? ''),
             facultyGroup: demand.facultyGroup ? String(demand.facultyGroup) : null,
             campusName: demand.campusName ? String(demand.campusName) : null,
-            reason: 'No se encontró sección-curso candidata para este curso',
+            reason: 'No se encontro seccion-curso candidata para este curso',
           });
           continue;
         }
@@ -1236,9 +1489,16 @@ export class LevelingService {
         });
 
         if (available.length === 0) {
-          const blockedByCapacity =
-            demand.candidates.every((candidate) => this.isCapacityBlocked(candidate)) &&
-            demand.candidates.length > 0;
+          const allBlockedByPhysical =
+            demand.candidates.length > 0 &&
+            demand.candidates.every(
+              (candidate) => this.capacityBlockReason(candidate) === 'SIN_CAPACIDAD'
+            );
+          const allBlockedByClassroom =
+            demand.candidates.length > 0 &&
+            demand.candidates.every(
+              (candidate) => this.capacityBlockReason(candidate) === 'SIN_AULA'
+            );
           unassigned.push({
             studentId: String(demand.studentId),
             studentCode: demand.studentCode ? String(demand.studentCode) : null,
@@ -1247,8 +1507,10 @@ export class LevelingService {
             courseName: String(demand.courseName ?? ''),
             facultyGroup: demand.facultyGroup ? String(demand.facultyGroup) : null,
             campusName: demand.campusName ? String(demand.campusName) : null,
-            reason: blockedByCapacity
-              ? 'No hay capacidad disponible en las secciones-curso candidatas'
+            reason: allBlockedByClassroom
+              ? 'No hay aula activa asignada en secciones presenciales candidatas'
+              : allBlockedByPhysical
+              ? 'Sin capacidad fisica disponible en las secciones-curso candidatas'
               : 'Cruce de horario con cursos ya asignados',
           });
           continue;
@@ -1335,6 +1597,23 @@ export class LevelingService {
             assignedCount: Number(candidate?.assignedCount ?? 0),
             initialCapacity: Number(row.initialCapacity ?? 45),
             maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
+            classroomId: row.classroomId ? String(row.classroomId) : null,
+            classroomCode: row.classroomCode ? String(row.classroomCode) : null,
+            classroomName: row.classroomName ? String(row.classroomName) : null,
+            classroomCapacity:
+              row.classroomCapacity !== null && row.classroomCapacity !== undefined
+                ? Number(row.classroomCapacity)
+                : null,
+            classroomPavilionCode: row.classroomPavilionCode
+              ? String(row.classroomPavilionCode)
+              : null,
+            classroomPavilionName: row.classroomPavilionName
+              ? String(row.classroomPavilionName)
+              : null,
+            classroomLevelName: row.classroomLevelName
+              ? String(row.classroomLevelName)
+              : null,
+            capacitySource: this.asCapacitySource(row.capacitySource),
           };
         }),
         conflictsFoundAfterAssign,
@@ -1342,9 +1621,16 @@ export class LevelingService {
     });
   }
 
-  async getRunMatriculationPreview(runId: string, facultyGroup?: string) {
+  async getRunMatriculationPreview(
+    runId: string,
+    facultyGroup?: string,
+    strategy?: 'FULL_REBUILD' | 'INCREMENTAL'
+  ) {
     const run = await this.getRunOrThrow(runId);
     const targetFaculty = String(facultyGroup ?? '').trim() || null;
+    const assignStrategy = String(strategy ?? 'INCREMENTAL')
+      .trim()
+      .toUpperCase() as 'FULL_REBUILD' | 'INCREMENTAL';
 
     const { sectionCourseRows, blocksBySectionCourse } =
       await this.loadMatriculationPreviewContext({
@@ -1355,12 +1641,23 @@ export class LevelingService {
       throw new BadRequestException('No hay secciones-curso configuradas para esta corrida');
     }
 
-    const faculties = this.buildMatriculationFacultyStatuses(
+    const pendingDemandsByFaculty = await this.loadPendingDemandsByFaculty({
+      runId: run.id,
+      periodId: run.periodId,
+    });
+    const pendingDemandsByFacultyCourse = await this.loadPendingDemandsByFacultyCourse({
+      runId: run.id,
+      periodId: run.periodId,
+    });
+
+    const faculties = this.buildMatriculationFacultyStatuses({
       sectionCourseRows,
-      blocksBySectionCourse
-    );
+      blocksBySectionCourse,
+      pendingDemandsByFaculty,
+      pendingDemandsByFacultyCourse,
+    });
     const readyFacultyGroups = faculties
-      .filter((row) => row.ready)
+      .filter((row) => row.ready && Number(row.pendingDemands ?? 0) > 0)
       .map((row) => row.facultyGroup);
 
     if (!targetFaculty) {
@@ -1392,6 +1689,22 @@ export class LevelingService {
       (item) => this.scopeKey(item) === this.scopeKey(targetFaculty)
     );
 
+    if (!canMatriculateSelectedFaculty) {
+      return {
+        runId: run.id,
+        status: run.status as LevelingRunStatus,
+        selectedFacultyGroup: targetFaculty,
+        faculties,
+        readyFacultyGroups,
+        canMatriculateSelectedFaculty: false,
+        assignedCount: 0,
+        sections: [],
+        summaryBySectionCourse: [],
+        unassigned: [],
+        conflicts: [],
+      };
+    }
+
     let assignedCount = 0;
     let summaryBySectionCourse = scopedRows.map((row) => ({
       sectionCourseId: String(row.sectionCourseId),
@@ -1403,6 +1716,23 @@ export class LevelingService {
       assignedCount: 0,
       initialCapacity: Number(row.initialCapacity ?? 45),
       maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
+      classroomId: row.classroomId ? String(row.classroomId) : null,
+      classroomCode: row.classroomCode ? String(row.classroomCode) : null,
+      classroomName: row.classroomName ? String(row.classroomName) : null,
+      classroomCapacity:
+        row.classroomCapacity !== null && row.classroomCapacity !== undefined
+          ? Number(row.classroomCapacity)
+          : null,
+      classroomPavilionCode: row.classroomPavilionCode
+        ? String(row.classroomPavilionCode)
+        : null,
+      classroomPavilionName: row.classroomPavilionName
+        ? String(row.classroomPavilionName)
+        : null,
+      classroomLevelName: row.classroomLevelName
+        ? String(row.classroomLevelName)
+        : null,
+      capacitySource: this.asCapacitySource(row.capacitySource),
     }));
     let unassigned: Array<{
       studentId: string;
@@ -1451,20 +1781,20 @@ export class LevelingService {
       Array<{ studentId: string; studentCode: string | null; studentName: string }>
     >();
 
-    if (canMatriculateSelectedFaculty) {
-      const simulation = await this.simulateMatriculationAssignments({
-        runId: run.id,
-        facultyGroup: targetFaculty,
-        sectionCourseRows: scopedRows,
-        blocksBySectionCourse,
-      });
-      assignedCount = simulation.assignedCount;
-      summaryBySectionCourse = simulation.summaryBySectionCourse;
-      unassigned = simulation.unassigned;
-      conflicts = simulation.conflicts;
-      for (const [key, value] of simulation.studentsBySectionCourse.entries()) {
-        studentsBySectionCourse.set(key, value.slice());
-      }
+    const simulation = await this.simulateMatriculationAssignments({
+      runId: run.id,
+      periodId: run.periodId,
+      strategy: assignStrategy,
+      facultyGroup: targetFaculty,
+      sectionCourseRows: scopedRows,
+      blocksBySectionCourse,
+    });
+    assignedCount = simulation.assignedCount;
+    summaryBySectionCourse = simulation.summaryBySectionCourse;
+    unassigned = simulation.unassigned;
+    conflicts = simulation.conflicts;
+    for (const [key, value] of simulation.studentsBySectionCourse.entries()) {
+      studentsBySectionCourse.set(key, value.slice());
     }
 
     const summaryBySectionCourseId = new Map(
@@ -1514,6 +1844,23 @@ export class LevelingService {
         teacherName: row.teacherName ? String(row.teacherName) : null,
         initialCapacity: Number(row.initialCapacity ?? 45),
         maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
+        classroomId: row.classroomId ? String(row.classroomId) : null,
+        classroomCode: row.classroomCode ? String(row.classroomCode) : null,
+        classroomName: row.classroomName ? String(row.classroomName) : null,
+        classroomCapacity:
+          row.classroomCapacity !== null && row.classroomCapacity !== undefined
+            ? Number(row.classroomCapacity)
+            : null,
+        classroomPavilionCode: row.classroomPavilionCode
+          ? String(row.classroomPavilionCode)
+          : null,
+        classroomPavilionName: row.classroomPavilionName
+          ? String(row.classroomPavilionName)
+          : null,
+        classroomLevelName: row.classroomLevelName
+          ? String(row.classroomLevelName)
+          : null,
+        capacitySource: this.asCapacitySource(row.capacitySource),
         hasSchedule:
           (blocksBySectionCourse.get(String(row.sectionCourseId)) ?? []).length > 0,
         hasTeacher: Number(row.hasTeacher ?? 0) > 0,
@@ -1796,7 +2143,7 @@ export class LevelingService {
         if (needsLeveling !== 'SI') continue;
       }
 
-      // 2. New filter: PROGRAMA DE NIVELACIÓN (must be SI)
+      // 2. New filter: PROGRAMA DE NIVELACIÃ“N (must be SI)
       // Applied AFTER date deduplication (since we are iterating rowsToProcess)
       if (columns.programLevelingIdx !== null) {
         const programVal = this.norm(this.cell(row, columns.programLevelingIdx));
@@ -1838,6 +2185,8 @@ export class LevelingService {
       const campusRaw = columns.campusIdx !== null ? this.cell(row, columns.campusIdx) : '';
       const modalityRaw =
         columns.modalityIdx !== null ? this.cell(row, columns.modalityIdx) : '';
+      const examDateStr = columns.examDateIdx !== null ? String(this.cell(row, columns.examDateIdx)) : '';
+      const parsedExamDate = this.parseSmartDate(examDateStr);
       const facultyRaw =
         columns.facultyIdx !== null ? this.cell(row, columns.facultyIdx) : '';
       const neededCourses = this.extractNeededCourses(row, columns.courseColumns);
@@ -1845,7 +2194,9 @@ export class LevelingService {
       for (const courseName of neededCourses) activeCourseNames.add(courseName);
 
       const mappedFaculty = careerFacultyMap.get(this.norm(careerName));
-      const facultyName = facultyRaw || mappedFaculty || this.fallbackFaculty(area);
+      const facultyName = this.normalizeFacultyName(
+        facultyRaw || mappedFaculty || this.fallbackFaculty(area)
+      );
       if (!mappedFaculty && careerName) {
         unknownCareerSet.add(careerName);
       }
@@ -1897,6 +2248,7 @@ export class LevelingService {
         modality,
         modalityChar,
         sourceModality,
+        examDate: parsedExamDate ? this.formatDateYmdFromTime(parsedExamDate) : null,
         neededCourses,
       });
     }
@@ -1994,6 +2346,7 @@ export class LevelingService {
         needsByCourse: Record<CourseName, number>;
       }
     >();
+    const facultyGroups = new Set<string>();
     const campuses = new Set<string>();
     const modalities = new Set<string>();
 
@@ -2014,6 +2367,7 @@ export class LevelingService {
       for (const course of student.neededCourses) {
         row.needsByCourse[course] += 1;
       }
+      facultyGroups.add(student.facultyGroup);
       campuses.add(student.campusName);
       modalities.add(student.sourceModality);
     }
@@ -2036,11 +2390,15 @@ export class LevelingService {
     const orderedCampuses = Array.from(campuses).sort(
       (a, b) => this.campusSort(a) - this.campusSort(b)
     );
+    const orderedFacultyGroups = Array.from(facultyGroups).sort((a, b) =>
+      a.localeCompare(b)
+    );
     const orderedModalities = ['PRESENCIAL', 'VIRTUAL', 'SIN DATO'].filter((m) =>
       modalities.has(m)
     );
 
     return {
+      facultyGroups: orderedFacultyGroups,
       campuses: orderedCampuses,
       modalities: orderedModalities,
       rows,
@@ -2650,7 +3008,17 @@ export class LevelingService {
           campusName: string;
           courses: Record<
             CourseName,
-            Array<{ id: string; size: number; modality: 'PRESENCIAL' | 'VIRTUAL' }>
+            Array<{
+              id: string;
+              size: number;
+              modality: 'PRESENCIAL' | 'VIRTUAL';
+              origin?: 'EXISTING_FREE' | 'NEW_REQUIRED';
+              sectionCourseId?: string;
+              availableSeats?: number;
+              hasExistingVirtual?: boolean;
+              sectionCode?: string;
+              sectionCampusName?: string;
+            }>
           >;
         }
       >
@@ -2658,7 +3026,17 @@ export class LevelingService {
 
     const emptyCourses = (): Record<
       CourseName,
-      Array<{ id: string; size: number; modality: 'PRESENCIAL' | 'VIRTUAL' }>
+      Array<{
+        id: string;
+        size: number;
+        modality: 'PRESENCIAL' | 'VIRTUAL';
+        origin?: 'EXISTING_FREE' | 'NEW_REQUIRED';
+        sectionCourseId?: string;
+        availableSeats?: number;
+        hasExistingVirtual?: boolean;
+        sectionCode?: string;
+        sectionCampusName?: string;
+      }>
     > => this.initGroupItemsMap(courseNames);
 
     for (const unit of groupUnits) {
@@ -2676,6 +3054,15 @@ export class LevelingService {
         id: unit.id,
         size: unit.size,
         modality: unit.modality,
+        origin: unit.origin,
+        sectionCourseId: unit.sectionCourseId ?? undefined,
+        availableSeats:
+          unit.availableSeats !== null && unit.availableSeats !== undefined
+            ? Number(unit.availableSeats)
+            : undefined,
+        hasExistingVirtual: Boolean(unit.hasExistingVirtual),
+        sectionCode: unit.sectionCode ?? undefined,
+        sectionCampusName: unit.sectionCampusName ?? undefined,
       });
     }
 
@@ -2769,6 +3156,7 @@ export class LevelingService {
     students?: ParsedStudent[];
     configUsed?: { initialCapacity: number; maxExtraCapacity: number };
     sourceFileHash?: string;
+    reportsJson?: Record<string, unknown> | null;
     createdById?: string | null;
   }): Promise<ApplyStructureResult> {
     return this.dataSource.transaction(async (manager) => {
@@ -2822,17 +3210,19 @@ export class LevelingService {
           periodId,
           status,
           configJson,
+          reportsJson,
           sourceFileHash,
           createdBy,
           createdAt,
           updatedAt
         )
-        VALUES (?, ?, 'STRUCTURED', ?, ?, ?, NOW(6), NOW(6))
+        VALUES (?, ?, 'STRUCTURED', ?, ?, ?, ?, NOW(6), NOW(6))
         `,
         [
           runId,
           activePeriodId,
           JSON.stringify(configUsed),
+          params.reportsJson ? JSON.stringify(params.reportsJson) : null,
           sourceFileHash,
           createdById,
         ]
@@ -2865,6 +3255,8 @@ export class LevelingService {
             maternalLastName: s.maternalLastName,
             email: s.email,
             sex: s.sex,
+            careerName: s.careerName || null,
+            examDate: s.examDate || null,
             role: Role.ALUMNO,
             passwordHash: null,
           });
@@ -2907,6 +3299,14 @@ export class LevelingService {
         }
         if (s.sex && existing.sex !== s.sex) {
           existing.sex = s.sex;
+          dirty = true;
+        }
+        if (s.careerName && existing.careerName !== s.careerName) {
+          existing.careerName = s.careerName;
+          dirty = true;
+        }
+        if (s.examDate && existing.examDate !== s.examDate) {
+          existing.examDate = s.examDate;
           dirty = true;
         }
 
@@ -2971,6 +3371,8 @@ export class LevelingService {
           sectionId: string;
           courseId: string;
           idakademic: null;
+          initialCapacity: number;
+          maxExtraCapacity: number;
         }
       >();
 
@@ -2991,6 +3393,8 @@ export class LevelingService {
               sectionId: section.id,
               courseId,
               idakademic: null,
+              initialCapacity: Math.max(0, Number(sec.initialCapacity ?? 0)),
+              maxExtraCapacity: Math.max(0, Number(sec.maxExtraCapacity ?? 0)),
             });
           }
         }
@@ -3067,6 +3471,8 @@ export class LevelingService {
           courseId: string;
           facultyGroup: string | null;
           campusName: string | null;
+          sourceModality: string | null;
+          examDate: string | null;
           required: number;
         }
       >();
@@ -3085,6 +3491,8 @@ export class LevelingService {
             courseId,
             facultyGroup: student.facultyGroup,
             campusName: student.campusName,
+            sourceModality: student.sourceModality,
+            examDate: student.examDate,
             required: 1,
           });
         }
@@ -3108,8 +3516,1553 @@ export class LevelingService {
           sectionCourseCandidates.size - sectionCourseRowsToInsert.length,
         demandsCreated: demandRowsToInsert.length,
         demandsOmitted: demandCandidates.size - demandRowsToInsert.length,
+        sectionsCreatedByExpansion: 0,
+        sectionCoursesCreatedByExpansion: 0,
+        offersReused: 0,
+        pendingDemandsEvaluated: 0,
       };
     });
+  }
+
+  private async appendDemandsToRun(params: {
+    runId: string;
+    students: ParsedStudent[];
+    sectionCapacity: number;
+    groupModalityOverrides: Map<string, 'PRESENCIAL' | 'VIRTUAL'>;
+    createdById?: string | null;
+  }): Promise<ApplyStructureResult> {
+    return this.dataSource.transaction(async (manager) => {
+      const run = await this.getRunOrThrow(params.runId, manager);
+      if (run.status === 'ARCHIVED') {
+        throw new BadRequestException('No se puede actualizar una corrida archivada');
+      }
+
+      const usersRepo = manager.getRepository(UserEntity);
+      const courseIdByName = await this.loadCourseIdByCanonicalName(manager);
+
+      const createdById = String(params.createdById ?? '').trim() || null;
+      if (createdById) {
+        const rows: Array<{ id: string }> = await manager.query(
+          `
+          SELECT id
+          FROM users
+          WHERE id = ?
+          LIMIT 1
+          `,
+          [createdById]
+        );
+        if (!rows[0]?.id) {
+          throw new BadRequestException('createdBy user does not exist');
+        }
+      }
+
+      const uniqueByDni = new Map<string, ParsedStudent>();
+      for (const student of params.students) {
+        uniqueByDni.set(student.dni, student);
+      }
+
+      const dnis = Array.from(uniqueByDni.keys());
+      const existingUsers = dnis.length
+        ? await usersRepo.find({ where: { dni: In(dnis) } })
+        : [];
+      const existingUserByDni = new Map(existingUsers.map((u) => [u.dni, u]));
+
+      let studentsCreated = 0;
+      let studentsUpdated = 0;
+      const studentByDni = new Map<string, UserEntity>();
+
+      for (const s of uniqueByDni.values()) {
+        const existing = existingUserByDni.get(s.dni);
+        if (!existing) {
+          const created = usersRepo.create({
+            dni: s.dni,
+            codigoAlumno: s.codigoAlumno,
+            fullName: s.fullName || `Alumno ${s.dni}`,
+            names: s.names,
+            paternalLastName: s.paternalLastName,
+            maternalLastName: s.maternalLastName,
+            email: s.email,
+            sex: s.sex,
+            careerName: s.careerName || null,
+            role: Role.ALUMNO,
+            passwordHash: null,
+          });
+          const saved = await usersRepo.save(created);
+          studentByDni.set(s.dni, saved);
+          studentsCreated += 1;
+          continue;
+        }
+
+        if (existing.role !== Role.ALUMNO) {
+          throw new BadRequestException(
+            `DNI ${s.dni} belongs to a non-student user`
+          );
+        }
+
+        let dirty = false;
+        if (s.codigoAlumno && existing.codigoAlumno !== s.codigoAlumno) {
+          existing.codigoAlumno = s.codigoAlumno;
+          dirty = true;
+        }
+        if (s.fullName && existing.fullName !== s.fullName) {
+          existing.fullName = s.fullName;
+          dirty = true;
+        }
+        if (s.names && existing.names !== s.names) {
+          existing.names = s.names;
+          dirty = true;
+        }
+        if (s.paternalLastName && existing.paternalLastName !== s.paternalLastName) {
+          existing.paternalLastName = s.paternalLastName;
+          dirty = true;
+        }
+        if (s.maternalLastName && existing.maternalLastName !== s.maternalLastName) {
+          existing.maternalLastName = s.maternalLastName;
+          dirty = true;
+        }
+        if (s.email && existing.email !== s.email) {
+          existing.email = s.email;
+          dirty = true;
+        }
+        if (s.sex && existing.sex !== s.sex) {
+          existing.sex = s.sex;
+          dirty = true;
+        }
+        if (s.careerName && existing.careerName !== s.careerName) {
+          existing.careerName = s.careerName;
+          dirty = true;
+        }
+
+        const saved = dirty ? await usersRepo.save(existing) : existing;
+        if (dirty) studentsUpdated += 1;
+        studentByDni.set(s.dni, saved);
+      }
+
+      const assignedByStudentCourse = new Set<string>();
+      const studentIds = Array.from(studentByDni.values()).map((student) => String(student.id));
+      if (studentIds.length > 0) {
+        const placeholders = studentIds.map(() => '?').join(', ');
+        const assignedRows: Array<{ studentId: string; courseId: string }> =
+          await manager.query(
+            `
+            SELECT DISTINCT ssc.studentId AS studentId, sc.courseId AS courseId
+            FROM section_student_courses ssc
+            INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
+            WHERE sc.periodId = ?
+              AND ssc.studentId IN (${placeholders})
+            `,
+            [run.periodId, ...studentIds]
+          );
+        for (const row of assignedRows) {
+          assignedByStudentCourse.add(`${String(row.studentId)}:${String(row.courseId)}`);
+        }
+      }
+
+      const demandCandidates = new Map<
+        string,
+        {
+          id: string;
+          runId: string;
+          studentId: string;
+          courseId: string;
+          facultyGroup: string | null;
+          campusName: string | null;
+          sourceModality: string | null;
+          examDate: string | null;
+          required: number;
+        }
+      >();
+      for (const student of params.students) {
+        const savedStudent = studentByDni.get(student.dni);
+        if (!savedStudent) continue;
+        for (const courseName of student.neededCourses) {
+          const courseId = courseIdByName.get(this.courseKey(courseName));
+          if (!courseId) continue;
+          if (assignedByStudentCourse.has(`${savedStudent.id}:${courseId}`)) {
+            continue;
+          }
+          const key = `${run.id}:${savedStudent.id}:${courseId}`;
+          if (demandCandidates.has(key)) continue;
+          demandCandidates.set(key, {
+            id: randomUUID(),
+            runId: run.id,
+            studentId: savedStudent.id,
+            courseId,
+            facultyGroup: student.facultyGroup,
+            campusName: student.campusName,
+            sourceModality: student.sourceModality,
+            examDate: student.examDate,
+            required: 1,
+          });
+        }
+      }
+
+      const existingDemandKeys = await this.loadExistingRunDemandKeys(manager, run.id);
+      const demandRowsToInsert = Array.from(demandCandidates.entries())
+        .filter(([key]) => !existingDemandKeys.has(key))
+        .map(([, row]) => row);
+
+      const pendingForExpansion = await this.loadPendingDemandsForExpansion(manager, {
+        runId: run.id,
+        periodId: run.periodId,
+        additionalDemands: Array.from(demandCandidates.values()),
+      });
+      const appendGroups = await this.buildAppendGroupUnits(manager, {
+        run,
+        pendingDemands: pendingForExpansion,
+        sectionCapacity: Math.max(1, Number(params.sectionCapacity ?? 1)),
+        groupModalityOverrides: params.groupModalityOverrides,
+      });
+      const expansion = await this.expandOfferForAppend(manager, {
+        run,
+        pendingDemands: pendingForExpansion,
+        groupUnits: appendGroups.groupUnits,
+      });
+
+      await this.bulkInsertLevelingRunDemandsIgnore(manager, demandRowsToInsert);
+
+      const shouldMoveToReady =
+        run.status === 'MATRICULATED' &&
+        (demandRowsToInsert.length > 0 ||
+          expansion.sectionsCreatedByExpansion > 0 ||
+          expansion.sectionCoursesCreatedByExpansion > 0);
+
+      if (shouldMoveToReady) {
+        await manager.query(
+          `
+          UPDATE leveling_runs
+          SET status = 'READY', updatedAt = NOW(6)
+          WHERE id = ?
+          `,
+          [run.id]
+        );
+      } else {
+        await manager.query(
+          `
+          UPDATE leveling_runs
+          SET updatedAt = NOW(6)
+          WHERE id = ?
+          `,
+          [run.id]
+        );
+      }
+
+      return {
+        runId: run.id,
+        runStatus:
+          shouldMoveToReady
+            ? 'READY'
+            : (run.status as LevelingRunStatus),
+        sectionsCreated: 0,
+        sectionsUpdated: 0,
+        studentsCreated,
+        studentsUpdated,
+        sectionCoursesCreated: 0,
+        sectionCoursesOmitted: 0,
+        demandsCreated: demandRowsToInsert.length,
+        demandsOmitted: demandCandidates.size - demandRowsToInsert.length,
+        sectionsCreatedByExpansion: expansion.sectionsCreatedByExpansion,
+        sectionCoursesCreatedByExpansion: expansion.sectionCoursesCreatedByExpansion,
+        offersReused: expansion.offersReused,
+        pendingDemandsEvaluated: expansion.pendingDemandsEvaluated,
+      };
+    });
+  }
+
+  private async previewAppendDemandsAndExpansion(
+    students: ParsedStudent[],
+    options: {
+      sectionCapacity: number;
+      groupModalityOverrides: Map<string, 'PRESENCIAL' | 'VIRTUAL'>;
+    }
+  ): Promise<AppendPreviewBundle> {
+    const activeSummary = await this.getActiveRunSummary();
+    const activeRunId = String(activeSummary.run?.id ?? '').trim();
+    if (!activeRunId) {
+      return {
+        preview: {
+          runId: null,
+          runStatus: null,
+          demandsCreated: 0,
+          demandsOmitted: 0,
+          sectionsCreatedByExpansion: 0,
+          sectionCoursesCreatedByExpansion: 0,
+          offersReused: 0,
+          pendingDemandsEvaluated: 0,
+          existingFreeSeatsDetected: 0,
+          newRequiredSeats: 0,
+          groupsConvertedToVirtual: 0,
+        },
+        groupUnits: [],
+      };
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      const run = await this.getRunOrThrow(activeRunId, manager);
+      if (run.status === 'ARCHIVED') {
+        return {
+          preview: {
+            runId: run.id,
+            runStatus: run.status as LevelingRunStatus,
+            demandsCreated: 0,
+            demandsOmitted: 0,
+            sectionsCreatedByExpansion: 0,
+            sectionCoursesCreatedByExpansion: 0,
+            offersReused: 0,
+            pendingDemandsEvaluated: 0,
+            existingFreeSeatsDetected: 0,
+            newRequiredSeats: 0,
+            groupsConvertedToVirtual: 0,
+          },
+          groupUnits: [],
+        };
+      }
+
+      const usersRepo = manager.getRepository(UserEntity);
+      const courseIdByName = await this.loadCourseIdByCanonicalName(manager);
+
+      const uniqueByDni = new Map<string, ParsedStudent>();
+      for (const student of students) {
+        uniqueByDni.set(student.dni, student);
+      }
+
+      const dnis = Array.from(uniqueByDni.keys());
+      const existingUsers = dnis.length
+        ? await usersRepo.find({ where: { dni: In(dnis) } })
+        : [];
+      const existingUserByDni = new Map(existingUsers.map((u) => [u.dni, u]));
+
+      const studentPreviewIdByDni = new Map<string, string>();
+      for (const student of uniqueByDni.values()) {
+        const existing = existingUserByDni.get(student.dni);
+        studentPreviewIdByDni.set(
+          student.dni,
+          existing ? String(existing.id) : `preview:${student.dni}`
+        );
+      }
+
+      const existingStudentIds = Array.from(existingUsers.map((u) => String(u.id)));
+      const assignedByStudentCourse = new Set<string>();
+      if (existingStudentIds.length > 0) {
+        const placeholders = existingStudentIds.map(() => '?').join(', ');
+        const assignedRows: Array<{ studentId: string; courseId: string }> =
+          await manager.query(
+            `
+            SELECT DISTINCT ssc.studentId AS studentId, sc.courseId AS courseId
+            FROM section_student_courses ssc
+            INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
+            WHERE sc.periodId = ?
+              AND ssc.studentId IN (${placeholders})
+            `,
+            [run.periodId, ...existingStudentIds]
+          );
+        for (const row of assignedRows) {
+          assignedByStudentCourse.add(`${String(row.studentId)}:${String(row.courseId)}`);
+        }
+      }
+
+      const demandCandidates = new Map<
+        string,
+        {
+          id: string;
+          runId: string;
+          studentId: string;
+          courseId: string;
+          facultyGroup: string | null;
+          campusName: string | null;
+          sourceModality: string | null;
+          examDate: string | null;
+          required: number;
+        }
+      >();
+      for (const student of students) {
+        const previewStudentId = studentPreviewIdByDni.get(student.dni);
+        if (!previewStudentId) continue;
+        for (const courseName of student.neededCourses) {
+          const courseId = courseIdByName.get(this.courseKey(courseName));
+          if (!courseId) continue;
+          if (assignedByStudentCourse.has(`${previewStudentId}:${courseId}`)) {
+            continue;
+          }
+          const key = `${run.id}:${previewStudentId}:${courseId}`;
+          if (demandCandidates.has(key)) continue;
+          demandCandidates.set(key, {
+            id: randomUUID(),
+            runId: run.id,
+            studentId: previewStudentId,
+            courseId,
+            facultyGroup: student.facultyGroup,
+            campusName: student.campusName,
+            sourceModality: student.sourceModality,
+            examDate: student.examDate,
+            required: 1,
+          });
+        }
+      }
+
+      const existingDemandKeys = await this.loadExistingRunDemandKeys(manager, run.id);
+      const demandRowsToInsert = Array.from(demandCandidates.entries())
+        .filter(([key]) => !existingDemandKeys.has(key))
+        .map(([, row]) => row);
+
+      const pendingForExpansion = await this.loadPendingDemandsForExpansion(manager, {
+        runId: run.id,
+        periodId: run.periodId,
+        additionalDemands: Array.from(demandCandidates.values()),
+      });
+      const appendGroups = await this.buildAppendGroupUnits(manager, {
+        run,
+        pendingDemands: pendingForExpansion,
+        sectionCapacity: Math.max(1, Number(options.sectionCapacity ?? 1)),
+        groupModalityOverrides: options.groupModalityOverrides,
+      });
+      const expansion = await this.expandOfferForAppend(manager, {
+        run,
+        pendingDemands: pendingForExpansion,
+        simulationOnly: true,
+        groupUnits: appendGroups.groupUnits,
+      });
+
+      return {
+        preview: {
+          runId: run.id,
+          runStatus: run.status as LevelingRunStatus,
+          demandsCreated: demandRowsToInsert.length,
+          demandsOmitted: demandCandidates.size - demandRowsToInsert.length,
+          sectionsCreatedByExpansion: expansion.sectionsCreatedByExpansion,
+          sectionCoursesCreatedByExpansion: expansion.sectionCoursesCreatedByExpansion,
+          offersReused: expansion.offersReused,
+          pendingDemandsEvaluated: expansion.pendingDemandsEvaluated,
+          existingFreeSeatsDetected: appendGroups.existingFreeSeatsDetected,
+          newRequiredSeats: appendGroups.newRequiredSeats,
+          groupsConvertedToVirtual: appendGroups.groupsConvertedToVirtual,
+        },
+        groupUnits: appendGroups.groupUnits,
+      };
+    });
+  }
+
+  private async loadPendingDemandsForExpansion(
+    manager: EntityManager,
+    params: {
+      runId: string;
+      periodId: string;
+      additionalDemands: Array<{
+        studentId: string;
+        courseId: string;
+        facultyGroup: string | null;
+        campusName: string | null;
+      }>;
+    }
+  ): Promise<PendingDemandForExpansion[]> {
+    const rows: Array<{
+      studentId: string;
+      courseId: string;
+      facultyGroup: string | null;
+      campusName: string | null;
+    }> = await manager.query(
+      `
+      SELECT
+        d.studentId AS studentId,
+        d.courseId AS courseId,
+        d.facultyGroup AS facultyGroup,
+        d.campusName AS campusName
+      FROM leveling_run_student_course_demands d
+      WHERE d.runId = ?
+        AND d.required = 1
+        AND NOT EXISTS (
+          SELECT 1
+          FROM section_student_courses sscx
+          INNER JOIN section_courses scx ON scx.id = sscx.sectionCourseId
+          WHERE sscx.studentId = d.studentId
+            AND scx.periodId = ?
+            AND scx.courseId = d.courseId
+        )
+      `,
+      [params.runId, params.periodId]
+    );
+
+    const byStudentCourse = new Map<string, PendingDemandForExpansion>();
+    for (const row of rows) {
+      const key = `${String(row.studentId)}:${String(row.courseId)}`;
+      byStudentCourse.set(key, {
+        studentId: String(row.studentId),
+        courseId: String(row.courseId),
+        facultyGroup: row.facultyGroup ? String(row.facultyGroup) : null,
+        campusName: row.campusName ? String(row.campusName) : null,
+      });
+    }
+    for (const row of params.additionalDemands) {
+      const key = `${String(row.studentId)}:${String(row.courseId)}`;
+      const prev = byStudentCourse.get(key);
+      if (!prev) {
+        byStudentCourse.set(key, {
+          studentId: String(row.studentId),
+          courseId: String(row.courseId),
+          facultyGroup: row.facultyGroup ? String(row.facultyGroup) : null,
+          campusName: row.campusName ? String(row.campusName) : null,
+        });
+        continue;
+      }
+      if (!prev.facultyGroup && row.facultyGroup) prev.facultyGroup = String(row.facultyGroup);
+      if (!prev.campusName && row.campusName) prev.campusName = String(row.campusName);
+    }
+    return Array.from(byStudentCourse.values());
+  }
+
+  private async buildAppendGroupUnits(
+    manager: EntityManager,
+    params: {
+      run: {
+        id: string;
+        periodId: string;
+      };
+      pendingDemands: PendingDemandForExpansion[];
+      sectionCapacity: number;
+      groupModalityOverrides: Map<string, 'PRESENCIAL' | 'VIRTUAL'>;
+    }
+  ): Promise<{
+    groupUnits: CourseGroupUnit[];
+    existingFreeSeatsDetected: number;
+    newRequiredSeats: number;
+    groupsConvertedToVirtual: number;
+  }> {
+    const pendingByScopeCourse = new Map<
+      string,
+      {
+        facultyGroup: 'FICA' | 'SALUD';
+        campusShort: string;
+        courseId: string;
+        pendingCount: number;
+      }
+    >();
+    for (const demand of params.pendingDemands) {
+      const courseId = String(demand.courseId ?? '').trim();
+      if (!courseId) continue;
+      const facultyGroup =
+        this.scopeKey(demand.facultyGroup) === 'SALUD' ? 'SALUD' : 'FICA';
+      const campusShort = this.shortCampus(String(demand.campusName ?? ''));
+      const key = `${facultyGroup}|${this.scopeKey(campusShort)}|${courseId}`;
+      if (!pendingByScopeCourse.has(key)) {
+        pendingByScopeCourse.set(key, {
+          facultyGroup,
+          campusShort,
+          courseId,
+          pendingCount: 0,
+        });
+      }
+      pendingByScopeCourse.get(key)!.pendingCount += 1;
+    }
+
+    const scopeKeys = new Set<string>();
+    const pendingFacultyCourseKeys = new Set<string>();
+    for (const item of pendingByScopeCourse.values()) {
+      scopeKeys.add(
+        `${item.facultyGroup}|${this.scopeKey(item.campusShort)}|${item.courseId}`
+      );
+      pendingFacultyCourseKeys.add(`${item.facultyGroup}|${item.courseId}`);
+    }
+    if (scopeKeys.size === 0) {
+      return {
+        groupUnits: [],
+        existingFreeSeatsDetected: 0,
+        newRequiredSeats: 0,
+        groupsConvertedToVirtual: 0,
+      };
+    }
+
+    const courseIds = Array.from(
+      new Set(Array.from(pendingByScopeCourse.values()).map((item) => item.courseId))
+    );
+    const courseNameById = new Map<string, string>();
+    if (courseIds.length > 0) {
+      const placeholders = courseIds.map(() => '?').join(', ');
+      const courseRows: Array<{ id: string; name: string }> = await manager.query(
+        `
+        SELECT id, name
+        FROM courses
+        WHERE id IN (${placeholders})
+        `,
+        courseIds
+      );
+      for (const row of courseRows) {
+        courseNameById.set(String(row.id), String(row.name ?? ''));
+      }
+    }
+
+    const existingRows: Array<{
+      sectionCourseId: string;
+      sectionId: string;
+      courseId: string;
+      sectionCode: string | null;
+      facultyGroup: string | null;
+      campusName: string | null;
+      modality: string | null;
+      initialCapacity: number;
+      maxExtraCapacity: number;
+    }> = await manager.query(
+      `
+      SELECT
+        sc.id AS sectionCourseId,
+        sc.sectionId AS sectionId,
+        sc.courseId AS courseId,
+        s.code AS sectionCode,
+        s.facultyGroup AS facultyGroup,
+        s.campusName AS campusName,
+        s.modality AS modality,
+        COALESCE(sc.initialCapacity, s.initialCapacity) AS initialCapacity,
+        COALESCE(sc.maxExtraCapacity, s.maxExtraCapacity) AS maxExtraCapacity
+      FROM section_courses sc
+      INNER JOIN sections s ON s.id = sc.sectionId
+      WHERE s.levelingRunId = ?
+        AND sc.periodId = ?
+      `,
+      [params.run.id, params.run.periodId]
+    );
+
+    const sectionCourseIds = existingRows.map((row) => String(row.sectionCourseId));
+    const assignedBySectionCourse = new Map<string, number>();
+    if (sectionCourseIds.length > 0) {
+      const placeholders = sectionCourseIds.map(() => '?').join(', ');
+      const assignedRows: Array<{ sectionCourseId: string; c: number }> = await manager.query(
+        `
+        SELECT sectionCourseId, COUNT(*) AS c
+        FROM section_student_courses
+        WHERE sectionCourseId IN (${placeholders})
+        GROUP BY sectionCourseId
+        `,
+        sectionCourseIds
+      );
+      for (const row of assignedRows) {
+        assignedBySectionCourse.set(String(row.sectionCourseId), Number(row.c ?? 0));
+      }
+    }
+
+    const existingByScopeCourse = new Map<
+      string,
+      Array<{
+        sectionCourseId: string;
+        availableSeats: number;
+        sectionCode: string | null;
+        sectionCampusName: string | null;
+      }>
+    >();
+    const virtualByFacultyCourse = new Map<
+      string,
+      { sectionCode: string | null; sectionCampusName: string | null }
+    >();
+    for (const row of existingRows) {
+      const modality = String(row.modality ?? '').toUpperCase().trim();
+      const facultyGroup =
+        this.scopeKey(row.facultyGroup) === 'SALUD' ? 'SALUD' : 'FICA';
+      const campusShort = this.shortCampus(String(row.campusName ?? ''));
+      const key = `${facultyGroup}|${this.scopeKey(campusShort)}|${String(row.courseId)}`;
+      const virtualKey = `${facultyGroup}|${String(row.courseId)}`;
+      if (modality.includes('VIRTUAL')) {
+        if (pendingFacultyCourseKeys.has(virtualKey) && !virtualByFacultyCourse.has(virtualKey)) {
+          virtualByFacultyCourse.set(virtualKey, {
+            sectionCode: row.sectionCode ? String(row.sectionCode) : null,
+            sectionCampusName: row.campusName ? String(row.campusName) : null,
+          });
+        }
+      }
+      if (!modality.includes('PRESENCIAL')) continue;
+      if (!scopeKeys.has(key)) continue;
+      const sectionCourseId = String(row.sectionCourseId);
+      const availableSeats = this.availableCapacityForOffer({
+        assignedCount: assignedBySectionCourse.get(sectionCourseId) ?? 0,
+        initialCapacity: Math.max(0, Number(row.initialCapacity ?? 0)),
+        maxExtraCapacity: Math.max(0, Number(row.maxExtraCapacity ?? 0)),
+        modality,
+      });
+      if (!Number.isFinite(availableSeats) || availableSeats <= 0) continue;
+      if (!existingByScopeCourse.has(key)) {
+        existingByScopeCourse.set(key, []);
+      }
+      existingByScopeCourse.get(key)!.push({
+        sectionCourseId,
+        availableSeats: Math.max(0, Math.floor(availableSeats)),
+        sectionCode: row.sectionCode ? String(row.sectionCode) : null,
+        sectionCampusName: row.campusName ? String(row.campusName) : null,
+      });
+    }
+    for (const rows of existingByScopeCourse.values()) {
+      rows.sort((a, b) => a.sectionCourseId.localeCompare(b.sectionCourseId));
+    }
+
+    const groupUnits: CourseGroupUnit[] = [];
+    let existingFreeSeatsDetected = 0;
+    let newRequiredSeats = 0;
+    let groupsConvertedToVirtual = 0;
+
+    const orderedScopes = Array.from(pendingByScopeCourse.values()).sort((a, b) => {
+      const fa = a.facultyGroup.localeCompare(b.facultyGroup);
+      if (fa !== 0) return fa;
+      const ca = this.scopeKey(a.campusShort).localeCompare(this.scopeKey(b.campusShort));
+      if (ca !== 0) return ca;
+      return a.courseId.localeCompare(b.courseId);
+    });
+
+    for (const scope of orderedScopes) {
+      const scopeKey = `${scope.facultyGroup}|${this.scopeKey(scope.campusShort)}|${scope.courseId}`;
+      const virtualKey = `${scope.facultyGroup}|${scope.courseId}`;
+      const existingVirtual = virtualByFacultyCourse.get(virtualKey) ?? null;
+      const courseName =
+        String(courseNameById.get(scope.courseId) ?? '').trim() ||
+        scope.courseId;
+      const existingCandidates = existingByScopeCourse.get(scopeKey) ?? [];
+      let remaining = Math.max(0, Number(scope.pendingCount ?? 0));
+
+      for (const candidate of existingCandidates) {
+        if (candidate.availableSeats <= 0) continue;
+        if (remaining <= 0) break;
+        const groupSize = Math.min(candidate.availableSeats, remaining);
+        if (groupSize <= 0) continue;
+        const id = `${scope.facultyGroup}|${scope.campusShort}|${courseName}|EXISTING|${candidate.sectionCourseId}`;
+        const modality =
+          params.groupModalityOverrides.get(id) ?? ('PRESENCIAL' as const);
+        groupUnits.push({
+          id,
+          facultyGroup: scope.facultyGroup,
+          campusName: scope.campusShort,
+          courseName,
+          courseId: scope.courseId,
+          size: groupSize,
+          modality,
+          origin: 'EXISTING_FREE',
+          sectionCourseId: candidate.sectionCourseId,
+          availableSeats: groupSize,
+          hasExistingVirtual: Boolean(existingVirtual),
+          sectionCode: candidate.sectionCode,
+          sectionCampusName: candidate.sectionCampusName,
+        });
+        existingFreeSeatsDetected += groupSize;
+        if (modality === 'VIRTUAL') groupsConvertedToVirtual += 1;
+        remaining = Math.max(0, remaining - groupSize);
+      }
+
+      if (remaining > 0) {
+        const chunks = this.splitCourseGroups(
+          remaining,
+          Math.max(1, Number(params.sectionCapacity ?? 1)),
+          'PRESENCIAL'
+        );
+        for (let i = 0; i < chunks.length; i++) {
+          const id = `${scope.facultyGroup}|${scope.campusShort}|${courseName}|NEW|${i + 1}`;
+          const modality =
+            params.groupModalityOverrides.get(id) ?? ('PRESENCIAL' as const);
+          groupUnits.push({
+            id,
+            facultyGroup: scope.facultyGroup,
+            campusName: scope.campusShort,
+            courseName,
+            courseId: scope.courseId,
+            size: chunks[i],
+            modality,
+            origin: 'NEW_REQUIRED',
+            hasExistingVirtual: Boolean(existingVirtual),
+            sectionCode: existingVirtual?.sectionCode ?? null,
+            sectionCampusName: existingVirtual?.sectionCampusName ?? null,
+          });
+          newRequiredSeats += chunks[i];
+          if (modality === 'VIRTUAL') groupsConvertedToVirtual += 1;
+        }
+      }
+    }
+
+    // In APPEND, ignore stale override keys from previous previews.
+
+    return {
+      groupUnits: groupUnits.sort((a, b) => a.id.localeCompare(b.id)),
+      existingFreeSeatsDetected,
+      newRequiredSeats,
+      groupsConvertedToVirtual,
+    };
+  }
+
+  private async buildAppendSectionsPreview(params: {
+    groupUnits: CourseGroupUnit[];
+    runId: string | null;
+  }): Promise<PlannedSection[]> {
+    const groupUnits = params.groupUnits;
+    if (groupUnits.length === 0) return [];
+
+    const reservedCodes = new Set<string>();
+    const nextAlphaByScope = new Map<string, number>();
+    if (params.runId) {
+      const existingSections: Array<{
+        code: string | null;
+        facultyGroup: string | null;
+        campusName: string | null;
+        modality: string | null;
+      }> = await this.dataSource.query(
+        `
+        SELECT
+          code,
+          facultyGroup,
+          campusName,
+          modality
+        FROM sections
+        WHERE levelingRunId = ?
+        `,
+        [params.runId]
+      );
+
+      for (const section of existingSections) {
+        const code = String(section.code ?? '').trim();
+        if (!code) continue;
+        const facultyGroup =
+          this.scopeKey(section.facultyGroup) === 'SALUD' ? 'SALUD' : 'FICA';
+        const modality = this.isVirtualModality(section.modality)
+          ? 'VIRTUAL'
+          : 'PRESENCIAL';
+        const campus = this.normalizeCampus(String(section.campusName ?? ''));
+        const scopeKey = `${facultyGroup}|${campus.campusCode}|${modality}`;
+        const modalityChar = modality === 'VIRTUAL' ? 'V' : 'P';
+        const facultyChar = this.facultyChar(facultyGroup);
+        const matcher = new RegExp(
+          `^([A-Z]+)${modalityChar}${facultyChar}-${campus.campusCode}$`
+        );
+        const match = this.scopeKey(code).match(matcher);
+        if (match?.[1]) {
+          const idx = this.alphaIndex(match[1]);
+          const current = nextAlphaByScope.get(scopeKey) ?? 0;
+          if (idx > current) {
+            nextAlphaByScope.set(scopeKey, idx);
+          }
+        }
+        reservedCodes.add(this.scopeKey(code));
+      }
+    }
+
+    const nextPreviewSectionCode = (
+      facultyGroupInput: string,
+      campusCodeInput: string,
+      modalityInput: 'PRESENCIAL' | 'VIRTUAL'
+    ) => {
+      const facultyGroup =
+        this.scopeKey(facultyGroupInput) === 'SALUD' ? 'SALUD' : 'FICA';
+      const campusCode = this.scopeKey(campusCodeInput) || 'CH';
+      const scopeKey = `${facultyGroup}|${campusCode}|${modalityInput}`;
+      const modalityChar = modalityInput === 'VIRTUAL' ? 'V' : 'P';
+      const facultyChar = this.facultyChar(facultyGroup);
+      let idx = Math.max(1, (nextAlphaByScope.get(scopeKey) ?? 0) + 1);
+      for (; idx <= 5000; idx += 1) {
+        const candidate = `${this.alphaCode(idx)}${modalityChar}${facultyChar}-${campusCode}`;
+        const candidateKey = this.scopeKey(candidate);
+        if (reservedCodes.has(candidateKey)) continue;
+        reservedCodes.add(candidateKey);
+        nextAlphaByScope.set(scopeKey, idx);
+        return candidate;
+      }
+      return `${this.alphaCode((nextAlphaByScope.get(scopeKey) ?? 0) + 1)}${modalityChar}${facultyChar}-${campusCode}`;
+    };
+
+    const bySection = new Map<string, PlannedSection>();
+
+    for (const unit of groupUnits) {
+      const modality = String(unit.modality ?? '').toUpperCase().includes('VIRTUAL')
+        ? 'VIRTUAL'
+        : 'PRESENCIAL';
+      const isExisting =
+        unit.origin === 'EXISTING_FREE' ||
+        (modality === 'VIRTUAL' && Boolean(unit.hasExistingVirtual));
+      const campusResolved = isExisting && unit.sectionCampusName
+        ? this.normalizeCampus(unit.sectionCampusName)
+        : this.fullCampusFromShort(unit.campusName);
+      const campusName =
+        'campusName' in campusResolved ? campusResolved.campusName : campusResolved.name;
+      const campusCode =
+        'campusCode' in campusResolved ? campusResolved.campusCode : campusResolved.code;
+      const sectionCode = isExisting
+        ? String(unit.sectionCode ?? '').trim() || 'EXISTENTE'
+        : nextPreviewSectionCode(unit.facultyGroup, campusCode, modality);
+      const mapKey = `${sectionCode}|${unit.facultyGroup}|${campusName}|${modality}`;
+      if (!bySection.has(mapKey)) {
+        bySection.set(mapKey, {
+          code: sectionCode,
+          name: sectionCode,
+          facultyGroup: unit.facultyGroup,
+          facultyName: this.defaultFacultyName(unit.facultyGroup),
+          campusName,
+          campusCode,
+          modality,
+          neededCourses: [],
+          initialCapacity: 0,
+          maxExtraCapacity: 0,
+          students: [],
+          studentCoursesByDni: new Map<string, Set<CourseName>>(),
+        });
+      }
+      const target = bySection.get(mapKey)!;
+      const label = `${unit.courseName} (${isExisting ? 'Existente' : 'Nuevo'})`;
+      if (!target.neededCourses.includes(label)) {
+        target.neededCourses.push(label);
+      }
+    }
+
+    const sections = Array.from(bySection.values());
+    sections.sort((a, b) => {
+      const fa = this.scopeKey(a.facultyGroup).localeCompare(this.scopeKey(b.facultyGroup));
+      if (fa !== 0) return fa;
+      const ca = this.scopeKey(a.campusName).localeCompare(this.scopeKey(b.campusName));
+      if (ca !== 0) return ca;
+      const ma = this.modalitySort(a.modality) - this.modalitySort(b.modality);
+      if (ma !== 0) return ma;
+      return this.scopeKey(a.code).localeCompare(this.scopeKey(b.code));
+    });
+    return sections;
+  }
+
+  private async expandOfferForAppend(
+    manager: EntityManager,
+    params: {
+      run: {
+        id: string;
+        periodId: string;
+        configUsed: { initialCapacity: number; maxExtraCapacity: number };
+      };
+      pendingDemands: PendingDemandForExpansion[];
+      simulationOnly?: boolean;
+      groupUnits?: CourseGroupUnit[];
+    }
+  ): Promise<ExpandOfferResult> {
+    const pendingDemandsEvaluated = params.pendingDemands.length;
+    if (pendingDemandsEvaluated === 0) {
+      return {
+        sectionsCreatedByExpansion: 0,
+        sectionCoursesCreatedByExpansion: 0,
+        offersReused: 0,
+        pendingDemandsEvaluated: 0,
+      };
+    }
+
+    type SectionCourseState = {
+      id: string;
+      sectionId: string;
+      courseId: string;
+      facultyGroup: string | null;
+      campusName: string | null;
+      modality: string | null;
+      initialCapacity: number;
+      maxExtraCapacity: number;
+      assignedCount: number;
+    };
+
+    const sectionsRows: Array<{
+      id: string;
+      code: string | null;
+      name: string;
+      facultyGroup: string | null;
+      facultyName: string | null;
+      campusName: string | null;
+      modality: string | null;
+      initialCapacity: number;
+      maxExtraCapacity: number;
+    }> = await manager.query(
+      `
+      SELECT
+        s.id AS id,
+        s.code AS code,
+        s.name AS name,
+        s.facultyGroup AS facultyGroup,
+        s.facultyName AS facultyName,
+        s.campusName AS campusName,
+        s.modality AS modality,
+        s.initialCapacity AS initialCapacity,
+        s.maxExtraCapacity AS maxExtraCapacity
+      FROM sections s
+      WHERE s.levelingRunId = ?
+        AND s.isAutoLeveling = 1
+      ORDER BY s.code ASC, s.name ASC
+      `,
+      [params.run.id]
+    );
+
+    const sections = sectionsRows.map((row) => ({
+      id: String(row.id),
+      code: row.code ? String(row.code) : null,
+      name: String(row.name ?? ''),
+      facultyGroup: row.facultyGroup ? String(row.facultyGroup) : null,
+      facultyName: row.facultyName ? String(row.facultyName) : null,
+      campusName: row.campusName ? String(row.campusName) : null,
+      modality: row.modality ? String(row.modality).toUpperCase().trim() : null,
+      initialCapacity: Math.max(0, Number(row.initialCapacity ?? 0)),
+      maxExtraCapacity: Math.max(0, Number(row.maxExtraCapacity ?? 0)),
+    }));
+
+    const sectionIds = sections.map((s) => s.id);
+    const coursesBySection = new Map<string, Set<string>>();
+
+    const sectionCourses: SectionCourseState[] = [];
+    if (sectionIds.length > 0) {
+      const placeholders = sectionIds.map(() => '?').join(', ');
+      const sectionCourseRows: Array<{
+        sectionCourseId: string;
+        sectionId: string;
+        courseId: string;
+        facultyGroup: string | null;
+        campusName: string | null;
+        modality: string | null;
+        initialCapacity: number;
+        maxExtraCapacity: number;
+      }> = await manager.query(
+        `
+        SELECT
+          sc.id AS sectionCourseId,
+          sc.sectionId AS sectionId,
+          sc.courseId AS courseId,
+          s.facultyGroup AS facultyGroup,
+          s.campusName AS campusName,
+          s.modality AS modality,
+          COALESCE(sc.initialCapacity, s.initialCapacity) AS initialCapacity,
+          COALESCE(sc.maxExtraCapacity, s.maxExtraCapacity) AS maxExtraCapacity
+        FROM section_courses sc
+        INNER JOIN sections s ON s.id = sc.sectionId
+        WHERE sc.periodId = ?
+          AND sc.sectionId IN (${placeholders})
+        `,
+        [params.run.periodId, ...sectionIds]
+      );
+
+      const sectionCourseIds = sectionCourseRows.map((row) => String(row.sectionCourseId));
+      const assignedBySectionCourse = new Map<string, number>();
+      if (sectionCourseIds.length > 0) {
+        const sectionCoursePlaceholders = sectionCourseIds.map(() => '?').join(', ');
+        const assignedRows: Array<{ sectionCourseId: string; c: number }> = await manager.query(
+          `
+          SELECT sectionCourseId, COUNT(*) AS c
+          FROM section_student_courses
+          WHERE sectionCourseId IN (${sectionCoursePlaceholders})
+          GROUP BY sectionCourseId
+          `,
+          sectionCourseIds
+        );
+        for (const row of assignedRows) {
+          assignedBySectionCourse.set(String(row.sectionCourseId), Number(row.c ?? 0));
+        }
+      }
+
+      for (const row of sectionCourseRows) {
+        const item: SectionCourseState = {
+          id: String(row.sectionCourseId),
+          sectionId: String(row.sectionId),
+          courseId: String(row.courseId),
+          facultyGroup: row.facultyGroup ? String(row.facultyGroup) : null,
+          campusName: row.campusName ? String(row.campusName) : null,
+          modality: row.modality ? String(row.modality).toUpperCase().trim() : null,
+          initialCapacity: Math.max(0, Number(row.initialCapacity ?? 0)),
+          maxExtraCapacity: Math.max(0, Number(row.maxExtraCapacity ?? 0)),
+          assignedCount:
+            assignedBySectionCourse.get(String(row.sectionCourseId)) ?? 0,
+        };
+        sectionCourses.push(item);
+        if (!coursesBySection.has(item.sectionId)) {
+          coursesBySection.set(item.sectionId, new Set<string>());
+        }
+        coursesBySection.get(item.sectionId)!.add(item.courseId);
+      }
+    }
+
+    const pendingByScopeCourse = new Map<
+      string,
+      {
+        facultyGroup: string;
+        campusName: string;
+        courseId: string;
+        pendingCount: number;
+      }
+    >();
+    for (const demand of params.pendingDemands) {
+      const facultyGroup = this.scopeKey(demand.facultyGroup);
+      const campusName = this.scopeKey(demand.campusName);
+      const courseId = String(demand.courseId ?? '').trim();
+      if (!facultyGroup || !campusName || !courseId) continue;
+      const key = `${facultyGroup}|${campusName}|${courseId}`;
+      if (!pendingByScopeCourse.has(key)) {
+        pendingByScopeCourse.set(key, {
+          facultyGroup,
+          campusName,
+          courseId,
+          pendingCount: 0,
+        });
+      }
+      pendingByScopeCourse.get(key)!.pendingCount += 1;
+    }
+
+    const hasManualGroupRouting = Boolean(params.groupUnits && params.groupUnits.length > 0);
+    const manualDemandByScopeCourse = new Map<
+      string,
+      {
+        facultyGroup: string;
+        campusName: string;
+        courseId: string;
+        pendingCount: number;
+        presencialNewRequiredCount: number;
+        virtualCount: number;
+        reusedPresencialCount: number;
+      }
+    >();
+    if (hasManualGroupRouting) {
+      for (const unit of params.groupUnits ?? []) {
+        const size = Math.max(0, Number(unit.size ?? 0));
+        if (size <= 0) continue;
+        const courseId = String(unit.courseId ?? '').trim();
+        if (!courseId) continue;
+        const facultyGroup = this.scopeKey(unit.facultyGroup) || 'FICA';
+        const campusName = this.scopeKey(this.fullCampusFromShort(unit.campusName).name);
+        if (!facultyGroup || !campusName) continue;
+        const key = `${facultyGroup}|${campusName}|${courseId}`;
+        if (!manualDemandByScopeCourse.has(key)) {
+          manualDemandByScopeCourse.set(key, {
+            facultyGroup,
+            campusName,
+            courseId,
+            pendingCount: 0,
+            presencialNewRequiredCount: 0,
+            virtualCount: 0,
+            reusedPresencialCount: 0,
+          });
+        }
+        const target = manualDemandByScopeCourse.get(key)!;
+        target.pendingCount += size;
+        if (String(unit.modality ?? '').toUpperCase().includes('VIRTUAL')) {
+          target.virtualCount += size;
+          continue;
+        }
+        if (unit.origin === 'EXISTING_FREE') {
+          target.reusedPresencialCount += size;
+        } else {
+          target.presencialNewRequiredCount += size;
+        }
+      }
+    }
+
+    const pendingGroups = (
+      hasManualGroupRouting && manualDemandByScopeCourse.size > 0
+        ? Array.from(manualDemandByScopeCourse.values())
+        : Array.from(pendingByScopeCourse.values())
+    ).sort((a, b) => {
+      const fa = a.facultyGroup.localeCompare(b.facultyGroup);
+      if (fa !== 0) return fa;
+      const ca = a.campusName.localeCompare(b.campusName);
+      if (ca !== 0) return ca;
+      return a.courseId.localeCompare(b.courseId);
+    });
+
+    let sectionsCreatedByExpansion = 0;
+    let sectionCoursesCreatedByExpansion = 0;
+    let offersReused = 0;
+    const reservedCodes = new Set<string>();
+    for (const section of sections) {
+      const code = this.scopeKey(section.code);
+      if (code) reservedCodes.add(code);
+    }
+    const campusMatches = (sectionCampusName: string | null, campusName: string) => {
+      const full = this.scopeKey(sectionCampusName);
+      if (full === campusName) return true;
+      const short = this.scopeKey(this.shortCampus(String(sectionCampusName ?? '')));
+      return short === campusName;
+    };
+
+    const scopedSections = (
+      facultyGroup: string,
+      campusName: string,
+      modality: 'PRESENCIAL' | 'VIRTUAL'
+    ) =>
+      sections
+        .filter(
+          (section) =>
+            this.scopeKey(section.facultyGroup) === facultyGroup &&
+            campusMatches(section.campusName, campusName) &&
+            this.scopeKey(section.modality).includes(modality)
+        )
+        .sort((a, b) =>
+          this.scopeKey(a.code ?? a.name).localeCompare(this.scopeKey(b.code ?? b.name))
+        );
+
+    const scopedCourseCandidates = (
+      facultyGroup: string,
+      campusName: string,
+      courseId: string,
+      modality: 'PRESENCIAL' | 'VIRTUAL'
+    ) =>
+      sectionCourses.filter(
+        (item) =>
+          this.scopeKey(item.facultyGroup) === facultyGroup &&
+          campusMatches(item.campusName, campusName) &&
+          this.scopeKey(item.modality).includes(modality) &&
+          item.courseId === courseId
+      );
+    const scopedVirtualCourseCandidates = (facultyGroup: string, courseId: string) =>
+      sectionCourses.filter(
+        (item) =>
+          this.scopeKey(item.facultyGroup) === facultyGroup &&
+          this.scopeKey(item.modality).includes('VIRTUAL') &&
+          item.courseId === courseId
+      );
+    const scopedVirtualSections = (facultyGroup: string) =>
+      sections
+        .filter(
+          (section) =>
+            this.scopeKey(section.facultyGroup) === facultyGroup &&
+            this.scopeKey(section.modality).includes('VIRTUAL')
+        )
+        .sort((a, b) =>
+          this.scopeKey(a.code ?? a.name).localeCompare(this.scopeKey(b.code ?? b.name))
+        );
+
+    for (const group of pendingGroups) {
+      let remaining = Math.max(0, Number(group.pendingCount ?? 0));
+      if (remaining <= 0) continue;
+      const manualDemand = manualDemandByScopeCourse.get(
+        `${group.facultyGroup}|${group.campusName}|${group.courseId}`
+      );
+      let requiredVirtual = 0;
+
+      if (manualDemand) {
+        offersReused += Math.max(0, Number(manualDemand.reusedPresencialCount ?? 0));
+        remaining = Math.max(0, Number(manualDemand.presencialNewRequiredCount ?? 0));
+        requiredVirtual = Math.max(0, Number(manualDemand.virtualCount ?? 0));
+      }
+
+      if (!manualDemand) {
+        const existingPresencialCandidates = scopedCourseCandidates(
+          group.facultyGroup,
+          group.campusName,
+          group.courseId,
+          'PRESENCIAL'
+        );
+        const existingPresencialAvailable = existingPresencialCandidates.reduce(
+          (acc, candidate) => {
+            const available = this.availableCapacityForOffer(candidate);
+            if (!Number.isFinite(available)) return Number.POSITIVE_INFINITY;
+            return acc + available;
+          },
+          0
+        );
+        offersReused += Number.isFinite(existingPresencialAvailable)
+          ? Math.min(remaining, existingPresencialAvailable)
+          : remaining;
+        remaining = this.consumePendingByAvailable(remaining, existingPresencialAvailable);
+      }
+
+      if (remaining > 0) {
+        const presencialSections = scopedSections(
+          group.facultyGroup,
+          group.campusName,
+          'PRESENCIAL'
+        );
+        for (const section of presencialSections) {
+          const hasCourse = coursesBySection.get(section.id)?.has(group.courseId) ?? false;
+          if (hasCourse) continue;
+          const created = await this.createAutoExpansionSectionCourse(manager, {
+            periodId: params.run.periodId,
+            sectionId: section.id,
+            courseId: group.courseId,
+            initialCapacity: section.initialCapacity,
+            maxExtraCapacity: section.maxExtraCapacity,
+            simulationOnly: Boolean(params.simulationOnly),
+          });
+          if (!created.created) continue;
+          sectionCoursesCreatedByExpansion += 1;
+          sectionCourses.push({
+            id: created.sectionCourseId,
+            sectionId: section.id,
+            courseId: group.courseId,
+            facultyGroup: section.facultyGroup,
+            campusName: section.campusName,
+            modality: section.modality,
+            initialCapacity: created.initialCapacity,
+            maxExtraCapacity: created.maxExtraCapacity,
+            assignedCount: 0,
+          });
+          if (!coursesBySection.has(section.id)) {
+            coursesBySection.set(section.id, new Set<string>());
+          }
+          coursesBySection.get(section.id)!.add(group.courseId);
+          remaining = this.consumePendingByAvailable(
+            remaining,
+            this.availableCapacityForOffer({
+              assignedCount: 0,
+              initialCapacity: created.initialCapacity,
+              maxExtraCapacity: created.maxExtraCapacity,
+              modality: section.modality,
+            })
+          );
+          if (remaining <= 0) break;
+        }
+      }
+
+      while (remaining > 0) {
+        const section = await this.createAutoExpansionSection(manager, {
+          runId: params.run.id,
+          facultyGroup: group.facultyGroup,
+          campusName: group.campusName,
+          modality: 'PRESENCIAL',
+          initialCapacity: Math.max(0, Number(params.run.configUsed.initialCapacity ?? 45)),
+          maxExtraCapacity: Math.max(0, Number(params.run.configUsed.maxExtraCapacity ?? 0)),
+          simulationOnly: Boolean(params.simulationOnly),
+          reservedCodes,
+        });
+        sectionsCreatedByExpansion += 1;
+        sections.push(section);
+
+        const created = await this.createAutoExpansionSectionCourse(manager, {
+          periodId: params.run.periodId,
+          sectionId: section.id,
+          courseId: group.courseId,
+          initialCapacity: section.initialCapacity,
+          maxExtraCapacity: section.maxExtraCapacity,
+          simulationOnly: Boolean(params.simulationOnly),
+        });
+        if (created.created) {
+          sectionCoursesCreatedByExpansion += 1;
+        }
+        sectionCourses.push({
+          id: created.sectionCourseId,
+          sectionId: section.id,
+          courseId: group.courseId,
+          facultyGroup: section.facultyGroup,
+          campusName: section.campusName,
+          modality: section.modality,
+          initialCapacity: created.initialCapacity,
+          maxExtraCapacity: created.maxExtraCapacity,
+          assignedCount: 0,
+        });
+        if (!coursesBySection.has(section.id)) {
+          coursesBySection.set(section.id, new Set<string>());
+        }
+        coursesBySection.get(section.id)!.add(group.courseId);
+
+        const available = this.availableCapacityForOffer({
+          assignedCount: 0,
+          initialCapacity: created.initialCapacity,
+          maxExtraCapacity: created.maxExtraCapacity,
+          modality: section.modality,
+        });
+        remaining = this.consumePendingByAvailable(remaining, available);
+        if (!Number.isFinite(available)) {
+          break;
+        }
+      }
+
+      const shouldEnsureVirtual = manualDemand ? requiredVirtual > 0 : true;
+      if (shouldEnsureVirtual) {
+        const existingVirtualCandidates = scopedVirtualCourseCandidates(
+          group.facultyGroup,
+          group.courseId
+        );
+        if (existingVirtualCandidates.length === 0) {
+          const virtualSections = scopedVirtualSections(group.facultyGroup);
+          const targetVirtualSection = virtualSections.find(
+            (section) => !(coursesBySection.get(section.id)?.has(group.courseId) ?? false)
+          );
+          if (targetVirtualSection) {
+            const created = await this.createAutoExpansionSectionCourse(manager, {
+              periodId: params.run.periodId,
+              sectionId: targetVirtualSection.id,
+              courseId: group.courseId,
+              initialCapacity: targetVirtualSection.initialCapacity,
+              maxExtraCapacity: targetVirtualSection.maxExtraCapacity,
+              simulationOnly: Boolean(params.simulationOnly),
+            });
+            if (created.created) {
+              sectionCoursesCreatedByExpansion += 1;
+              sectionCourses.push({
+                id: created.sectionCourseId,
+                sectionId: targetVirtualSection.id,
+                courseId: group.courseId,
+                facultyGroup: targetVirtualSection.facultyGroup,
+                campusName: targetVirtualSection.campusName,
+                modality: targetVirtualSection.modality,
+                initialCapacity: created.initialCapacity,
+                maxExtraCapacity: created.maxExtraCapacity,
+                assignedCount: 0,
+              });
+              if (!coursesBySection.has(targetVirtualSection.id)) {
+                coursesBySection.set(targetVirtualSection.id, new Set<string>());
+              }
+              coursesBySection.get(targetVirtualSection.id)!.add(group.courseId);
+            }
+          }
+        }
+      }
+    }
+
+    return {
+      sectionsCreatedByExpansion,
+      sectionCoursesCreatedByExpansion,
+      offersReused,
+      pendingDemandsEvaluated,
+    };
+  }
+
+  private async createAutoExpansionSection(
+    manager: EntityManager,
+    params: {
+      runId: string;
+      facultyGroup: string;
+      campusName: string;
+      modality: 'PRESENCIAL' | 'VIRTUAL';
+      initialCapacity: number;
+      maxExtraCapacity: number;
+      simulationOnly?: boolean;
+      reservedCodes?: Set<string>;
+    }
+  ) {
+    const sectionId = randomUUID();
+    const sectionCode = await this.generateAutoExpansionSectionCode({
+      manager,
+      runId: params.runId,
+      facultyGroup: params.facultyGroup,
+      campusName: params.campusName,
+      modality: params.modality,
+      reservedCodes: params.reservedCodes,
+    });
+    const campus = this.normalizeCampus(params.campusName);
+    const facultyGroup = this.scopeKey(params.facultyGroup) === 'SALUD' ? 'SALUD' : 'FICA';
+    const facultyName = this.defaultFacultyName(facultyGroup);
+    if (params.reservedCodes) {
+      params.reservedCodes.add(this.scopeKey(sectionCode));
+    }
+    if (!params.simulationOnly) {
+      await manager.query(
+        `
+        INSERT INTO sections (
+          id,
+          name,
+          code,
+          akademicSectionId,
+          facultyGroup,
+          facultyName,
+          campusName,
+          modality,
+          teacherId,
+          initialCapacity,
+          maxExtraCapacity,
+          isAutoLeveling,
+          levelingRunId,
+          createdAt,
+          updatedAt
+        )
+        VALUES (?, ?, ?, NULL, ?, ?, ?, ?, NULL, ?, ?, 1, ?, NOW(6), NOW(6))
+        `,
+        [
+          sectionId,
+          sectionCode,
+          sectionCode,
+          facultyGroup,
+          facultyName,
+          campus.campusName,
+          params.modality,
+          Math.max(0, Number(params.initialCapacity ?? 0)),
+          Math.max(0, Number(params.maxExtraCapacity ?? 0)),
+          params.runId,
+        ]
+      );
+    }
+    return {
+      id: sectionId,
+      code: sectionCode,
+      name: sectionCode,
+      facultyGroup,
+      facultyName,
+      campusName: campus.campusName,
+      modality: params.modality,
+      initialCapacity: Math.max(0, Number(params.initialCapacity ?? 0)),
+      maxExtraCapacity: Math.max(0, Number(params.maxExtraCapacity ?? 0)),
+    };
+  }
+
+  private async createAutoExpansionSectionCourse(
+    manager: EntityManager,
+    params: {
+      periodId: string;
+      sectionId: string;
+      courseId: string;
+      initialCapacity: number;
+      maxExtraCapacity: number;
+      simulationOnly?: boolean;
+    }
+  ) {
+    const beforeRows: Array<{ id: string }> = await manager.query(
+      `
+      SELECT id
+      FROM section_courses
+      WHERE periodId = ?
+        AND sectionId = ?
+        AND courseId = ?
+      LIMIT 1
+      `,
+      [params.periodId, params.sectionId, params.courseId]
+    );
+    if (beforeRows[0]?.id) {
+      return {
+        created: false,
+        sectionCourseId: String(beforeRows[0].id),
+        initialCapacity: Math.max(0, Number(params.initialCapacity ?? 0)),
+        maxExtraCapacity: Math.max(0, Number(params.maxExtraCapacity ?? 0)),
+      };
+    }
+
+    const sectionCourseId = randomUUID();
+    if (!params.simulationOnly) {
+      await manager.query(
+        `
+        INSERT INTO section_courses (
+          id,
+          periodId,
+          sectionId,
+          courseId,
+          idakademic,
+          initialCapacity,
+          maxExtraCapacity,
+          createdAt,
+          updatedAt
+        )
+        VALUES (?, ?, ?, ?, NULL, ?, ?, NOW(6), NOW(6))
+        `,
+        [
+          sectionCourseId,
+          params.periodId,
+          params.sectionId,
+          params.courseId,
+          Math.max(0, Number(params.initialCapacity ?? 0)),
+          Math.max(0, Number(params.maxExtraCapacity ?? 0)),
+        ]
+      );
+    }
+    return {
+      created: true,
+      sectionCourseId,
+      initialCapacity: Math.max(0, Number(params.initialCapacity ?? 0)),
+      maxExtraCapacity: Math.max(0, Number(params.maxExtraCapacity ?? 0)),
+    };
+  }
+
+  private availableCapacityForOffer(params: {
+    assignedCount: number;
+    initialCapacity: number;
+    maxExtraCapacity: number;
+    modality?: string | null;
+  }) {
+    if (this.isVirtualModality(params.modality)) {
+      return Number.POSITIVE_INFINITY;
+    }
+    const hardCap =
+      Math.max(0, Number(params.initialCapacity ?? 0)) +
+      Math.max(0, Number(params.maxExtraCapacity ?? 0));
+    if (hardCap <= 0) {
+      return Number.POSITIVE_INFINITY;
+    }
+    const assigned = Math.max(0, Number(params.assignedCount ?? 0));
+    return Math.max(0, hardCap - assigned);
+  }
+
+  private consumePendingByAvailable(pendingCount: number, available: number) {
+    if (!Number.isFinite(available)) return 0;
+    return Math.max(0, Number(pendingCount ?? 0) - Math.max(0, Number(available ?? 0)));
   }
 
   private async loadCourseIdByCanonicalName(manager: EntityManager) {
@@ -3182,6 +5135,8 @@ export class LevelingService {
       sectionId: string;
       courseId: string;
       idakademic: string | null;
+      initialCapacity: number;
+      maxExtraCapacity: number;
     }>
   ) {
     if (rows.length === 0) return;
@@ -3189,21 +5144,33 @@ export class LevelingService {
     for (let i = 0; i < rows.length; i += batchSize) {
       const batch = rows.slice(i, i + batchSize);
       const placeholders = batch
-        .map(() => '(?, ?, ?, ?, ?, NOW(6), NOW(6))')
+        .map(() => '(?, ?, ?, ?, ?, ?, ?, NOW(6), NOW(6))')
         .join(', ');
-      const params: Array<string | null> = [];
+      const params: Array<string | number | null> = [];
       for (const row of batch) {
         params.push(
           row.id,
           row.periodId,
           row.sectionId,
           row.courseId,
-          row.idakademic
+          row.idakademic,
+          Math.max(0, Number(row.initialCapacity ?? 0)),
+          Math.max(0, Number(row.maxExtraCapacity ?? 0))
         );
       }
       await manager.query(
         `
-        INSERT IGNORE INTO section_courses (id, periodId, sectionId, courseId, idakademic, createdAt, updatedAt)
+        INSERT IGNORE INTO section_courses (
+          id,
+          periodId,
+          sectionId,
+          courseId,
+          idakademic,
+          initialCapacity,
+          maxExtraCapacity,
+          createdAt,
+          updatedAt
+        )
         VALUES ${placeholders}
         `,
         params
@@ -3288,6 +5255,8 @@ export class LevelingService {
       courseId: string;
       facultyGroup: string | null;
       campusName: string | null;
+      sourceModality: string | null;
+      examDate: string | null;
       required: number;
     }>
   ) {
@@ -3296,7 +5265,7 @@ export class LevelingService {
     for (let i = 0; i < rows.length; i += batchSize) {
       const batch = rows.slice(i, i + batchSize);
       const placeholders = batch
-        .map(() => '(?, ?, ?, ?, ?, ?, ?, NOW(6), NOW(6))')
+        .map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(6), NOW(6))')
         .join(', ');
       const params: Array<string | number | null> = [];
       for (const row of batch) {
@@ -3307,6 +5276,8 @@ export class LevelingService {
           row.courseId,
           row.facultyGroup,
           row.campusName,
+          row.sourceModality,
+          row.examDate,
           row.required
         );
       }
@@ -3319,6 +5290,8 @@ export class LevelingService {
           courseId,
           facultyGroup,
           campusName,
+          sourceModality,
+          examDate,
           required,
           createdAt,
           updatedAt
@@ -3376,61 +5349,73 @@ export class LevelingService {
   }
 
   private async getRunOrThrow(runId: string, manager?: EntityManager) {
-    const db = manager ?? this.dataSource;
-    const rows: Array<{
-      id: string;
-      periodId: string;
-      status: string;
-      configJson: unknown;
-      sourceFileHash: string | null;
-      createdBy: string | null;
-      createdAt: Date | string;
-      updatedAt: Date | string;
-    }> = await db.query(
-      `
-      SELECT
-        id,
-        periodId,
-        status,
-        configJson,
-        sourceFileHash,
-        createdBy,
-        createdAt,
-        updatedAt
-      FROM leveling_runs
-      WHERE id = ?
-      LIMIT 1
-      `,
-      [runId]
-    );
-    const row = rows[0];
-    if (!row?.id) {
-      throw new NotFoundException('Leveling run not found');
+    try {
+      const db = manager ?? this.dataSource;
+      const rows: Array<{
+        id: string;
+        periodId: string;
+        status: string;
+        configJson: unknown;
+        reportsJson: unknown;
+        sourceFileHash: string | null;
+        createdBy: string | null;
+        createdAt: Date | string;
+        updatedAt: Date | string;
+      }> = await db.query(
+        `
+        SELECT
+          id,
+          periodId,
+          status,
+          configJson,
+          reportsJson,
+          sourceFileHash,
+          createdBy,
+          createdAt,
+          updatedAt
+        FROM leveling_runs
+        WHERE id = ?
+        LIMIT 1
+        `,
+        [runId]
+      );
+      const row = rows[0];
+      if (!row?.id) {
+        throw new NotFoundException('Leveling run not found');
+      }
+      const configUsed = this.parseRunConfig(row.configJson);
+      return {
+        id: String(row.id),
+        periodId: String(row.periodId),
+        status: String(row.status || 'STRUCTURED') as LevelingRunStatus,
+        configUsed,
+        reportsJson: row.reportsJson ? (row.reportsJson as Record<string, unknown>) : null,
+        sourceFileHash: row.sourceFileHash ? String(row.sourceFileHash) : null,
+        createdBy: row.createdBy ? String(row.createdBy) : null,
+        createdAt: this.toIsoDateTime(row.createdAt),
+        updatedAt: this.toIsoDateTime(row.updatedAt),
+      };
+    } catch (e: any) {
+      require('fs').appendFileSync('api_logs.txt', 'getRunOrThrow error: ' + (e.stack || e.message) + '\n');
+      throw e;
     }
-    const configUsed = this.parseRunConfig(row.configJson);
-    return {
-      id: String(row.id),
-      periodId: String(row.periodId),
-      status: String(row.status || 'STRUCTURED') as LevelingRunStatus,
-      configUsed,
-      sourceFileHash: row.sourceFileHash ? String(row.sourceFileHash) : null,
-      createdBy: row.createdBy ? String(row.createdBy) : null,
-      createdAt: this.toIsoDateTime(row.createdAt),
-      updatedAt: this.toIsoDateTime(row.updatedAt),
-    };
   }
 
   private async tableExists(db: EntityManager | DataSource, tableName: string) {
-    const rows: Array<{ c: number }> = await db.query(
-      `
-      SELECT COUNT(*) AS c
-      FROM information_schema.TABLES
-      WHERE TABLE_SCHEMA = DATABASE()
-        AND TABLE_NAME = ?
-      `,
-      [tableName]
-    );
-    return Number(rows[0]?.c ?? 0) > 0;
+    try {
+      const rows: Array<{ c: number }> = await db.query(
+        `
+        SELECT COUNT(*) AS c
+        FROM information_schema.TABLES
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = ?
+        `,
+        [tableName]
+      );
+      return Number(rows[0]?.c ?? 0) > 0;
+    } catch {
+      return false;
+    }
   }
 
   private parseRunConfig(value: unknown) {
@@ -3505,39 +5490,72 @@ export class LevelingService {
     return `${base}-${randomUUID().slice(0, 8).toUpperCase()}`;
   }
 
+  private async generateAutoExpansionSectionCode(params: {
+    manager: EntityManager;
+    runId: string;
+    facultyGroup: string;
+    campusName: string;
+    modality: 'PRESENCIAL' | 'VIRTUAL';
+    reservedCodes?: Set<string>;
+  }) {
+    const facultyGroup = this.scopeKey(params.facultyGroup);
+    const facultyChar = this.facultyChar(facultyGroup);
+    const campus = this.normalizeCampus(params.campusName);
+    const modalityChar = params.modality === 'VIRTUAL' ? 'V' : 'P';
+
+    const rows: Array<{ code: string | null }> = await params.manager.query(
+      `
+      SELECT code
+      FROM sections
+      WHERE levelingRunId = ?
+        AND facultyGroup = ?
+        AND UPPER(TRIM(COALESCE(campusName, ''))) = ?
+        AND UPPER(TRIM(COALESCE(modality, ''))) = ?
+        AND code IS NOT NULL
+      `,
+      [params.runId, facultyGroup, this.scopeKey(campus.campusName), params.modality]
+    );
+
+    const matcher = new RegExp(
+      `^([A-Z]+)${modalityChar}${facultyChar}-${campus.campusCode}$`
+    );
+    let maxIndex = 0;
+    for (const row of rows) {
+      const code = String(row.code ?? '').trim().toUpperCase();
+      const match = code.match(matcher);
+      if (!match) continue;
+      maxIndex = Math.max(maxIndex, this.alphaIndex(match[1]));
+    }
+
+    for (let idx = Math.max(1, maxIndex + 1); idx <= maxIndex + 1000; idx += 1) {
+      const candidate = `${this.alphaCode(idx)}${modalityChar}${facultyChar}-${campus.campusCode}`;
+      if (params.reservedCodes?.has(this.scopeKey(candidate))) {
+        continue;
+      }
+      const existsRows: Array<{ c: number }> = await params.manager.query(
+        `
+        SELECT COUNT(*) AS c
+        FROM sections
+        WHERE code = ?
+        `,
+        [candidate]
+      );
+      if (Number(existsRows[0]?.c ?? 0) === 0) {
+        return candidate;
+      }
+    }
+
+    return `${this.alphaCode(maxIndex + 1)}${modalityChar}${facultyChar}-${campus.campusCode}-${randomUUID()
+      .slice(0, 4)
+      .toUpperCase()}`;
+  }
+
   private async loadMatriculationPreviewContext(params: {
     runId: string;
     periodId: string;
   }) {
-    const hasPlannedCapacityTable = await this.tableExists(
-      this.dataSource,
-      'leveling_run_section_course_capacities'
-    );
-    const capacityInitialExpr = hasPlannedCapacityTable
-      ? `
-        CASE
-          WHEN UPPER(COALESCE(s.modality, '')) LIKE '%VIRTUAL%' THEN s.initialCapacity
-          WHEN lrscc.plannedCapacity IS NOT NULL THEN lrscc.plannedCapacity
-          ELSE s.initialCapacity
-        END
-      `
-      : `s.initialCapacity`;
-    const capacityExtraExpr = hasPlannedCapacityTable
-      ? `
-        CASE
-          WHEN UPPER(COALESCE(s.modality, '')) LIKE '%VIRTUAL%' THEN s.maxExtraCapacity
-          WHEN lrscc.plannedCapacity IS NOT NULL THEN 0
-          ELSE s.maxExtraCapacity
-        END
-      `
-      : `s.maxExtraCapacity`;
-    const plannedCapacityJoin = hasPlannedCapacityTable
-      ? `
-      LEFT JOIN leveling_run_section_course_capacities lrscc
-        ON lrscc.runId = ?
-       AND lrscc.sectionCourseId = sc.id
-      `
-      : '';
+    const capacityInitialExpr = `COALESCE(sc.initialCapacity, s.initialCapacity)`;
+    const capacityExtraExpr = `COALESCE(sc.maxExtraCapacity, s.maxExtraCapacity)`;
 
     const sectionCourseRows: Array<{
       sectionCourseId: string;
@@ -3552,6 +5570,14 @@ export class LevelingService {
       modality: string | null;
       initialCapacity: number;
       maxExtraCapacity: number;
+      classroomId: string | null;
+      classroomCode: string | null;
+      classroomName: string | null;
+      classroomCapacity: number | null;
+      classroomPavilionCode: string | null;
+      classroomPavilionName: string | null;
+      classroomLevelName: string | null;
+      capacitySource: 'VIRTUAL' | 'AULA' | 'SIN_AULA' | 'AULA_INACTIVA';
       teacherId: string | null;
       teacherName: string | null;
       hasTeacher: number;
@@ -3570,6 +5596,19 @@ export class LevelingService {
         s.modality AS modality,
         ${capacityInitialExpr} AS initialCapacity,
         ${capacityExtraExpr} AS maxExtraCapacity,
+        sc.classroomId AS classroomId,
+        cl.code AS classroomCode,
+        cl.name AS classroomName,
+        cl.capacity AS classroomCapacity,
+        pv.code AS classroomPavilionCode,
+        pv.name AS classroomPavilionName,
+        cl.levelName AS classroomLevelName,
+        CASE
+          WHEN UPPER(COALESCE(s.modality, '')) LIKE '%VIRTUAL%' THEN 'VIRTUAL'
+          WHEN sc.classroomId IS NULL THEN 'SIN_AULA'
+          WHEN cl.id IS NULL THEN 'AULA_INACTIVA'
+          ELSE 'AULA'
+        END AS capacitySource,
         COALESCE(tc.id, ts.id) AS teacherId,
         COALESCE(tc.fullName, ts.fullName) AS teacherName,
         CASE
@@ -3579,7 +5618,11 @@ export class LevelingService {
       FROM section_courses sc
       INNER JOIN sections s ON s.id = sc.sectionId
       INNER JOIN courses c ON c.id = sc.courseId
-      ${plannedCapacityJoin}
+      LEFT JOIN classrooms cl
+        ON cl.id = sc.classroomId
+       AND cl.status = 'ACTIVA'
+      LEFT JOIN pavilions pv
+        ON pv.id = cl.pavilionId
       LEFT JOIN section_course_teachers sct ON sct.sectionCourseId = sc.id
       LEFT JOIN users tc ON tc.id = sct.teacherId
       LEFT JOIN users ts ON ts.id = s.teacherId
@@ -3590,11 +5633,7 @@ export class LevelingService {
         s.name ASC,
         c.name ASC
       `,
-      [
-        ...(hasPlannedCapacityTable ? [params.runId] : []),
-        params.runId,
-        params.periodId,
-      ]
+      [params.runId, params.periodId]
     );
 
     const sectionCourseIds = sectionCourseRows.map((x) => String(x.sectionCourseId));
@@ -3644,20 +5683,125 @@ export class LevelingService {
     };
   }
 
-  private buildMatriculationFacultyStatuses(
+  private async loadPendingDemandsByFaculty(params: {
+    runId: string;
+    periodId: string;
+  }) {
+    const rows: Array<{ facultyGroup: string | null; pendingDemands: number }> =
+      await this.dataSource.query(
+        `
+        SELECT
+          d.facultyGroup AS facultyGroup,
+          COUNT(*) AS pendingDemands
+        FROM leveling_run_student_course_demands d
+        WHERE d.runId = ?
+          AND d.required = 1
+          AND NOT EXISTS (
+            SELECT 1
+            FROM section_student_courses sscx
+            INNER JOIN section_courses scx ON scx.id = sscx.sectionCourseId
+            WHERE sscx.studentId = d.studentId
+              AND scx.periodId = ?
+              AND scx.courseId = d.courseId
+          )
+        GROUP BY d.facultyGroup
+        `,
+        [params.runId, params.periodId]
+      );
+    const out = new Map<string, number>();
+    for (const row of rows) {
+      const facultyGroup = this.scopeKey(row.facultyGroup) || 'SIN_FACULTAD';
+      out.set(facultyGroup, Math.max(0, Number(row.pendingDemands ?? 0)));
+    }
+    return out;
+  }
+
+  private async loadPendingDemandsByFacultyCourse(params: {
+    runId: string;
+    periodId: string;
+  }) {
+    const rows: Array<{
+      facultyGroup: string | null;
+      courseId: string | null;
+      pendingDemands: number;
+    }> = await this.dataSource.query(
+      `
+      SELECT
+        d.facultyGroup AS facultyGroup,
+        d.courseId AS courseId,
+        COUNT(*) AS pendingDemands
+      FROM leveling_run_student_course_demands d
+      WHERE d.runId = ?
+        AND d.required = 1
+        AND NOT EXISTS (
+          SELECT 1
+          FROM section_student_courses sscx
+          INNER JOIN section_courses scx ON scx.id = sscx.sectionCourseId
+          WHERE sscx.studentId = d.studentId
+            AND scx.periodId = ?
+            AND scx.courseId = d.courseId
+        )
+      GROUP BY d.facultyGroup, d.courseId
+      `,
+      [params.runId, params.periodId]
+    );
+    const out = new Map<string, number>();
+    for (const row of rows) {
+      const facultyGroup = this.scopeKey(row.facultyGroup) || 'SIN_FACULTAD';
+      const courseId = String(row.courseId ?? '').trim();
+      if (!courseId) continue;
+      out.set(`${facultyGroup}|${courseId}`, Math.max(0, Number(row.pendingDemands ?? 0)));
+    }
+    return out;
+  }
+
+  private buildMatriculationFacultyStatuses(params: {
     sectionCourseRows: Array<{
       sectionCourseId: string;
+      courseId: string;
       facultyGroup: string | null;
+      modality: string | null;
+      classroomCapacity: number | null;
       hasTeacher: number;
-    }>,
-    blocksBySectionCourse: Map<string, ScheduleBlockWindow[]>
-  ) {
+    }>;
+    blocksBySectionCourse: Map<string, ScheduleBlockWindow[]>;
+    pendingDemandsByFaculty: Map<string, number>;
+    pendingDemandsByFacultyCourse: Map<string, number>;
+  }) {
     const byFaculty = new Map<
       string,
-      { facultyGroup: string; totalSectionCourses: number; withSchedule: number; withTeacher: number }
+      {
+        facultyGroup: string;
+        totalSectionCourses: number;
+        withSchedule: number;
+        withTeacher: number;
+        presencialTotal: number;
+        presencialWithClassroom: number;
+        pendingDemands: number;
+      }
     >();
 
-    for (const row of sectionCourseRows) {
+    for (const [facultyGroupKey, pendingCount] of params.pendingDemandsByFaculty.entries()) {
+      const facultyGroup = this.scopeKey(facultyGroupKey) || 'SIN_FACULTAD';
+      if (!byFaculty.has(facultyGroup)) {
+        byFaculty.set(facultyGroup, {
+          facultyGroup,
+          totalSectionCourses: 0,
+          withSchedule: 0,
+          withTeacher: 0,
+          presencialTotal: 0,
+          presencialWithClassroom: 0,
+          pendingDemands: Math.max(0, Number(pendingCount ?? 0)),
+        });
+      }
+    }
+
+    const byFacultyCourseCoverage = new Map<
+      string,
+      { hasVirtualCandidate: boolean; presencialCapacity: number }
+    >();
+
+    for (const row of params.sectionCourseRows) {
       const facultyGroup = this.scopeKey(row.facultyGroup) || 'SIN_FACULTAD';
       if (!byFaculty.has(facultyGroup)) {
         byFaculty.set(facultyGroup, {
@@ -3665,31 +5809,85 @@ export class LevelingService {
           totalSectionCourses: 0,
           withSchedule: 0,
           withTeacher: 0,
+          presencialTotal: 0,
+          presencialWithClassroom: 0,
+          pendingDemands: Math.max(
+            0,
+            Number(params.pendingDemandsByFaculty.get(facultyGroup) ?? 0)
+          ),
         });
       }
       const acc = byFaculty.get(facultyGroup)!;
       acc.totalSectionCourses += 1;
-      if ((blocksBySectionCourse.get(String(row.sectionCourseId)) ?? []).length > 0) {
+      if (!this.isVirtualModality(row.modality)) {
+        acc.presencialTotal += 1;
+        if (Number(row.classroomCapacity ?? 0) > 0) {
+          acc.presencialWithClassroom += 1;
+        }
+      }
+      if ((params.blocksBySectionCourse.get(String(row.sectionCourseId)) ?? []).length > 0) {
         acc.withSchedule += 1;
       }
       if (Number(row.hasTeacher ?? 0) > 0) {
         acc.withTeacher += 1;
       }
+
+      const hasSchedule =
+        (params.blocksBySectionCourse.get(String(row.sectionCourseId)) ?? []).length > 0;
+      const hasTeacher = Number(row.hasTeacher ?? 0) > 0;
+      if (!hasSchedule || !hasTeacher) continue;
+
+      const courseId = String(row.courseId ?? '').trim();
+      if (!courseId) continue;
+      const coverageKey = `${facultyGroup}|${courseId}`;
+      if (!byFacultyCourseCoverage.has(coverageKey)) {
+        byFacultyCourseCoverage.set(coverageKey, {
+          hasVirtualCandidate: false,
+          presencialCapacity: 0,
+        });
+      }
+      const coverage = byFacultyCourseCoverage.get(coverageKey)!;
+      if (this.isVirtualModality(row.modality)) {
+        coverage.hasVirtualCandidate = true;
+      } else {
+        coverage.presencialCapacity += Math.max(0, Number(row.classroomCapacity ?? 0));
+      }
     }
 
     return Array.from(byFaculty.values())
-      .map((item) => ({
-        ...item,
-        ready:
-          item.totalSectionCourses > 0 &&
-          item.withSchedule === item.totalSectionCourses &&
-          item.withTeacher === item.totalSectionCourses,
-      }))
+      .map((item) => {
+        const facultyGroup = this.scopeKey(item.facultyGroup) || 'SIN_FACULTAD';
+        const pendingEntries = Array.from(params.pendingDemandsByFacultyCourse.entries()).filter(
+          ([key, value]) => {
+            if (Math.max(0, Number(value ?? 0)) <= 0) return false;
+            const splitAt = key.indexOf('|');
+            if (splitAt < 0) return false;
+            return this.scopeKey(key.slice(0, splitAt)) === facultyGroup;
+          }
+        );
+        const hasPending = pendingEntries.length > 0;
+        const pendingCoverageOk = pendingEntries.every(([key, value]) => {
+          const splitAt = key.indexOf('|');
+          const courseId = splitAt >= 0 ? key.slice(splitAt + 1) : '';
+          const needed = Math.max(0, Number(value ?? 0));
+          if (!courseId || needed <= 0) return true;
+          const coverage = byFacultyCourseCoverage.get(`${facultyGroup}|${courseId}`);
+          if (!coverage) return false;
+          if (coverage.hasVirtualCandidate) return true;
+          return coverage.presencialCapacity >= needed;
+        });
+        return {
+          ...item,
+          ready: hasPending ? pendingCoverageOk : item.totalSectionCourses > 0,
+        };
+      })
       .sort((a, b) => a.facultyGroup.localeCompare(b.facultyGroup));
   }
 
   private async simulateMatriculationAssignments(params: {
     runId: string;
+    periodId: string;
+    strategy: 'FULL_REBUILD' | 'INCREMENTAL';
     facultyGroup: string | null;
     sectionCourseRows: Array<{
       sectionCourseId: string;
@@ -3703,6 +5901,14 @@ export class LevelingService {
       modality: string | null;
       initialCapacity: number;
       maxExtraCapacity: number;
+      classroomId: string | null;
+      classroomCode: string | null;
+      classroomName: string | null;
+      classroomCapacity: number | null;
+      classroomPavilionCode: string | null;
+      classroomPavilionName: string | null;
+      classroomLevelName: string | null;
+      capacitySource: 'VIRTUAL' | 'AULA' | 'SIN_AULA' | 'AULA_INACTIVA';
     }>;
     blocksBySectionCourse: Map<string, ScheduleBlockWindow[]>;
   }) {
@@ -3721,19 +5927,19 @@ export class LevelingService {
       INNER JOIN courses c ON c.id = d.courseId
       WHERE d.runId = ?
         AND d.required = 1
+        AND NOT EXISTS (
+          SELECT 1
+          FROM section_student_courses sscx
+          INNER JOIN section_courses scx ON scx.id = sscx.sectionCourseId
+          WHERE sscx.studentId = d.studentId
+            AND scx.periodId = ?
+            AND scx.courseId = d.courseId
+        )
         ${params.facultyGroup ? 'AND d.facultyGroup = ?' : ''}
       ORDER BY u.fullName ASC, c.name ASC
       `,
-      [params.runId, ...(params.facultyGroup ? [params.facultyGroup] : [])]
+      [params.runId, params.periodId, ...(params.facultyGroup ? [params.facultyGroup] : [])]
     );
-
-    if (demands.length === 0) {
-      throw new BadRequestException(
-        params.facultyGroup
-          ? `No hay demandas pendientes alumno-curso para la facultad ${params.facultyGroup}`
-          : 'No hay demandas pendientes alumno-curso para matricular'
-      );
-    }
 
     type Candidate = {
       sectionCourseId: string;
@@ -3747,9 +5953,44 @@ export class LevelingService {
       modality: string | null;
       initialCapacity: number;
       maxExtraCapacity: number;
+      classroomId: string | null;
+      classroomCode: string | null;
+      classroomName: string | null;
+      classroomCapacity: number | null;
+      classroomPavilionCode: string | null;
+      classroomPavilionName: string | null;
+      classroomLevelName: string | null;
+      capacitySource: 'VIRTUAL' | 'AULA' | 'SIN_AULA' | 'AULA_INACTIVA' | null;
       assignedCount: number;
       blocks: ScheduleBlockWindow[];
     };
+
+    const sectionCourseIds = params.sectionCourseRows.map((row) =>
+      String(row.sectionCourseId)
+    );
+    const existingAssignedBySectionCourse = new Map<string, number>();
+    if (
+      params.strategy !== 'FULL_REBUILD' &&
+      sectionCourseIds.length > 0
+    ) {
+      const placeholders = sectionCourseIds.map(() => '?').join(', ');
+      const existingAssignedRows: Array<{ sectionCourseId: string; c: number }> =
+        await this.dataSource.query(
+          `
+          SELECT sectionCourseId, COUNT(*) AS c
+          FROM section_student_courses
+          WHERE sectionCourseId IN (${placeholders})
+          GROUP BY sectionCourseId
+          `,
+          sectionCourseIds
+        );
+      for (const row of existingAssignedRows) {
+        existingAssignedBySectionCourse.set(
+          String(row.sectionCourseId),
+          Number(row.c ?? 0)
+        );
+      }
+    }
 
     const candidatesByCourse = new Map<string, Candidate[]>();
     for (const row of params.sectionCourseRows) {
@@ -3769,7 +6010,25 @@ export class LevelingService {
         modality: row.modality ? String(row.modality).toUpperCase().trim() : null,
         initialCapacity: Number(row.initialCapacity ?? 45),
         maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
-        assignedCount: 0,
+        classroomId: row.classroomId ? String(row.classroomId) : null,
+        classroomCode: row.classroomCode ? String(row.classroomCode) : null,
+        classroomName: row.classroomName ? String(row.classroomName) : null,
+        classroomCapacity:
+          row.classroomCapacity !== null && row.classroomCapacity !== undefined
+            ? Number(row.classroomCapacity)
+            : null,
+        classroomPavilionCode: row.classroomPavilionCode
+          ? String(row.classroomPavilionCode)
+          : null,
+        classroomPavilionName: row.classroomPavilionName
+          ? String(row.classroomPavilionName)
+          : null,
+        classroomLevelName: row.classroomLevelName
+          ? String(row.classroomLevelName)
+          : null,
+        capacitySource: this.asCapacitySource(row.capacitySource),
+        assignedCount:
+          existingAssignedBySectionCourse.get(String(row.sectionCourseId)) ?? 0,
         blocks: params.blocksBySectionCourse.get(String(row.sectionCourseId)) ?? [],
       });
     }
@@ -3819,6 +6078,49 @@ export class LevelingService {
     });
 
     const assignedBlocksByStudent = new Map<string, ScheduleBlockWindow[]>();
+    if (params.strategy !== 'FULL_REBUILD' && demands.length > 0) {
+      const demandStudentIds = Array.from(
+        new Set(demands.map((demand) => String(demand.studentId)))
+      );
+      const studentPlaceholders = demandStudentIds.map(() => '?').join(', ');
+      const existingBlockRows: Array<{
+        studentId: string;
+        dayOfWeek: number;
+        startTime: string;
+        endTime: string;
+        startDate: string | null;
+        endDate: string | null;
+      }> = await this.dataSource.query(
+        `
+        SELECT
+          ssc.studentId AS studentId,
+          sb.dayOfWeek AS dayOfWeek,
+          sb.startTime AS startTime,
+          sb.endTime AS endTime,
+          sb.startDate AS startDate,
+          sb.endDate AS endDate
+        FROM section_student_courses ssc
+        INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
+        INNER JOIN schedule_blocks sb ON sb.sectionCourseId = sc.id
+        WHERE sc.periodId = ?
+          AND ssc.studentId IN (${studentPlaceholders})
+        `,
+        [params.periodId, ...demandStudentIds]
+      );
+      for (const row of existingBlockRows) {
+        const studentId = String(row.studentId);
+        if (!assignedBlocksByStudent.has(studentId)) {
+          assignedBlocksByStudent.set(studentId, []);
+        }
+        assignedBlocksByStudent.get(studentId)!.push({
+          dayOfWeek: Number(row.dayOfWeek ?? 0),
+          startTime: String(row.startTime ?? ''),
+          endTime: String(row.endTime ?? ''),
+          startDate: this.toIsoDateOnly(row.startDate),
+          endDate: this.toIsoDateOnly(row.endDate),
+        });
+      }
+    }
     const rowsToInsert: Array<{
       id: string;
       sectionCourseId: string;
@@ -3846,6 +6148,48 @@ export class LevelingService {
       Array<{ studentId: string; studentCode: string | null; studentName: string }>
     >();
 
+    if (
+      params.strategy !== 'FULL_REBUILD' &&
+      sectionCourseIds.length > 0
+    ) {
+      const sectionPlaceholders = sectionCourseIds.map(() => '?').join(', ');
+      const existingStudentRows: Array<{
+        sectionCourseId: string;
+        studentId: string;
+        studentCode: string | null;
+        studentName: string;
+      }> = await this.dataSource.query(
+        `
+        SELECT
+          ssc.sectionCourseId AS sectionCourseId,
+          u.id AS studentId,
+          u.codigoAlumno AS studentCode,
+          u.fullName AS studentName
+        FROM section_student_courses ssc
+        INNER JOIN users u ON u.id = ssc.studentId
+        WHERE ssc.sectionCourseId IN (${sectionPlaceholders})
+        `,
+        sectionCourseIds
+      );
+      for (const row of existingStudentRows) {
+        const sectionCourseId = String(row.sectionCourseId);
+        const studentId = String(row.studentId);
+        const studentCode = row.studentCode ? String(row.studentCode) : null;
+        const studentName = String(row.studentName ?? '');
+        if (!studentDirectory.has(studentId)) {
+          studentDirectory.set(studentId, { studentId, studentCode, studentName });
+        }
+        if (!studentsBySectionCourse.has(sectionCourseId)) {
+          studentsBySectionCourse.set(sectionCourseId, []);
+        }
+        studentsBySectionCourse.get(sectionCourseId)!.push({
+          studentId,
+          studentCode,
+          studentName,
+        });
+      }
+    }
+
     const getStudentBlocks = (studentId: string) => {
       if (!assignedBlocksByStudent.has(studentId)) {
         assignedBlocksByStudent.set(studentId, []);
@@ -3872,7 +6216,7 @@ export class LevelingService {
           courseName: String(demand.courseName ?? ''),
           facultyGroup: demand.facultyGroup ? String(demand.facultyGroup) : null,
           campusName: demand.campusName ? String(demand.campusName) : null,
-          reason: 'No se encontró sección-curso candidata para este curso',
+          reason: 'No se encontro seccion-curso candidata para este curso',
         });
         continue;
       }
@@ -3887,9 +6231,16 @@ export class LevelingService {
       });
 
       if (available.length === 0) {
-        const blockedByCapacity =
-          demand.candidates.every((candidate) => this.isCapacityBlocked(candidate)) &&
-          demand.candidates.length > 0;
+        const allBlockedByPhysical =
+          demand.candidates.length > 0 &&
+          demand.candidates.every(
+            (candidate) => this.capacityBlockReason(candidate) === 'SIN_CAPACIDAD'
+          );
+        const allBlockedByClassroom =
+          demand.candidates.length > 0 &&
+          demand.candidates.every(
+            (candidate) => this.capacityBlockReason(candidate) === 'SIN_AULA'
+          );
         unassigned.push({
           studentId,
           studentCode: demand.studentCode ? String(demand.studentCode) : null,
@@ -3898,8 +6249,10 @@ export class LevelingService {
           courseName: String(demand.courseName ?? ''),
           facultyGroup: demand.facultyGroup ? String(demand.facultyGroup) : null,
           campusName: demand.campusName ? String(demand.campusName) : null,
-          reason: blockedByCapacity
-            ? 'No hay capacidad disponible en las secciones-curso candidatas'
+          reason: allBlockedByClassroom
+            ? 'No hay aula activa asignada en secciones presenciales candidatas'
+            : allBlockedByPhysical
+            ? 'Sin capacidad fisica disponible en las secciones-curso candidatas'
             : 'Cruce de horario con cursos ya asignados',
         });
         continue;
@@ -3921,11 +6274,14 @@ export class LevelingService {
       if (!studentsBySectionCourse.has(selected.sectionCourseId)) {
         studentsBySectionCourse.set(selected.sectionCourseId, []);
       }
-      studentsBySectionCourse.get(selected.sectionCourseId)!.push({
-        studentId,
-        studentCode: demand.studentCode ? String(demand.studentCode) : null,
-        studentName: String(demand.studentName ?? ''),
-      });
+      const targetRows = studentsBySectionCourse.get(selected.sectionCourseId)!;
+      if (!targetRows.some((row) => row.studentId === studentId)) {
+        targetRows.push({
+          studentId,
+          studentCode: demand.studentCode ? String(demand.studentCode) : null,
+          studentName: String(demand.studentName ?? ''),
+        });
+      }
     }
 
     for (const rows of studentsBySectionCourse.values()) {
@@ -3952,6 +6308,23 @@ export class LevelingService {
         assignedCount: Number(candidate?.assignedCount ?? 0),
         initialCapacity: Number(row.initialCapacity ?? 45),
         maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
+        classroomId: row.classroomId ? String(row.classroomId) : null,
+        classroomCode: row.classroomCode ? String(row.classroomCode) : null,
+        classroomName: row.classroomName ? String(row.classroomName) : null,
+        classroomCapacity:
+          row.classroomCapacity !== null && row.classroomCapacity !== undefined
+            ? Number(row.classroomCapacity)
+            : null,
+        classroomPavilionCode: row.classroomPavilionCode
+          ? String(row.classroomPavilionCode)
+          : null,
+        classroomPavilionName: row.classroomPavilionName
+          ? String(row.classroomPavilionName)
+          : null,
+        classroomLevelName: row.classroomLevelName
+          ? String(row.classroomLevelName)
+          : null,
+        capacitySource: this.asCapacitySource(row.capacitySource),
       };
     });
 
@@ -4124,31 +6497,65 @@ export class LevelingService {
       .toUpperCase();
   }
 
+  private asCapacitySource(value: unknown):
+    | 'VIRTUAL'
+    | 'AULA'
+    | 'SIN_AULA'
+    | 'AULA_INACTIVA'
+    | null {
+    const key = String(value ?? '').trim().toUpperCase();
+    if (key === 'VIRTUAL') return 'VIRTUAL';
+    if (key === 'AULA') return 'AULA';
+    if (key === 'SIN_AULA') return 'SIN_AULA';
+    if (key === 'AULA_INACTIVA') return 'AULA_INACTIVA';
+    return null;
+  }
+
   private isCapacityBlocked(params: {
     assignedCount: number;
     initialCapacity: number;
     maxExtraCapacity: number;
+    classroomCapacity?: number | null;
+    capacitySource?: string | null;
     modality?: string | null;
   }) {
-    if (this.isVirtualModality(params.modality)) {
-      return false;
-    }
-    const assigned = Math.max(0, Number(params.assignedCount ?? 0));
-    const initial = Math.max(0, Number(params.initialCapacity ?? 0));
-    const maxExtra = Math.max(0, Number(params.maxExtraCapacity ?? 0));
-    // Hard cap is always initialCapacity + maxExtraCapacity.
-    // When maxExtraCapacity = 0, the cap is initialCapacity alone.
-    const hardCap = initial + maxExtra;
-    if (hardCap <= 0) return false; // Unlimited (no capacity configured)
-    return assigned >= hardCap;
+    return this.capacityBlockReason(params) !== null;
   }
 
-  private capacityRatio(params: {
+  private capacityBlockReason(params: {
     assignedCount: number;
     initialCapacity: number;
     maxExtraCapacity: number;
+    classroomCapacity?: number | null;
+    capacitySource?: string | null;
+    modality?: string | null;
+  }): 'SIN_AULA' | 'SIN_CAPACIDAD' | null {
+    if (this.isVirtualModality(params.modality)) {
+      return null;
+    }
+    const assigned = Math.max(0, Number(params.assignedCount ?? 0));
+    const classroomCapacity = Number(params.classroomCapacity ?? 0);
+    if (!Number.isFinite(classroomCapacity) || classroomCapacity <= 0) {
+      return 'SIN_AULA';
+    }
+    return assigned >= classroomCapacity ? 'SIN_CAPACIDAD' : null;
+  }
+
+  private capacityRatio(params: {
+    modality?: string | null;
+    assignedCount: number;
+    initialCapacity: number;
+    maxExtraCapacity: number;
+    classroomCapacity?: number | null;
   }) {
     const assigned = Math.max(0, Number(params.assignedCount ?? 0));
+    if (!this.isVirtualModality(params.modality)) {
+      const classroomCap = Math.max(0, Number(params.classroomCapacity ?? 0));
+      if (classroomCap <= 0) {
+        return Number.POSITIVE_INFINITY;
+      }
+      return assigned / classroomCap;
+    }
     const initial = Math.max(1, Number(params.initialCapacity ?? 1));
     const maxExtra = Math.max(0, Number(params.maxExtraCapacity ?? 0));
     if (maxExtra <= 0) {
@@ -4174,6 +6581,7 @@ export class LevelingService {
       assignedCount: number;
       initialCapacity: number;
       maxExtraCapacity: number;
+      classroomCapacity?: number | null;
       sectionCode: string | null;
       sectionName: string;
       courseName: string;
@@ -4265,21 +6673,8 @@ export class LevelingService {
     return parsed.toISOString();
   }
 
-  private async loadActivePeriodIdOrThrow(manager: EntityManager) {
-    const rows: Array<{ id: string }> = await manager.query(
-      `
-      SELECT id
-      FROM periods
-      WHERE status = 'ACTIVE'
-      ORDER BY updatedAt DESC, createdAt DESC
-      LIMIT 1
-      `
-    );
-    const id = String(rows[0]?.id ?? '').trim();
-    if (!id) {
-      throw new BadRequestException('No active period configured');
-    }
-    return id;
+  private async loadActivePeriodIdOrThrow(_manager: EntityManager) {
+    return this.periodsService.getOperationalPeriodIdOrThrow();
   }
 
   private async loadCourseCatalogByKey() {
@@ -4396,7 +6791,7 @@ export class LevelingService {
       modalityIdx: pick('MODALIDAD'),
       conditionIdx: pick('CONDICION'),
       needsLevelingIdx: pick('REQUERIMIENTO DE NIVELACION', 'NIVELACION'),
-      programLevelingIdx: pick('PROGRAMA DE NIVELACIÓN', 'PROGRAMA DE NIVELACION', 'PROGRAMA NIVELACION'),
+      programLevelingIdx: pick('PROGRAMA DE NIVELACIÃ“N', 'PROGRAMA DE NIVELACION', 'PROGRAMA NIVELACION'),
       examDateIdx: pick('FECHA EXAMEN', 'FECHA DE EXAMEN', 'FECHAEXAMEN'),
       courseColumns: this.sortCourseColumns(courseColumns),
     };
@@ -4483,6 +6878,19 @@ export class LevelingService {
     return FICA_NAME;
   }
 
+  private normalizeFacultyName(value: string) {
+    const n = this.norm(value);
+    if (
+      n.includes('INGENIERIA, CIENCIAS Y HUMANIDADES') ||
+      n.includes('INGENIERIA CIENCIAS Y HUMANIDADES') ||
+      n === 'FICA'
+    ) {
+      return FICA_NAME;
+    }
+    if (n === this.norm(SALUD_NAME)) return SALUD_NAME;
+    return String(value || '').trim() || FICA_NAME;
+  }
+
   private facultyGroupOf(facultyName: string): 'FICA' | 'SALUD' {
     const n = this.norm(facultyName);
     if (n === this.norm(SALUD_NAME)) return 'SALUD';
@@ -4555,6 +6963,18 @@ export class LevelingService {
       n = Math.floor((n - 1) / 26);
     }
     return out || 'A';
+  }
+
+  private alphaIndex(alpha: string) {
+    const text = this.scopeKey(alpha);
+    if (!text) return 0;
+    let out = 0;
+    for (const ch of text) {
+      const code = ch.charCodeAt(0);
+      if (code < 65 || code > 90) return 0;
+      out = out * 26 + (code - 64);
+    }
+    return out;
   }
 
   private cell(row: (string | number | null)[], idx: number) {
@@ -4642,6 +7062,364 @@ export class LevelingService {
     return 'SIN DATO';
   }
 
+  async getProgramNeedsDynamic(params: {
+    periodId?: string;
+    examDate?: string;
+    facultyGroup?: string;
+    campusName?: string;
+    modality?: string;
+  }) {
+    const periodId = String(params.periodId ?? '').trim();
+    if (!periodId) {
+      throw new BadRequestException('periodId es obligatorio');
+    }
+
+    const examDateFilter = this.normalizeReportFilter(params.examDate);
+    const facultyFilter = this.normalizeReportFilter(params.facultyGroup);
+    const campusFilter = this.normalizeReportFilter(params.campusName);
+    const modalityFilter = this.normalizeModalityFilter(params.modality);
+
+    const whereParts: string[] = [
+      'lr.periodId = ?',
+      `COALESCE(d.required, 1) = 1`,
+      `lr.status <> 'ARCHIVED'`,
+    ];
+    const queryParams: Array<string | number> = [periodId];
+
+    if (facultyFilter) {
+      whereParts.push("COALESCE(NULLIF(TRIM(d.facultyGroup), ''), 'SIN FACULTAD') = ?");
+      queryParams.push(facultyFilter);
+    }
+    if (campusFilter) {
+      whereParts.push("COALESCE(NULLIF(TRIM(d.campusName), ''), 'SIN SEDE') = ?");
+      queryParams.push(campusFilter);
+    }
+    if (modalityFilter) {
+      whereParts.push("COALESCE(NULLIF(TRIM(d.sourceModality), ''), 'SIN DATO') = ?");
+      queryParams.push(modalityFilter);
+    }
+
+    const rows: Array<{
+      careerName: string;
+      facultyGroup: string;
+      campusName: string;
+      sourceModality: string;
+      courseName: string;
+      rawExamDate: string | null;
+      studentCount: number | string;
+    }> = await this.dataSource.query(
+      `
+      SELECT
+        COALESCE(NULLIF(TRIM(u.careerName), ''), 'SIN CARRERA') AS careerName,
+        COALESCE(NULLIF(TRIM(d.facultyGroup), ''), 'SIN FACULTAD') AS facultyGroup,
+        COALESCE(NULLIF(TRIM(d.campusName), ''), 'SIN SEDE') AS campusName,
+        COALESCE(NULLIF(TRIM(d.sourceModality), ''), 'SIN DATO') AS sourceModality,
+        c.name AS courseName,
+        COALESCE(NULLIF(TRIM(d.examDate), ''), NULLIF(TRIM(u.examDate), '')) AS rawExamDate,
+        COUNT(*) AS studentCount
+      FROM leveling_run_student_course_demands d
+      INNER JOIN leveling_runs lr ON lr.id = d.runId
+      INNER JOIN courses c ON c.id = d.courseId
+      LEFT JOIN users u ON u.id = d.studentId
+      WHERE ${whereParts.join(' AND ')}
+      GROUP BY
+        COALESCE(NULLIF(TRIM(u.careerName), ''), 'SIN CARRERA'),
+        COALESCE(NULLIF(TRIM(d.facultyGroup), ''), 'SIN FACULTAD'),
+        COALESCE(NULLIF(TRIM(d.campusName), ''), 'SIN SEDE'),
+        COALESCE(NULLIF(TRIM(d.sourceModality), ''), 'SIN DATO'),
+        c.name,
+        COALESCE(NULLIF(TRIM(d.examDate), ''), NULLIF(TRIM(u.examDate), ''))
+      `,
+      queryParams
+    );
+
+    const baseOptionsRows: Array<{
+      facultyGroup: string;
+      campusName: string;
+      sourceModality: string;
+    }> = await this.dataSource.query(
+      `
+      SELECT DISTINCT
+        COALESCE(NULLIF(TRIM(d.facultyGroup), ''), 'SIN FACULTAD') AS facultyGroup,
+        COALESCE(NULLIF(TRIM(d.campusName), ''), 'SIN SEDE') AS campusName,
+        COALESCE(NULLIF(TRIM(d.sourceModality), ''), 'SIN DATO') AS sourceModality
+      FROM leveling_run_student_course_demands d
+      INNER JOIN leveling_runs lr ON lr.id = d.runId
+      WHERE lr.periodId = ?
+        AND COALESCE(d.required, 1) = 1
+        AND lr.status <> 'ARCHIVED'
+      `,
+      [periodId]
+    );
+
+    const mappedRows = new Map<
+      string,
+      {
+        careerName: string;
+        facultyGroup: string;
+        campusName: string;
+        sourceModality: string;
+        needsByCourse: Record<string, number>;
+        totalNeeds: number;
+      }
+    >();
+
+    for (const row of rows) {
+      const normalizedExamDate = this.normalizeExamDateForReport(row.rawExamDate);
+      if (examDateFilter && normalizedExamDate !== examDateFilter) {
+        continue;
+      }
+
+      const careerName = String(row.careerName ?? 'SIN CARRERA');
+      const facultyGroup = String(row.facultyGroup ?? 'SIN FACULTAD');
+      const campusName = String(row.campusName ?? 'SIN SEDE');
+      const sourceModality = String(row.sourceModality ?? 'SIN DATO');
+      const courseName = String(row.courseName ?? '');
+      const studentCount = Number(row.studentCount ?? 0);
+      if (!courseName || studentCount <= 0) {
+        continue;
+      }
+
+      const key = `${careerName}|${facultyGroup}|${campusName}|${sourceModality}`;
+      if (!mappedRows.has(key)) {
+        mappedRows.set(key, {
+          careerName,
+          facultyGroup,
+          campusName,
+          sourceModality,
+          needsByCourse: {},
+          totalNeeds: 0,
+        });
+      }
+      const existing = mappedRows.get(key)!;
+      existing.needsByCourse[courseName] =
+        Number(existing.needsByCourse[courseName] ?? 0) + studentCount;
+      existing.totalNeeds += studentCount;
+    }
+
+    const facultyGroups = Array.from(
+      new Set(baseOptionsRows.map((x) => String(x.facultyGroup ?? 'SIN FACULTAD')))
+    ).sort((a, b) => a.localeCompare(b));
+    const campuses = Array.from(
+      new Set(baseOptionsRows.map((x) => String(x.campusName ?? 'SIN SEDE')))
+    ).sort((a, b) => a.localeCompare(b));
+    const modalities = Array.from(
+      new Set(baseOptionsRows.map((x) => String(x.sourceModality ?? 'SIN DATO')))
+    ).sort((a, b) => this.modalitySort(a) - this.modalitySort(b));
+
+    return {
+      programNeeds: {
+        facultyGroups,
+        campuses,
+        modalities,
+        rows: Array.from(mappedRows.values()).sort((a, b) => {
+          const byCareer = a.careerName.localeCompare(b.careerName);
+          if (byCareer !== 0) return byCareer;
+          const byCampus = a.campusName.localeCompare(b.campusName);
+          if (byCampus !== 0) return byCampus;
+          return this.modalitySort(a.sourceModality) - this.modalitySort(b.sourceModality);
+        }),
+      } as ProgramNeedsPayload,
+    };
+  }
+
+  async getExecutiveSummaryGlobal(periodIdRaw?: string) {
+    const periodId = String(periodIdRaw ?? '').trim();
+    if (!periodId) {
+      throw new BadRequestException('periodId es obligatorio');
+    }
+
+    const scheduledSections: Array<{
+      facultyGroup: string;
+      campusName: string;
+      modality: string;
+      courseName: string;
+      studentCount: number | string;
+    }> = await this.dataSource.query(
+      `
+      SELECT
+        COALESCE(NULLIF(TRIM(s.facultyGroup), ''), 'SIN FACULTAD') AS facultyGroup,
+        COALESCE(NULLIF(TRIM(s.campusName), ''), 'SIN SEDE') AS campusName,
+        COALESCE(NULLIF(TRIM(s.modality), ''), 'SIN DATO') AS modality,
+        c.name AS courseName,
+        COUNT(ssc.studentId) AS studentCount
+      FROM section_courses sc
+      INNER JOIN sections s ON s.id = sc.sectionId
+      INNER JOIN courses c ON c.id = sc.courseId
+      LEFT JOIN section_student_courses ssc
+        ON ssc.sectionCourseId = sc.id
+      WHERE sc.periodId = ?
+      GROUP BY
+        sc.id,
+        COALESCE(NULLIF(TRIM(s.facultyGroup), ''), 'SIN FACULTAD'),
+        COALESCE(NULLIF(TRIM(s.campusName), ''), 'SIN SEDE'),
+        COALESCE(NULLIF(TRIM(s.modality), ''), 'SIN DATO'),
+        c.name
+      `,
+      [periodId]
+    );
+
+    const byFaculty = new Map<
+      string,
+      {
+        facultyGroup: string;
+        totalGroups: number;
+        totalHours: number;
+        totalPay4Weeks: number;
+        rows: Array<{
+          label: string;
+          totalGroups: number;
+          courseGroups: Record<string, number>;
+          courseGroupSizes: Record<string, number[]>;
+        }>;
+      }
+    >();
+
+    let globalBudget = 0;
+    let totalGroupsAllM = 0;
+
+    const addRecordToFaculty = (record: {
+      facultyGroup: string;
+      campusName: string;
+      modality: string;
+      courseName: string;
+      studentCount: number;
+    }) => {
+      if (!byFaculty.has(record.facultyGroup)) {
+        byFaculty.set(record.facultyGroup, {
+          facultyGroup: record.facultyGroup,
+          totalGroups: 0,
+          totalHours: 0,
+          totalPay4Weeks: 0,
+          rows: [],
+        });
+      }
+      const faculty = byFaculty.get(record.facultyGroup)!;
+      faculty.totalGroups += 1;
+      totalGroupsAllM += 1;
+
+      const rowLabel = `${record.campusName} - ${record.modality}`;
+      let row = faculty.rows.find((x) => x.label === rowLabel);
+      if (!row) {
+        row = {
+          label: rowLabel,
+          totalGroups: 0,
+          courseGroups: {},
+          courseGroupSizes: {},
+        };
+        faculty.rows.push(row);
+      }
+
+      row.totalGroups += 1;
+      row.courseGroups[record.courseName] =
+        Number(row.courseGroups[record.courseName] ?? 0) + 1;
+      if (!row.courseGroupSizes[record.courseName]) {
+        row.courseGroupSizes[record.courseName] = [];
+      }
+      row.courseGroupSizes[record.courseName].push(record.studentCount);
+    };
+
+    for (const rec of scheduledSections) {
+      addRecordToFaculty({
+        facultyGroup: String(rec.facultyGroup ?? 'SIN FACULTAD'),
+        campusName: String(rec.campusName ?? 'SIN SEDE'),
+        modality: String(rec.modality ?? 'SIN DATO'),
+        courseName: String(rec.courseName ?? ''),
+        studentCount: Number(rec.studentCount ?? 0),
+      });
+    }
+
+    for (const faculty of byFaculty.values()) {
+      faculty.totalHours = faculty.totalGroups * HOURS_PER_GROUP;
+      faculty.totalPay4Weeks = faculty.totalHours * PRICE_PER_HOUR;
+      globalBudget += faculty.totalPay4Weeks;
+      faculty.rows.sort((a, b) => a.label.localeCompare(b.label));
+    }
+
+    return {
+      summary: {
+        byFaculty: Array.from(byFaculty.values()).sort((a, b) =>
+          a.facultyGroup.localeCompare(b.facultyGroup)
+        ),
+        totalPay4Weeks: globalBudget,
+        totalGroupsAllM,
+      },
+    };
+  }
+
+  async getExamDates(periodIdRaw?: string) {
+    const periodId = String(periodIdRaw ?? '').trim();
+    if (!periodId) {
+      throw new BadRequestException('periodId es obligatorio');
+    }
+
+    const rows: Array<{ rawExamDate: string | null }> = await this.dataSource.query(
+      `
+      SELECT DISTINCT
+        COALESCE(NULLIF(TRIM(d.examDate), ''), NULLIF(TRIM(u.examDate), '')) AS rawExamDate
+      FROM leveling_run_student_course_demands d
+      INNER JOIN leveling_runs lr ON lr.id = d.runId
+      LEFT JOIN users u ON u.id = d.studentId
+      WHERE lr.periodId = ?
+        AND COALESCE(d.required, 1) = 1
+        AND lr.status <> 'ARCHIVED'
+      `,
+      [periodId]
+    );
+
+    const normalized = Array.from(
+      new Set(
+        rows
+          .map((x) => this.normalizeExamDateForReport(x.rawExamDate))
+          .filter((x): x is string => Boolean(x))
+      )
+    ).sort((a, b) => b.localeCompare(a));
+
+    return normalized;
+  }
+
+  private normalizeReportFilter(value?: string): string | null {
+    const raw = String(value ?? '').trim();
+    if (!raw) return null;
+    const normalized = this.norm(raw);
+    if (normalized === 'ALL' || normalized === 'TODAS' || normalized === 'TODOS') {
+      return null;
+    }
+    return raw;
+  }
+
+  private normalizeModalityFilter(value?: string): string | null {
+    const raw = this.normalizeReportFilter(value);
+    if (!raw) return null;
+    return this.normalizeSourceModality(raw);
+  }
+
+  private formatDateYmdFromTime(ms: number): string {
+    const date = new Date(ms);
+    if (Number.isNaN(date.getTime())) return '';
+    const yyyy = String(date.getFullYear());
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const dd = String(date.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  private normalizeExamDateForReport(raw: string | null | undefined): string | null {
+    const value = String(raw ?? '').trim();
+    if (!value) return null;
+    if (/^\d{13}$/.test(value)) {
+      return this.formatDateYmdFromTime(Number(value));
+    }
+    if (/^\d{10}$/.test(value)) {
+      return this.formatDateYmdFromTime(Number(value) * 1000);
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      return value;
+    }
+    const parsed = this.parseSmartDate(value);
+    if (!parsed) return null;
+    return this.formatDateYmdFromTime(parsed);
+  }
+
   private splitCourseGroups(count: number, capacity: number, modality: string) {
     if (count <= 0) return [];
     if (this.norm(modality) === 'VIRTUAL') {
@@ -4677,3 +7455,6 @@ export class LevelingService {
     return 0;
   }
 }
+
+
+

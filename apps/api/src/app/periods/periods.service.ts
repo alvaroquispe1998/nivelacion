@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { AdminPeriodContextService } from '../common/context/admin-period-context.service';
 import { Repository } from 'typeorm';
 import { PeriodEntity } from './period.entity';
 
@@ -7,7 +8,8 @@ import { PeriodEntity } from './period.entity';
 export class PeriodsService {
   constructor(
     @InjectRepository(PeriodEntity)
-    private readonly periodsRepo: Repository<PeriodEntity>
+    private readonly periodsRepo: Repository<PeriodEntity>,
+    private readonly adminPeriodContext: AdminPeriodContextService
   ) { }
 
   async list() {
@@ -59,6 +61,34 @@ export class PeriodsService {
 
     target.status = 'ACTIVE';
     return this.periodsRepo.save(target);
+  }
+
+  async update(
+    id: string,
+    params: {
+      name?: string;
+      startsAt?: string | null;
+      endsAt?: string | null;
+    }
+  ) {
+    const period = await this.periodsRepo.findOne({ where: { id } });
+    if (!period) throw new NotFoundException('Period not found');
+
+    const nextName =
+      params.name === undefined ? period.name : String(params.name || '').trim();
+    const nextStartsAt = params.startsAt === undefined ? period.startsAt : params.startsAt;
+    const nextEndsAt = params.endsAt === undefined ? period.endsAt : params.endsAt;
+
+    if (!nextName) {
+      throw new BadRequestException('El nombre es obligatorio');
+    }
+    if (nextStartsAt && nextEndsAt && nextStartsAt > nextEndsAt) {
+      throw new BadRequestException('La fecha de inicio no puede ser mayor a la fecha fin');
+    }
+    period.name = nextName;
+    period.startsAt = nextStartsAt;
+    period.endsAt = nextEndsAt;
+    return this.periodsRepo.save(period);
   }
 
   async clearData(id: string) {
@@ -142,9 +172,18 @@ export class PeriodsService {
         `,
         [id]
       );
+
+      // 8. Delete period itself
+      await manager.query(
+        `
+        DELETE FROM periods
+        WHERE id = ?
+        `,
+        [id]
+      );
     });
 
-    return { ok: true };
+    return { ok: true, periodDeleted: true };
   }
 
   async getActivePeriodOrThrow() {
@@ -158,11 +197,29 @@ export class PeriodsService {
     return active.id;
   }
 
+  async getOperationalPeriodOrThrow() {
+    const adminPeriodId = this.adminPeriodContext.getAdminPeriodId();
+    if (adminPeriodId) {
+      const period = await this.periodsRepo.findOne({ where: { id: adminPeriodId } });
+      if (!period) {
+        throw new BadRequestException('periodId de trabajo invalido');
+      }
+      return period;
+    }
+    return this.getActivePeriodOrThrow();
+  }
+
+  async getOperationalPeriodIdOrThrow() {
+    const period = await this.getOperationalPeriodOrThrow();
+    return period.id;
+  }
+
   private async findActiveOrNull() {
     return this.periodsRepo.findOne({
       where: { status: 'ACTIVE' },
       order: { updatedAt: 'DESC', createdAt: 'DESC' },
     });
   }
+
 }
 

@@ -14,29 +14,73 @@ export class StudentService {
   ) {}
 
   async getSchedule(studentId: string) {
-    const sectionCourseIds = await this.loadSectionCourseMembershipIdsByStudent(studentId);
-    if (sectionCourseIds.length === 0) return [];
-    const teacherBySectionCourseId =
-      await this.loadTeacherNamesBySectionCourseIds(sectionCourseIds);
+    const activePeriodId = await this.loadActivePeriodIdOrThrow();
+    const rows: Array<{
+      dayOfWeek: number;
+      startTime: string;
+      endTime: string;
+      courseName: string;
+      sectionName: string;
+      teacherName: string | null;
+      modality: string | null;
+      classroomCode: string | null;
+      classroomName: string | null;
+      zoomUrl: string | null;
+      location: string | null;
+    }> = await this.blocksRepo.manager.query(
+      `
+      SELECT
+        sb.dayOfWeek AS dayOfWeek,
+        sb.startTime AS startTime,
+        sb.endTime AS endTime,
+        sb.courseName AS courseName,
+        s.name AS sectionName,
+        MAX(COALESCE(tc.fullName, ts.fullName)) AS teacherName,
+        s.modality AS modality,
+        cl.code AS classroomCode,
+        cl.name AS classroomName,
+        sb.zoomUrl AS zoomUrl,
+        sb.location AS location
+      FROM section_student_courses ssc
+      INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
+      INNER JOIN sections s ON s.id = sc.sectionId
+      INNER JOIN schedule_blocks sb ON sb.sectionCourseId = sc.id
+      LEFT JOIN section_course_teachers sct ON sct.sectionCourseId = sc.id
+      LEFT JOIN users tc ON tc.id = sct.teacherId
+      LEFT JOIN users ts ON ts.id = s.teacherId
+      LEFT JOIN classrooms cl ON cl.id = sc.classroomId
+      WHERE ssc.studentId = ?
+        AND sc.periodId = ?
+      GROUP BY
+        sb.id,
+        sb.dayOfWeek,
+        sb.startTime,
+        sb.endTime,
+        sb.courseName,
+        s.name,
+        s.modality,
+        cl.code,
+        cl.name,
+        sb.zoomUrl,
+        sb.location
+      ORDER BY sb.dayOfWeek ASC, sb.startTime ASC
+      `,
+      [studentId, activePeriodId]
+    );
 
-    const blocks = await this.blocksRepo.find({
-      where: sectionCourseIds.map((sectionCourseId) => ({ sectionCourseId })),
-      relations: { section: true },
-      order: { dayOfWeek: 'ASC', startTime: 'ASC' },
-    });
-
-    return blocks
-      .map((b) => ({
-        dayOfWeek: b.dayOfWeek,
-        startTime: this.toHHmm(b.startTime),
-        endTime: this.toHHmm(b.endTime),
-        courseName: String(b.courseName ?? ''),
-        sectionName: String(b.section?.name ?? ''),
-        teacherName:
-          teacherBySectionCourseId.get(String(b.sectionCourseId ?? '').trim()) ?? null,
-        zoomUrl: b.zoomUrl,
-        location: b.location,
-      }));
+    return rows.map((row) => ({
+      dayOfWeek: Number(row.dayOfWeek ?? 0),
+      startTime: this.toHHmm(row.startTime),
+      endTime: this.toHHmm(row.endTime),
+      courseName: String(row.courseName ?? ''),
+      sectionName: String(row.sectionName ?? ''),
+      teacherName: row.teacherName ? String(row.teacherName) : null,
+      modality: row.modality ? String(row.modality) : null,
+      classroomCode: row.classroomCode ? String(row.classroomCode) : null,
+      classroomName: row.classroomName ? String(row.classroomName) : null,
+      zoomUrl: row.zoomUrl ? String(row.zoomUrl) : null,
+      location: row.location ? String(row.location) : null,
+    }));
   }
 
   async getAttendance(studentId: string) {
@@ -68,24 +112,6 @@ export class StudentService {
     }));
   }
 
-  private async loadSectionCourseMembershipIdsByStudent(studentId: string) {
-    const activePeriodId = await this.loadActivePeriodIdOrThrow();
-    const rows: Array<{ sectionCourseId: string }> = await this.blocksRepo.manager.query(
-      `
-      SELECT DISTINCT ssc.sectionCourseId AS sectionCourseId
-      FROM section_student_courses ssc
-      INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
-      WHERE ssc.studentId = ?
-        AND ssc.sectionCourseId IS NOT NULL
-        AND sc.periodId = ?
-      `,
-      [studentId, activePeriodId]
-    );
-    return rows
-      .map((x) => String(x.sectionCourseId || '').trim())
-      .filter(Boolean);
-  }
-
   private async loadActivePeriodIdOrThrow() {
     const rows: Array<{ id: string }> = await this.blocksRepo.manager.query(
       `
@@ -101,38 +127,6 @@ export class StudentService {
       throw new BadRequestException('No active period configured');
     }
     return id;
-  }
-
-  private async loadTeacherNamesBySectionCourseIds(sectionCourseIds: string[]) {
-    const ids = sectionCourseIds.map((x) => String(x ?? '').trim()).filter(Boolean);
-    if (ids.length === 0) return new Map<string, string>();
-
-    const placeholders = ids.map(() => '?').join(', ');
-    const rows: Array<{ sectionCourseId: string; teacherName: string | null }> =
-      await this.blocksRepo.manager.query(
-        `
-      SELECT
-        sc.id AS sectionCourseId,
-        MAX(COALESCE(tc.fullName, ts.fullName)) AS teacherName
-      FROM section_courses sc
-      LEFT JOIN section_course_teachers sct ON sct.sectionCourseId = sc.id
-      LEFT JOIN users tc ON tc.id = sct.teacherId
-      LEFT JOIN sections s ON s.id = sc.sectionId
-      LEFT JOIN users ts ON ts.id = s.teacherId
-      WHERE sc.id IN (${placeholders})
-      GROUP BY sc.id
-      `,
-        [...ids]
-      );
-
-    const out = new Map<string, string>();
-    for (const row of rows) {
-      const sectionCourseId = String(row.sectionCourseId ?? '').trim();
-      const teacherName = String(row.teacherName ?? '').trim();
-      if (!sectionCourseId || !teacherName) continue;
-      out.set(sectionCourseId, teacherName);
-    }
-    return out;
   }
 
   private toHHmm(value: string) {

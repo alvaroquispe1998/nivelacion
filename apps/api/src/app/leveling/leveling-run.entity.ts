@@ -20,6 +20,9 @@ export class LevelingRunEntity {
   @Column({ type: 'json', nullable: true })
   configJson!: Record<string, unknown> | null;
 
+  @Column({ type: 'json', nullable: true })
+  reportsJson!: Record<string, unknown> | null;
+
   @Column({ type: 'varchar', length: 128, nullable: true })
   sourceFileHash!: string | null;
 

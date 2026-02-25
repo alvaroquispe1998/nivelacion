@@ -12,7 +12,6 @@ import { DAYS, minutesFromHHmm } from '../shared/days';
     <div class="flex items-center justify-between">
       <div>
         <div class="text-xl font-semibold">Horario semanal</div>
-        <div class="text-sm text-slate-600">6:00 a 22:00 (30 min)</div>
       </div>
       <button
         class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50"
@@ -102,8 +101,11 @@ import { DAYS, minutesFromHHmm } from '../shared/days';
         </div>
         <div class="mt-3 space-y-1 text-sm text-slate-700">
           <div><b>Curso:</b> {{ selectedItem.courseName }}</div>
+          <div><b>Día:</b> {{ dayLabel(selectedItem.dayOfWeek) }}</div>
           <div><b>Hora:</b> {{ selectedItem.startTime }}-{{ selectedItem.endTime }}</div>
           <div><b>Docente:</b> {{ selectedItem.teacherName || 'Sin docente asignado' }}</div>
+          <div *ngIf="isVirtualItem(selectedItem)"><b>Modalidad:</b> Virtual</div>
+          <div *ngIf="!isVirtualItem(selectedItem)"><b>Aula:</b> {{ classroomLabel(selectedItem) }}</div>
         </div>
         <a
           *ngIf="selectedItem.zoomUrl"
@@ -188,6 +190,36 @@ export class StudentSchedulePage {
 
   closeDetail() {
     this.selectedItem = null;
+  }
+
+  dayLabel(dayOfWeek: number) {
+    const labels: Record<number, string> = {
+      1: 'Lunes',
+      2: 'Martes',
+      3: 'Miércoles',
+      4: 'Jueves',
+      5: 'Viernes',
+      6: 'Sábado',
+      7: 'Domingo',
+    };
+    return labels[Number(dayOfWeek)] ?? String(dayOfWeek ?? '');
+  }
+
+  isVirtualItem(item: StudentScheduleItem | null | undefined) {
+    return String(item?.modality ?? '')
+      .trim()
+      .toUpperCase()
+      .includes('VIRTUAL');
+  }
+
+  classroomLabel(item: StudentScheduleItem | null | undefined) {
+    const name = String(item?.classroomName ?? '').trim();
+    if (name) return name;
+    const code = String(item?.classroomCode ?? '').trim();
+    if (code) return `Aula ${code}`;
+    const location = String(item?.location ?? '').trim();
+    if (location) return location;
+    return 'Sin aula asignada';
   }
 
   private safeMinutes(value: string, fallback: number) {
