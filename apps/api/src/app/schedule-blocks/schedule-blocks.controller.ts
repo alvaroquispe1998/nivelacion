@@ -45,6 +45,8 @@ export class ScheduleBlocksController {
       endDate: b.endDate,
       zoomUrl: b.zoomUrl,
       location: b.location,
+      referenceModality: b.referenceModality,
+      referenceClassroom: b.referenceClassroom,
     }));
   }
 
@@ -61,6 +63,13 @@ export class ScheduleBlocksController {
       endDate: dto.endDate ?? null,
       zoomUrl: dto.zoomUrl ?? null,
       location: dto.location ?? null,
+      referenceModality: dto.referenceModality ?? null,
+      referenceClassroom: dto.referenceClassroom ?? null,
+      applyToWholeCourse: Boolean(dto.applyToWholeCourse),
+      applyTeacherToWholeCourse: Boolean(dto.applyTeacherToWholeCourse),
+      scopeFacultyGroup: dto.scopeFacultyGroup ?? null,
+      scopeCampusName: dto.scopeCampusName ?? null,
+      scopeCourseName: dto.scopeCourseName ?? null,
     });
     return {
       id: block.id,
@@ -74,6 +83,8 @@ export class ScheduleBlocksController {
       endDate: block.endDate,
       zoomUrl: block.zoomUrl,
       location: block.location,
+      referenceModality: block.referenceModality,
+      referenceClassroom: block.referenceClassroom,
     };
   }
 
@@ -88,6 +99,13 @@ export class ScheduleBlocksController {
       endDate: dto.endDate ?? null,
       zoomUrl: dto.zoomUrl ?? null,
       location: dto.location ?? null,
+      referenceModality: dto.referenceModality ?? null,
+      referenceClassroom: dto.referenceClassroom ?? null,
+      applyToWholeCourse: Boolean(dto.applyToWholeCourse),
+      applyTeacherToWholeCourse: Boolean(dto.applyTeacherToWholeCourse),
+      scopeFacultyGroup: dto.scopeFacultyGroup ?? null,
+      scopeCampusName: dto.scopeCampusName ?? null,
+      scopeCourseName: dto.scopeCourseName ?? null,
     });
     return {
       id: block.id,
@@ -101,6 +119,8 @@ export class ScheduleBlocksController {
       endDate: block.endDate,
       zoomUrl: block.zoomUrl,
       location: block.location,
+      referenceModality: block.referenceModality,
+      referenceClassroom: block.referenceClassroom,
     };
   }
 

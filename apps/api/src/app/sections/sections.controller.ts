@@ -20,6 +20,7 @@ import { CreateSectionDto } from './dto/create-section.dto';
 import { AssignSectionCourseTeacherDto } from './dto/assign-section-course-teacher.dto';
 import { AssignSectionCourseClassroomDto } from './dto/assign-section-course-classroom.dto';
 import { AssignSectionTeacherDto } from './dto/assign-section-teacher.dto';
+import { BulkApplyFromMotherDto } from './dto/bulk-apply-from-mother.dto';
 import { ReassignStudentSectionCourseDto } from './dto/reassign-student-section-course.dto';
 import { UpdateSectionCapacityDto } from './dto/update-section-capacity.dto';
 import { UpdateSectionCourseCapacityDto } from './dto/update-section-course-capacity.dto';
@@ -100,6 +101,7 @@ export class SectionsController {
           (row as any).availableSeats !== null && (row as any).availableSeats !== undefined
             ? Number((row as any).availableSeats)
             : null,
+        isMotherSection: Boolean((row as any).isMotherSection),
       };
     });
   }
@@ -374,6 +376,26 @@ export class SectionsController {
       sectionId,
       courseName: dto.courseName,
       teacherId: dto.teacherId ?? null,
+    });
+  }
+
+  @Post('course-teacher/bulk-apply-from-mother')
+  bulkApplyCourseTeacherFromMother(@Body() dto: BulkApplyFromMotherDto) {
+    return this.sectionsService.bulkApplyCourseTeacherFromMother({
+      facultyGroup: dto.facultyGroup,
+      campusName: dto.campusName,
+      courseName: dto.courseName,
+      modality: dto.modality ?? null,
+    });
+  }
+
+  @Post('course-schedule/bulk-apply-from-mother')
+  bulkApplyCourseScheduleFromMother(@Body() dto: BulkApplyFromMotherDto) {
+    return this.sectionsService.bulkApplyCourseScheduleFromMother({
+      facultyGroup: dto.facultyGroup,
+      campusName: dto.campusName,
+      courseName: dto.courseName,
+      modality: dto.modality ?? null,
     });
   }
 

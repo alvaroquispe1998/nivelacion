@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { PeriodsModule } from '../periods/periods.module';
 import { ScheduleBlockEntity } from '../schedule-blocks/schedule-block.entity';
 import { UsersModule } from '../users/users.module';
 import { AttendanceRecordEntity } from './attendance-record.entity';
@@ -14,6 +15,7 @@ import { AttendanceService } from './attendance.service';
       AttendanceRecordEntity,
       ScheduleBlockEntity,
     ]),
+    PeriodsModule,
     UsersModule,
   ],
   controllers: [AttendanceController],

@@ -88,5 +88,10 @@ export class PeriodsController {
   async clearData(@Param('id') id: string) {
     return this.periodsService.clearData(id);
   }
+
+  @Delete(':id')
+  async deletePeriod(@Param('id') id: string) {
+    return this.periodsService.deletePeriod(id);
+  }
 }
 

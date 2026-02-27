@@ -206,6 +206,10 @@ export class StudentSchedulePage {
   }
 
   isVirtualItem(item: StudentScheduleItem | null | undefined) {
+    const reference = String(item?.referenceModality ?? '')
+      .trim()
+      .toUpperCase();
+    if (reference) return reference.includes('VIRTUAL');
     return String(item?.modality ?? '')
       .trim()
       .toUpperCase()
@@ -213,6 +217,8 @@ export class StudentSchedulePage {
   }
 
   classroomLabel(item: StudentScheduleItem | null | undefined) {
+    const reference = String(item?.referenceClassroom ?? '').trim();
+    if (reference) return reference;
     const name = String(item?.classroomName ?? '').trim();
     if (name) return name;
     const code = String(item?.classroomCode ?? '').trim();

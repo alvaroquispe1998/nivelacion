@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { AdminPeriodContextService } from '../common/context/admin-period-context.service';
-import { Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import { PeriodEntity } from './period.entity';
 
 @Injectable()
@@ -96,84 +96,33 @@ export class PeriodsService {
     if (!period) throw new NotFoundException('Period not found');
 
     await this.periodsRepo.manager.transaction(async (manager) => {
-      // 1. Delete student enrollments
-      await manager.query(
-        `
-        DELETE ssc
-        FROM section_student_courses ssc
-        INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
-        WHERE sc.periodId = ?
-        `,
-        [id]
-      );
+      await this.clearPeriodDataInTransaction(manager, id);
+    });
 
-      // 2. Delete course teachers
-      await manager.query(
-        `
-        DELETE sct
-        FROM section_course_teachers sct
-        INNER JOIN section_courses sc ON sc.id = sct.sectionCourseId
-        WHERE sc.periodId = ?
-        `,
-        [id]
-      );
+    return { ok: true, periodDeleted: false };
+  }
 
-      // 3. Delete schedule blocks
-      await manager.query(
-        `
-        DELETE sb
-        FROM schedule_blocks sb
-        INNER JOIN section_courses sc ON sc.id = sb.sectionCourseId
-        WHERE sc.periodId = ?
-        `,
-        [id]
-      );
+  async deletePeriod(id: string) {
+    const period = await this.periodsRepo.findOne({ where: { id } });
+    if (!period) throw new NotFoundException('Period not found');
 
-      // 4. Delete leveling runs demands
-      await manager.query(
-        `
-        DELETE lrd
-        FROM leveling_run_student_course_demands lrd
-        INNER JOIN leveling_runs lr ON lr.id = lrd.runId
-        WHERE lr.periodId = ?
-        `,
-        [id]
-      );
+    const replacementActive = period.status === 'ACTIVE'
+      ? await this.periodsRepo.findOne({
+        where: { status: 'CLOSED' },
+        order: { updatedAt: 'DESC', createdAt: 'DESC' },
+      }) || await this.periodsRepo.findOne({
+        where: { status: 'PLANNED' },
+        order: { updatedAt: 'DESC', createdAt: 'DESC' },
+      })
+      : null;
 
-      // 5. Delete sections (only those tied to a leveling run of this period)
-      // Note: section_courses for these are handled next, or cascading?
-      // Wait, section_courses has periodId. Sections has levelingRunId -> periodId.
+    if (period.status === 'ACTIVE' && !replacementActive) {
+      throw new BadRequestException('No se puede borrar el unico periodo activo');
+    }
 
-      // Delete section courses first
-      await manager.query(
-        `
-        DELETE FROM section_courses
-        WHERE periodId = ?
-        `,
-        [id]
-      );
+    await this.periodsRepo.manager.transaction(async (manager) => {
+      await this.clearPeriodDataInTransaction(manager, id);
 
-      // 6. Delete sections
-      await manager.query(
-        `
-        DELETE s
-        FROM sections s
-        INNER JOIN leveling_runs lr ON lr.id = s.levelingRunId
-        WHERE lr.periodId = ?
-        `,
-        [id]
-      );
-
-      // 7. Delete leveling runs
-      await manager.query(
-        `
-        DELETE FROM leveling_runs
-        WHERE periodId = ?
-        `,
-        [id]
-      );
-
-      // 8. Delete period itself
       await manager.query(
         `
         DELETE FROM periods
@@ -181,9 +130,24 @@ export class PeriodsService {
         `,
         [id]
       );
+
+      if (replacementActive) {
+        await manager.query(
+          `
+          UPDATE periods
+          SET status = 'ACTIVE'
+          WHERE id = ?
+          `,
+          [replacementActive.id]
+        );
+      }
     });
 
-    return { ok: true, periodDeleted: true };
+    return {
+      ok: true,
+      periodDeleted: true,
+      replacementActivePeriodId: replacementActive?.id ?? null,
+    };
   }
 
   async getActivePeriodOrThrow() {
@@ -219,6 +183,74 @@ export class PeriodsService {
       where: { status: 'ACTIVE' },
       order: { updatedAt: 'DESC', createdAt: 'DESC' },
     });
+  }
+
+  private async clearPeriodDataInTransaction(manager: EntityManager, periodId: string) {
+    await manager.query(
+      `
+      DELETE ssc
+      FROM section_student_courses ssc
+      INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
+      WHERE sc.periodId = ?
+      `,
+      [periodId]
+    );
+
+    await manager.query(
+      `
+      DELETE sct
+      FROM section_course_teachers sct
+      INNER JOIN section_courses sc ON sc.id = sct.sectionCourseId
+      WHERE sc.periodId = ?
+      `,
+      [periodId]
+    );
+
+    await manager.query(
+      `
+      DELETE sb
+      FROM schedule_blocks sb
+      INNER JOIN section_courses sc ON sc.id = sb.sectionCourseId
+      WHERE sc.periodId = ?
+      `,
+      [periodId]
+    );
+
+    await manager.query(
+      `
+      DELETE lrd
+      FROM leveling_run_student_course_demands lrd
+      INNER JOIN leveling_runs lr ON lr.id = lrd.runId
+      WHERE lr.periodId = ?
+      `,
+      [periodId]
+    );
+
+    await manager.query(
+      `
+      DELETE FROM section_courses
+      WHERE periodId = ?
+      `,
+      [periodId]
+    );
+
+    await manager.query(
+      `
+      DELETE s
+      FROM sections s
+      INNER JOIN leveling_runs lr ON lr.id = s.levelingRunId
+      WHERE lr.periodId = ?
+      `,
+      [periodId]
+    );
+
+    await manager.query(
+      `
+      DELETE FROM leveling_runs
+      WHERE periodId = ?
+      `,
+      [periodId]
+    );
   }
 
 }

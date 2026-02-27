@@ -696,7 +696,7 @@ export class ShellComponent implements OnInit, OnDestroy {
       startsAt: selected.startsAt ?? null,
       endsAt: selected.endsAt ?? null,
     });
-    this.workflowState.notifyWorkflowChanged();
+    this.workflowState.notifyWorkflowChanged({ reason: 'period-change' });
     this.cdr.detectChanges();
   }
 

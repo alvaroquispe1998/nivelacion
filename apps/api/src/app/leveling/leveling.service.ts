@@ -48,13 +48,15 @@ interface ParsedStudent {
   sex: string | null;
   careerName: string;
   facultyName: string;
-  facultyGroup: 'FICA' | 'SALUD';
+  facultyGroup: string;
   campusName: string;
   campusCode: string;
   modality: 'VIRTUAL' | 'PRESENCIAL';
   modalityChar: 'V' | 'P';
   sourceModality: 'VIRTUAL' | 'PRESENCIAL' | 'SIN DATO';
   examDate: string | null;
+  isLevelingEligible: boolean;
+  levelingCourses: CourseName[];
   neededCourses: CourseName[];
 }
 
@@ -62,7 +64,7 @@ interface PlannedSection {
   code: string;
   name: string;
   facultyName: string;
-  facultyGroup: 'FICA' | 'SALUD';
+  facultyGroup: string;
   campusName: string;
   campusCode: string;
   modality: 'VIRTUAL' | 'PRESENCIAL';
@@ -97,7 +99,7 @@ interface CourseGroupSummaryPayload {
 
 interface CourseGroupUnit {
   id: string;
-  facultyGroup: 'FICA' | 'SALUD';
+  facultyGroup: string;
   campusName: string;
   courseName: CourseName;
   courseId?: string;
@@ -449,6 +451,10 @@ export class LevelingService {
     apply?: boolean;
     mode?: 'REPLACE' | 'APPEND';
     groupModalityOverrides?: string;
+    includeWelcomeCourse?: boolean;
+    welcomeCourseName?: string;
+    welcomeGroupingMode?: 'BY_SIZE' | 'SINGLE_GROUP' | string;
+    welcomeGroupSize?: number;
     createdById?: string | null;
   }) {
     const cfg = await this.getConfig();
@@ -468,6 +474,35 @@ export class LevelingService {
     if (maxExtraCapacity < 0) {
       throw new BadRequestException('maxExtraCapacity must be >= 0');
     }
+    const includeWelcomeCourse = Boolean(params.includeWelcomeCourse);
+    const welcomeCourseName = String(params.welcomeCourseName ?? '').trim();
+    const welcomeGroupingMode = String(params.welcomeGroupingMode ?? 'BY_SIZE')
+      .trim()
+      .toUpperCase() as 'BY_SIZE' | 'SINGLE_GROUP';
+    const welcomeGroupSizeInput = Number(params.welcomeGroupSize ?? 0);
+    if (includeWelcomeCourse && !welcomeCourseName) {
+      throw new BadRequestException(
+        'Debes ingresar el nombre del curso de bienvenida'
+      );
+    }
+    if (
+      includeWelcomeCourse &&
+      welcomeGroupingMode === 'BY_SIZE' &&
+      (!Number.isFinite(welcomeGroupSizeInput) || welcomeGroupSizeInput <= 0)
+    ) {
+      throw new BadRequestException(
+        'Para bienvenida por tamano, el tamano de grupo debe ser mayor a 0'
+      );
+    }
+    if (
+      includeWelcomeCourse &&
+      welcomeGroupingMode !== 'BY_SIZE' &&
+      welcomeGroupingMode !== 'SINGLE_GROUP'
+    ) {
+      throw new BadRequestException(
+        'welcomeGroupingMode debe ser BY_SIZE o SINGLE_GROUP'
+      );
+    }
 
 
     if (apply && mode !== 'APPEND') {
@@ -482,12 +517,17 @@ export class LevelingService {
 
     const careerFacultyMap = await this.loadCareerFacultyMap();
     const courseCatalogByKey = await this.loadCourseCatalogByKey();
-    const parsed = this.parseExcel(
+    const parsedBase = this.parseExcel(
       params.fileBuffer,
       careerFacultyMap,
       courseCatalogByKey
     );
-    if (parsed.courseNames.length === 0) {
+    const parsed = this.applyWelcomeCourseToParsedData({
+      parsed: parsedBase,
+      includeWelcomeCourse,
+      welcomeCourseName,
+    });
+    if (parsed.courseNames.length === 0 && !includeWelcomeCourse) {
       throw new BadRequestException(
         'No se detectaron cursos validos en la plantilla (columnas desde L)'
       );
@@ -508,6 +548,12 @@ export class LevelingService {
       courseNames: parsed.courseNames,
       sectionCapacity,
       groupModalityOverrides: baseGroupModalityOverrides,
+      welcomeCourseName: includeWelcomeCourse ? welcomeCourseName : null,
+      welcomeGroupingMode: includeWelcomeCourse ? welcomeGroupingMode : null,
+      welcomeGroupSize:
+        includeWelcomeCourse && welcomeGroupingMode === 'BY_SIZE'
+          ? Math.max(1, Math.floor(welcomeGroupSizeInput || sectionCapacity))
+          : null,
     });
     const plannedSections = this.buildSectionsFromGroupUnits({
       students: parsed.students,
@@ -524,6 +570,13 @@ export class LevelingService {
       appendPlanning = await this.previewAppendDemandsAndExpansion(parsed.students, {
         sectionCapacity,
         groupModalityOverrides,
+        includeWelcomeCourse,
+        welcomeCourseName: includeWelcomeCourse ? welcomeCourseName : null,
+        welcomeGroupingMode: includeWelcomeCourse ? welcomeGroupingMode : null,
+        welcomeGroupSize:
+          includeWelcomeCourse && welcomeGroupingMode === 'BY_SIZE'
+            ? Math.max(1, Math.floor(welcomeGroupSizeInput || sectionCapacity))
+            : null,
       });
     }
     const groupUnits =
@@ -572,12 +625,21 @@ export class LevelingService {
           students: parsed.students,
           sectionCapacity,
           groupModalityOverrides,
+          includeWelcomeCourse,
+          welcomeCourseName: includeWelcomeCourse ? welcomeCourseName : null,
+          welcomeGroupingMode: includeWelcomeCourse ? welcomeGroupingMode : null,
+          welcomeGroupSize:
+            includeWelcomeCourse && welcomeGroupingMode === 'BY_SIZE'
+              ? Math.max(1, Math.floor(welcomeGroupSizeInput || sectionCapacity))
+              : null,
           createdById: params.createdById ?? null,
         });
       } else {
         applied = await this.applyPlan({
           sections: plannedSections,
           students: parsed.students,
+          includeWelcomeCourse,
+          welcomeCourseName: includeWelcomeCourse ? welcomeCourseName : null,
           configUsed: {
             initialCapacity,
             maxExtraCapacity,
@@ -611,6 +673,14 @@ export class LevelingService {
         eligibleStudents: parsed.students.length,
         unknownCareers: parsed.unknownCareers,
       },
+      totalRowsProcessed: parsed.rowsRead,
+      levelingEligibleCount: parsed.students.filter((x) => x.isLevelingEligible)
+        .length,
+      levelingDemandCount: parsed.students.reduce(
+        (acc, student) => acc + (student.levelingCourses?.length ?? 0),
+        0
+      ),
+      welcomeDemandCount: includeWelcomeCourse ? parsed.students.length : 0,
       needsByCourse: summaryByCourse,
       programNeeds,
       summary: courseGroupSummary,
@@ -1481,8 +1551,15 @@ export class LevelingService {
         const studentId = String(demand.studentId);
         const studentBlocks = getStudentBlocks(studentId);
 
+        // For GENERAL virtual cohorts (welcome split), first respect each section's
+        // planned target before allowing overflow.
+        const candidatePool = this.pickCandidatesByPlannedVirtualDistribution(
+          demand.facultyGroup,
+          demand.candidates
+        );
+
         // Filter candidates: capacity OK + no schedule conflict
-        const available = demand.candidates.filter((candidate) => {
+        const available = candidatePool.filter((candidate) => {
           if (this.isCapacityBlocked(candidate)) return false;
           if (this.hasScheduleOverlap(studentBlocks, candidate.blocks)) return false;
           return true;
@@ -2135,19 +2212,16 @@ export class LevelingService {
       }
       // rowsRead is already counted above
 
-      // 1. Existing legacy filter (Ingreso + Needs Leveling)
-      if (hasIngresoFilter) {
-        const condition = this.norm(this.cell(row, columns.conditionIdx!));
-        const needsLeveling = this.norm(this.cell(row, columns.needsLevelingIdx!));
-        if (condition !== 'INGRESO') continue;
-        if (needsLeveling !== 'SI') continue;
-      }
-
-      // 2. New filter: PROGRAMA DE NIVELACIÃ“N (must be SI)
-      // Applied AFTER date deduplication (since we are iterating rowsToProcess)
+      let isLevelingEligible = false;
       if (columns.programLevelingIdx !== null) {
         const programVal = this.norm(this.cell(row, columns.programLevelingIdx));
-        if (programVal !== 'SI') continue;
+        isLevelingEligible = programVal === 'SI';
+      } else if (hasIngresoFilter) {
+        const condition = this.norm(this.cell(row, columns.conditionIdx!));
+        const needsLeveling = this.norm(this.cell(row, columns.needsLevelingIdx!));
+        isLevelingEligible = condition === 'INGRESO' && needsLeveling === 'SI';
+      } else {
+        isLevelingEligible = true;
       }
 
       const dni = this.normalizeDni(this.cell(row, columns.dniIdx));
@@ -2189,9 +2263,11 @@ export class LevelingService {
       const parsedExamDate = this.parseSmartDate(examDateStr);
       const facultyRaw =
         columns.facultyIdx !== null ? this.cell(row, columns.facultyIdx) : '';
-      const neededCourses = this.extractNeededCourses(row, columns.courseColumns);
-      if (neededCourses.length === 0) continue;
-      for (const courseName of neededCourses) activeCourseNames.add(courseName);
+      const levelingCourses = isLevelingEligible
+        ? this.extractNeededCourses(row, columns.courseColumns)
+        : [];
+      const neededCourses = levelingCourses.slice();
+      for (const courseName of levelingCourses) activeCourseNames.add(courseName);
 
       const mappedFaculty = careerFacultyMap.get(this.norm(careerName));
       const facultyName = this.normalizeFacultyName(
@@ -2211,10 +2287,17 @@ export class LevelingService {
 
       const existing = studentByDni.get(dni);
       if (existing) {
+        existing.levelingCourses = this.uniqueCourses([
+          ...existing.levelingCourses,
+          ...levelingCourses,
+        ]);
         existing.neededCourses = this.uniqueCourses([
           ...existing.neededCourses,
           ...neededCourses,
         ]);
+        if (isLevelingEligible) {
+          existing.isLevelingEligible = true;
+        }
         if (!existing.codigoAlumno && codigoAlumno) existing.codigoAlumno = codigoAlumno;
         if (!existing.paternalLastName && apellidoPaterno) {
           existing.paternalLastName = apellidoPaterno;
@@ -2249,6 +2332,8 @@ export class LevelingService {
         modalityChar,
         sourceModality,
         examDate: parsedExamDate ? this.formatDateYmdFromTime(parsedExamDate) : null,
+        isLevelingEligible,
+        levelingCourses: this.uniqueCourses(levelingCourses),
         neededCourses,
       });
     }
@@ -2263,20 +2348,58 @@ export class LevelingService {
     };
   }
 
+  private applyWelcomeCourseToParsedData(params: {
+    parsed: {
+      rowsRead: number;
+      students: ParsedStudent[];
+      unknownCareers: string[];
+      courseNames: CourseName[];
+    };
+    includeWelcomeCourse: boolean;
+    welcomeCourseName: string;
+  }) {
+    if (!params.includeWelcomeCourse) {
+      return params.parsed;
+    }
+    const welcomeCourse = String(params.welcomeCourseName ?? '').trim();
+    if (!welcomeCourse) {
+      return params.parsed;
+    }
+    const students = params.parsed.students.map((student) => ({
+      ...student,
+      neededCourses: this.uniqueCourses([...student.neededCourses, welcomeCourse]),
+    }));
+    const courseNames = this.sortCourseNames([
+      ...params.parsed.courseNames,
+      welcomeCourse,
+    ]);
+    return {
+      ...params.parsed,
+      students,
+      courseNames,
+    };
+  }
+
   private buildCourseGroupUnits(params: {
     students: ParsedStudent[];
     courseNames: CourseName[];
     sectionCapacity: number;
     groupModalityOverrides: Map<string, 'PRESENCIAL' | 'VIRTUAL'>;
+    welcomeCourseName?: string | null;
+    welcomeGroupingMode?: 'BY_SIZE' | 'SINGLE_GROUP' | null;
+    welcomeGroupSize?: number | null;
   }) {
     const countsByRow = new Map<
       string,
       {
-        facultyGroup: 'FICA' | 'SALUD';
+        facultyGroup: string;
         campusName: string;
         courseCounts: Record<CourseName, number>;
       }
     >();
+    const welcomeCourseKey = this.courseKey(params.welcomeCourseName ?? '');
+    const welcomeCourseLabel = String(params.welcomeCourseName ?? '').trim();
+    let welcomeCount = 0;
 
     for (const student of params.students) {
       const campusName = this.shortCampus(student.campusName);
@@ -2290,6 +2413,10 @@ export class LevelingService {
       }
       const row = countsByRow.get(rowKey)!;
       for (const course of student.neededCourses) {
+        if (welcomeCourseKey && this.courseKey(course) === welcomeCourseKey) {
+          welcomeCount += 1;
+          continue;
+        }
         row.courseCounts[course] += 1;
       }
     }
@@ -2320,6 +2447,36 @@ export class LevelingService {
       }
     }
 
+    if (welcomeCourseKey && welcomeCourseLabel && welcomeCount > 0) {
+      const mode =
+        String(params.welcomeGroupingMode ?? 'BY_SIZE').trim().toUpperCase() ===
+        'SINGLE_GROUP'
+          ? 'SINGLE_GROUP'
+          : 'BY_SIZE';
+      const divisor = Math.max(
+        1,
+        Number.isFinite(Number(params.welcomeGroupSize))
+          ? Number(params.welcomeGroupSize)
+          : params.sectionCapacity
+      );
+      const welcomeChunks =
+        mode === 'SINGLE_GROUP'
+          ? [welcomeCount]
+          : this.splitByCapacity(welcomeCount, divisor);
+
+      for (let i = 0; i < welcomeChunks.length; i++) {
+        const id = `GENERAL|VIRTUAL|${welcomeCourseLabel}|WELCOME|${i + 1}`;
+        out.push({
+          id,
+          facultyGroup: 'GENERAL',
+          campusName: 'VIRTUAL',
+          courseName: welcomeCourseLabel,
+          size: welcomeChunks[i],
+          modality: 'VIRTUAL',
+        });
+      }
+    }
+
     const validIds = new Set(out.map((x) => x.id));
     for (const id of params.groupModalityOverrides.keys()) {
       if (!validIds.has(id)) {
@@ -2340,7 +2497,7 @@ export class LevelingService {
       string,
       {
         careerName: string;
-        facultyGroup: 'FICA' | 'SALUD';
+        facultyGroup: string;
         campusName: string;
         sourceModality: 'VIRTUAL' | 'PRESENCIAL' | 'SIN DATO';
         needsByCourse: Record<CourseName, number>;
@@ -2414,7 +2571,7 @@ export class LevelingService {
     maxExtraCapacity: number;
   }) {
     type RowGroups = {
-      facultyGroup: 'FICA' | 'SALUD';
+      facultyGroup: string;
       facultyName: string;
       campusShort: string;
       groupsByCourse: Record<CourseName, number>;
@@ -2448,9 +2605,10 @@ export class LevelingService {
       }
 
       if (!presencialByRow.has(rowKey)) {
+        const normalizedGroup = this.normalizeFacultyGroup(unit.facultyGroup, 'FICA');
         presencialByRow.set(rowKey, {
-          facultyGroup: unit.facultyGroup,
-          facultyName: unit.facultyGroup === 'SALUD' ? SALUD_NAME : FICA_NAME,
+          facultyGroup: normalizedGroup,
+          facultyName: this.defaultFacultyName(normalizedGroup),
           campusShort: unit.campusName,
           groupsByCourse: this.initCourseCountMap(params.courseNames),
         });
@@ -2507,13 +2665,18 @@ export class LevelingService {
     for (const [facultyGroup, courses] of virtualCoursesByFaculty.entries()) {
       const neededCourses = Array.from(courses).sort() as CourseName[];
       if (neededCourses.length === 0) continue;
+      const normalizedGroup = this.normalizeFacultyGroup(facultyGroup, 'FICA');
+      const virtualCampus =
+        normalizedGroup === 'GENERAL'
+          ? { name: 'VIRTUAL', code: 'VI' }
+          : { name: 'SEDE CHINCHA', code: 'CH' };
       sections.push({
         code: '',
         name: '',
-        facultyGroup: facultyGroup as 'FICA' | 'SALUD',
-        facultyName: facultyGroup === 'SALUD' ? SALUD_NAME : FICA_NAME,
-        campusName: 'SEDE CHINCHA',
-        campusCode: 'CH',
+        facultyGroup: normalizedGroup,
+        facultyName: this.defaultFacultyName(normalizedGroup),
+        campusName: virtualCampus.name,
+        campusCode: virtualCampus.code,
         modality: 'VIRTUAL',
         neededCourses,
         initialCapacity: params.initialCapacity,
@@ -2537,6 +2700,31 @@ export class LevelingService {
 
     const virtualAssignedCoursesByDni = new Map<string, Set<CourseName>>();
     const studentsByRow = new Map<string, ParsedStudent[]>();
+    const generalVirtualSection = virtualSectionByFaculty.get('GENERAL');
+    if (generalVirtualSection) {
+      for (const student of params.students) {
+        const matchedCourses = student.neededCourses.filter((course) =>
+          generalVirtualSection.neededCourses.includes(course)
+        );
+        if (matchedCourses.length === 0) continue;
+        if (!generalVirtualSection.students.some((s) => s.dni === student.dni)) {
+          generalVirtualSection.students.push(student);
+        }
+        if (!generalVirtualSection.studentCoursesByDni.has(student.dni)) {
+          generalVirtualSection.studentCoursesByDni.set(student.dni, new Set<CourseName>());
+        }
+        if (!virtualAssignedCoursesByDni.has(student.dni)) {
+          virtualAssignedCoursesByDni.set(student.dni, new Set<CourseName>());
+        }
+        const sectionCourses = generalVirtualSection.studentCoursesByDni.get(student.dni)!;
+        const assignedCourses = virtualAssignedCoursesByDni.get(student.dni)!;
+        for (const course of matchedCourses) {
+          sectionCourses.add(course);
+          assignedCourses.add(course);
+        }
+      }
+    }
+
     for (const student of params.students) {
       const rowKey = `${student.facultyGroup}|${this.shortCampus(student.campusName)}`;
       if (!studentsByRow.has(rowKey)) studentsByRow.set(rowKey, []);
@@ -2650,9 +2838,116 @@ export class LevelingService {
       }
     }
 
+    this.splitGeneralWelcomeSectionByUnits({
+      sections,
+      groupUnits: params.groupUnits,
+    });
+
     const filtered = sections.filter((section) => section.students.length > 0);
     this.resequenceSectionCodes(filtered);
     return filtered;
+  }
+
+  private splitGeneralWelcomeSectionByUnits(params: {
+    sections: PlannedSection[];
+    groupUnits: CourseGroupUnit[];
+  }) {
+    const welcomeUnits = params.groupUnits
+      .filter(
+        (unit) =>
+          unit.modality === 'VIRTUAL' &&
+          this.normalizeFacultyGroup(unit.facultyGroup, unit.facultyGroup) ===
+            'GENERAL' &&
+          /\|WELCOME\|\d+$/i.test(String(unit.id ?? '').trim())
+      )
+      .sort((a, b) => {
+        const ia = this.extractWelcomeIndex(a.id);
+        const ib = this.extractWelcomeIndex(b.id);
+        if (ia !== ib) return ia - ib;
+        return String(a.id ?? '').localeCompare(String(b.id ?? ''));
+      });
+
+    if (welcomeUnits.length <= 1) return;
+
+    const welcomeCourseKey = this.courseKey(welcomeUnits[0]?.courseName ?? '');
+    if (!welcomeCourseKey) return;
+
+    const sourceIdx = params.sections.findIndex(
+      (section) =>
+        section.modality === 'VIRTUAL' &&
+        section.facultyGroup === 'GENERAL' &&
+        section.neededCourses.some(
+          (courseName) => this.courseKey(courseName) === welcomeCourseKey
+        )
+    );
+    if (sourceIdx < 0) return;
+
+    const source = params.sections[sourceIdx];
+    const welcomeStudents = source.students
+      .filter((student) =>
+        Array.from(source.studentCoursesByDni.get(student.dni) ?? []).some(
+          (courseName) => this.courseKey(courseName) === welcomeCourseKey
+        )
+      )
+      .sort((a, b) => a.dni.localeCompare(b.dni));
+    if (welcomeStudents.length <= 1) return;
+
+    const chunks: ParsedStudent[][] = [];
+    let cursor = 0;
+    for (const unit of welcomeUnits) {
+      const take = Math.max(0, Number(unit.size ?? 0));
+      const slice = welcomeStudents.slice(cursor, cursor + take);
+      cursor += take;
+      if (slice.length > 0) chunks.push(slice);
+    }
+    if (cursor < welcomeStudents.length && chunks.length > 0) {
+      chunks[chunks.length - 1].push(...welcomeStudents.slice(cursor));
+    }
+    if (chunks.length <= 1) return;
+
+    const welcomeDniSet = new Set(welcomeStudents.map((student) => student.dni));
+    const extraStudents = source.students.filter(
+      (student) => !welcomeDniSet.has(student.dni)
+    );
+
+    const clones: PlannedSection[] = chunks.map((chunk, idx) => {
+      const plannedChunkSize = Math.max(
+        1,
+        Number(welcomeUnits[idx]?.size ?? chunk.length ?? 1)
+      );
+      const clone: PlannedSection = {
+        ...source,
+        code: '',
+        name: '',
+        initialCapacity: plannedChunkSize,
+        students: [],
+        studentCoursesByDni: new Map<string, Set<CourseName>>(),
+      };
+      if (idx === 0 && extraStudents.length > 0) {
+        for (const student of extraStudents) {
+          clone.students.push(student);
+          const set =
+            source.studentCoursesByDni.get(student.dni) ?? new Set<CourseName>();
+          clone.studentCoursesByDni.set(student.dni, new Set(set));
+        }
+      }
+      for (const student of chunk) {
+        clone.students.push(student);
+        const set =
+          source.studentCoursesByDni.get(student.dni) ?? new Set<CourseName>();
+        clone.studentCoursesByDni.set(student.dni, new Set(set));
+      }
+      return clone;
+    });
+
+    params.sections.splice(sourceIdx, 1, ...clones);
+  }
+
+  private extractWelcomeIndex(groupId: string) {
+    const match = String(groupId ?? '').match(/\|WELCOME\|(\d+)$/i);
+    if (!match) return Number.MAX_SAFE_INTEGER;
+    const value = Number(match[1]);
+    return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
   }
 
   private assignRowStudentCourses(params: {
@@ -2876,17 +3171,25 @@ export class LevelingService {
     };
 
     const presencialRows = new Map<string, RowAccumulator>();
-    const virtualSumByFaculty = new Map<string, Record<CourseName, number>>();
+    const virtualRows = new Map<
+      string,
+      {
+        facultyGroup: string;
+        sizesByCourse: Record<CourseName, number[]>;
+      }
+    >();
 
     for (const unit of params.groupUnits) {
       if (unit.modality === 'VIRTUAL') {
-        if (!virtualSumByFaculty.has(unit.facultyGroup)) {
-          virtualSumByFaculty.set(
-            unit.facultyGroup,
-            this.initCourseCountMap(params.courseNames)
-          );
+        if (!virtualRows.has(unit.facultyGroup)) {
+          virtualRows.set(unit.facultyGroup, {
+            facultyGroup: unit.facultyGroup,
+            sizesByCourse: this.initCourseGroupSizesMap(params.courseNames),
+          });
         }
-        virtualSumByFaculty.get(unit.facultyGroup)![unit.courseName] += unit.size;
+        virtualRows.get(unit.facultyGroup)!.sizesByCourse[unit.courseName].push(
+          unit.size
+        );
         continue;
       }
 
@@ -2937,15 +3240,18 @@ export class LevelingService {
       faculty.totalGroups += totalGroups;
     }
 
-    for (const [facultyGroup, sums] of virtualSumByFaculty.entries()) {
-      const hasAny = Object.values(sums).some((x) => x > 0);
+    for (const row of virtualRows.values()) {
+      const hasAny = Object.values(row.sizesByCourse).some(
+        (sizes) => (sizes?.length ?? 0) > 0
+      );
       if (!hasAny) continue;
-      const faculty = ensureFaculty(facultyGroup);
+      const faculty = ensureFaculty(row.facultyGroup);
       const courseGroupSizes = this.initCourseGroupSizesMap(params.courseNames);
       const courseGroups = this.initCourseCountMap(params.courseNames);
       for (const courseName of params.courseNames) {
-        const size = Number(sums[courseName] ?? 0);
-        courseGroupSizes[courseName] = size > 0 ? [size] : [];
+        courseGroupSizes[courseName] = (
+          row.sizesByCourse[courseName] ?? []
+        ).slice();
         courseGroups[courseName] = courseGroupSizes[courseName].length;
       }
       const totalGroups = this.sumCourseCountMap(courseGroups, params.courseNames);
@@ -3134,9 +3440,13 @@ export class LevelingService {
 
     const idxByPrefix = new Map<string, number>();
     for (const s of sections) {
-      if (s.modality === 'VIRTUAL') {
+      const sectionFacultyGroup = this.normalizeFacultyGroup(s.facultyGroup, 'FICA');
+      if (s.modality === 'VIRTUAL' && sectionFacultyGroup !== 'GENERAL') {
         s.campusName = 'SEDE CHINCHA';
         s.campusCode = 'CH';
+      } else if (s.modality === 'VIRTUAL' && sectionFacultyGroup === 'GENERAL') {
+        s.campusName = 'VIRTUAL';
+        s.campusCode = 'VI';
       }
       const modalityChar = s.modality === 'VIRTUAL' ? 'V' : 'P';
       const prefix = `${s.facultyGroup}|${s.modality}|${s.campusCode}`;
@@ -3154,6 +3464,8 @@ export class LevelingService {
   private async applyPlan(params: {
     sections: PlannedSection[];
     students?: ParsedStudent[];
+    includeWelcomeCourse?: boolean;
+    welcomeCourseName?: string | null;
     configUsed?: { initialCapacity: number; maxExtraCapacity: number };
     sourceFileHash?: string;
     reportsJson?: Record<string, unknown> | null;
@@ -3163,6 +3475,13 @@ export class LevelingService {
       const usersRepo = manager.getRepository(UserEntity);
       const sectionsRepo = manager.getRepository(SectionEntity);
       const courseIdByName = await this.loadCourseIdByCanonicalName(manager);
+      if (params.includeWelcomeCourse && params.welcomeCourseName) {
+        await this.ensureCourseIdByName(
+          manager,
+          courseIdByName,
+          params.welcomeCourseName
+        );
+      }
       const activePeriodId = await this.loadActivePeriodIdOrThrow(manager);
       const runId = randomUUID();
       const createdById = String(params.createdById ?? '').trim() || null;
@@ -3381,10 +3700,11 @@ export class LevelingService {
         if (!section) continue;
         const uniqueCourses = new Set<CourseName>(sec.neededCourses);
         for (const courseName of uniqueCourses) {
-          const courseId = courseIdByName.get(this.courseKey(courseName));
-          if (!courseId) {
-            throw new BadRequestException(`Course not found in catalog: ${courseName}`);
-          }
+          const courseId = await this.ensureCourseIdByName(
+            manager,
+            courseIdByName,
+            courseName
+          );
           const key = `${activePeriodId}:${section.id}:${courseId}`;
           if (!sectionCourseCandidates.has(key)) {
             sectionCourseCandidates.set(key, {
@@ -3430,8 +3750,11 @@ export class LevelingService {
         if (!section) continue;
         const uniqueCourses = new Set<CourseName>(sec.neededCourses);
         for (const courseName of uniqueCourses) {
-          const courseId = courseIdByName.get(this.courseKey(courseName));
-          if (!courseId) continue;
+          const courseId = await this.ensureCourseIdByName(
+            manager,
+            courseIdByName,
+            courseName
+          );
           const sectionCourseId = sectionCourseIdByKey.get(`${section.id}:${courseId}`);
           if (!sectionCourseId) continue;
           let plannedCapacity = 0;
@@ -3480,8 +3803,16 @@ export class LevelingService {
         const savedStudent = studentByDni.get(student.dni);
         if (!savedStudent) continue;
         for (const courseName of student.neededCourses) {
-          const courseId = courseIdByName.get(this.courseKey(courseName));
-          if (!courseId) continue;
+          const courseId = await this.ensureCourseIdByName(
+            manager,
+            courseIdByName,
+            courseName
+          );
+          const demandScope = this.resolveDemandScopeForCourse({
+            student,
+            courseName,
+            welcomeCourseName: params.welcomeCourseName,
+          });
           const key = `${runId}:${savedStudent.id}:${courseId}`;
           if (demandCandidates.has(key)) continue;
           demandCandidates.set(key, {
@@ -3489,9 +3820,9 @@ export class LevelingService {
             runId,
             studentId: savedStudent.id,
             courseId,
-            facultyGroup: student.facultyGroup,
-            campusName: student.campusName,
-            sourceModality: student.sourceModality,
+            facultyGroup: demandScope.facultyGroup,
+            campusName: demandScope.campusName,
+            sourceModality: demandScope.sourceModality,
             examDate: student.examDate,
             required: 1,
           });
@@ -3529,6 +3860,10 @@ export class LevelingService {
     students: ParsedStudent[];
     sectionCapacity: number;
     groupModalityOverrides: Map<string, 'PRESENCIAL' | 'VIRTUAL'>;
+    includeWelcomeCourse?: boolean;
+    welcomeCourseName?: string | null;
+    welcomeGroupingMode?: 'BY_SIZE' | 'SINGLE_GROUP' | null;
+    welcomeGroupSize?: number | null;
     createdById?: string | null;
   }): Promise<ApplyStructureResult> {
     return this.dataSource.transaction(async (manager) => {
@@ -3676,11 +4011,19 @@ export class LevelingService {
         const savedStudent = studentByDni.get(student.dni);
         if (!savedStudent) continue;
         for (const courseName of student.neededCourses) {
-          const courseId = courseIdByName.get(this.courseKey(courseName));
-          if (!courseId) continue;
+          const courseId = await this.ensureCourseIdByName(
+            manager,
+            courseIdByName,
+            courseName
+          );
           if (assignedByStudentCourse.has(`${savedStudent.id}:${courseId}`)) {
             continue;
           }
+          const demandScope = this.resolveDemandScopeForCourse({
+            student,
+            courseName,
+            welcomeCourseName: params.welcomeCourseName,
+          });
           const key = `${run.id}:${savedStudent.id}:${courseId}`;
           if (demandCandidates.has(key)) continue;
           demandCandidates.set(key, {
@@ -3688,9 +4031,9 @@ export class LevelingService {
             runId: run.id,
             studentId: savedStudent.id,
             courseId,
-            facultyGroup: student.facultyGroup,
-            campusName: student.campusName,
-            sourceModality: student.sourceModality,
+            facultyGroup: demandScope.facultyGroup,
+            campusName: demandScope.campusName,
+            sourceModality: demandScope.sourceModality,
             examDate: student.examDate,
             required: 1,
           });
@@ -3712,6 +4055,9 @@ export class LevelingService {
         pendingDemands: pendingForExpansion,
         sectionCapacity: Math.max(1, Number(params.sectionCapacity ?? 1)),
         groupModalityOverrides: params.groupModalityOverrides,
+        welcomeCourseName: params.welcomeCourseName,
+        welcomeGroupingMode: params.welcomeGroupingMode ?? 'BY_SIZE',
+        welcomeGroupSize: params.welcomeGroupSize,
       });
       const expansion = await this.expandOfferForAppend(manager, {
         run,
@@ -3774,6 +4120,10 @@ export class LevelingService {
     options: {
       sectionCapacity: number;
       groupModalityOverrides: Map<string, 'PRESENCIAL' | 'VIRTUAL'>;
+      includeWelcomeCourse?: boolean;
+      welcomeCourseName?: string | null;
+      welcomeGroupingMode?: 'BY_SIZE' | 'SINGLE_GROUP' | null;
+      welcomeGroupSize?: number | null;
     }
   ): Promise<AppendPreviewBundle> {
     const activeSummary = await this.getActiveRunSummary();
@@ -3879,11 +4229,19 @@ export class LevelingService {
         const previewStudentId = studentPreviewIdByDni.get(student.dni);
         if (!previewStudentId) continue;
         for (const courseName of student.neededCourses) {
-          const courseId = courseIdByName.get(this.courseKey(courseName));
-          if (!courseId) continue;
+          const courseId = await this.ensureCourseIdByName(
+            manager,
+            courseIdByName,
+            courseName
+          );
           if (assignedByStudentCourse.has(`${previewStudentId}:${courseId}`)) {
             continue;
           }
+          const demandScope = this.resolveDemandScopeForCourse({
+            student,
+            courseName,
+            welcomeCourseName: options.welcomeCourseName,
+          });
           const key = `${run.id}:${previewStudentId}:${courseId}`;
           if (demandCandidates.has(key)) continue;
           demandCandidates.set(key, {
@@ -3891,9 +4249,9 @@ export class LevelingService {
             runId: run.id,
             studentId: previewStudentId,
             courseId,
-            facultyGroup: student.facultyGroup,
-            campusName: student.campusName,
-            sourceModality: student.sourceModality,
+            facultyGroup: demandScope.facultyGroup,
+            campusName: demandScope.campusName,
+            sourceModality: demandScope.sourceModality,
             examDate: student.examDate,
             required: 1,
           });
@@ -3915,6 +4273,9 @@ export class LevelingService {
         pendingDemands: pendingForExpansion,
         sectionCapacity: Math.max(1, Number(options.sectionCapacity ?? 1)),
         groupModalityOverrides: options.groupModalityOverrides,
+        welcomeCourseName: options.welcomeCourseName,
+        welcomeGroupingMode: options.welcomeGroupingMode ?? 'BY_SIZE',
+        welcomeGroupSize: options.welcomeGroupSize,
       });
       const expansion = await this.expandOfferForAppend(manager, {
         run,
@@ -4020,6 +4381,9 @@ export class LevelingService {
       pendingDemands: PendingDemandForExpansion[];
       sectionCapacity: number;
       groupModalityOverrides: Map<string, 'PRESENCIAL' | 'VIRTUAL'>;
+      welcomeCourseName?: string | null;
+      welcomeGroupingMode?: 'BY_SIZE' | 'SINGLE_GROUP' | null;
+      welcomeGroupSize?: number | null;
     }
   ): Promise<{
     groupUnits: CourseGroupUnit[];
@@ -4030,7 +4394,7 @@ export class LevelingService {
     const pendingByScopeCourse = new Map<
       string,
       {
-        facultyGroup: 'FICA' | 'SALUD';
+        facultyGroup: string;
         campusShort: string;
         courseId: string;
         pendingCount: number;
@@ -4039,8 +4403,7 @@ export class LevelingService {
     for (const demand of params.pendingDemands) {
       const courseId = String(demand.courseId ?? '').trim();
       if (!courseId) continue;
-      const facultyGroup =
-        this.scopeKey(demand.facultyGroup) === 'SALUD' ? 'SALUD' : 'FICA';
+      const facultyGroup = this.normalizeFacultyGroup(demand.facultyGroup, 'FICA');
       const campusShort = this.shortCampus(String(demand.campusName ?? ''));
       const key = `${facultyGroup}|${this.scopeKey(campusShort)}|${courseId}`;
       if (!pendingByScopeCourse.has(key)) {
@@ -4149,18 +4512,23 @@ export class LevelingService {
     >();
     const virtualByFacultyCourse = new Map<
       string,
-      { sectionCode: string | null; sectionCampusName: string | null }
+      {
+        sectionCourseId: string;
+        sectionCode: string | null;
+        sectionCampusName: string | null;
+      }
     >();
     for (const row of existingRows) {
       const modality = String(row.modality ?? '').toUpperCase().trim();
-      const facultyGroup =
-        this.scopeKey(row.facultyGroup) === 'SALUD' ? 'SALUD' : 'FICA';
+      const facultyGroup = this.normalizeFacultyGroup(row.facultyGroup, 'FICA');
       const campusShort = this.shortCampus(String(row.campusName ?? ''));
       const key = `${facultyGroup}|${this.scopeKey(campusShort)}|${String(row.courseId)}`;
       const virtualKey = `${facultyGroup}|${String(row.courseId)}`;
+      const sectionCourseId = String(row.sectionCourseId);
       if (modality.includes('VIRTUAL')) {
         if (pendingFacultyCourseKeys.has(virtualKey) && !virtualByFacultyCourse.has(virtualKey)) {
           virtualByFacultyCourse.set(virtualKey, {
+            sectionCourseId,
             sectionCode: row.sectionCode ? String(row.sectionCode) : null,
             sectionCampusName: row.campusName ? String(row.campusName) : null,
           });
@@ -4168,7 +4536,6 @@ export class LevelingService {
       }
       if (!modality.includes('PRESENCIAL')) continue;
       if (!scopeKeys.has(key)) continue;
-      const sectionCourseId = String(row.sectionCourseId);
       const availableSeats = this.availableCapacityForOffer({
         assignedCount: assignedBySectionCourse.get(sectionCourseId) ?? 0,
         initialCapacity: Math.max(0, Number(row.initialCapacity ?? 0)),
@@ -4202,6 +4569,18 @@ export class LevelingService {
       if (ca !== 0) return ca;
       return a.courseId.localeCompare(b.courseId);
     });
+    const welcomeCourseKey = this.courseKey(params.welcomeCourseName ?? '');
+    const welcomeGroupingMode =
+      String(params.welcomeGroupingMode ?? 'BY_SIZE').trim().toUpperCase() ===
+      'SINGLE_GROUP'
+        ? 'SINGLE_GROUP'
+        : 'BY_SIZE';
+    const welcomeGroupDivisor = Math.max(
+      1,
+      Number.isFinite(Number(params.welcomeGroupSize))
+        ? Number(params.welcomeGroupSize)
+        : Math.max(1, Number(params.sectionCapacity ?? 1))
+    );
 
     for (const scope of orderedScopes) {
       const scopeKey = `${scope.facultyGroup}|${this.scopeKey(scope.campusShort)}|${scope.courseId}`;
@@ -4212,6 +4591,52 @@ export class LevelingService {
         scope.courseId;
       const existingCandidates = existingByScopeCourse.get(scopeKey) ?? [];
       let remaining = Math.max(0, Number(scope.pendingCount ?? 0));
+      const forceVirtualScope =
+        this.scopeKey(scope.facultyGroup) === 'GENERAL' ||
+        this.scopeKey(scope.campusShort) === 'VIRTUAL';
+
+      if (forceVirtualScope) {
+        if (remaining <= 0) continue;
+
+        const isWelcomeCourse =
+          welcomeCourseKey && this.courseKey(courseName) === welcomeCourseKey;
+        const virtualChunks =
+          isWelcomeCourse && welcomeGroupingMode === 'BY_SIZE'
+            ? this.splitByCapacity(remaining, welcomeGroupDivisor)
+            : [remaining];
+
+        const useExisting = Boolean(existingVirtual) && !(
+          isWelcomeCourse && welcomeGroupingMode === 'BY_SIZE'
+        );
+        for (let i = 0; i < virtualChunks.length; i++) {
+          const chunkSize = Math.max(0, Number(virtualChunks[i] ?? 0));
+          if (chunkSize <= 0) continue;
+          const id = useExisting
+            ? `${scope.facultyGroup}|VIRTUAL|${courseName}|EXISTING|${existingVirtual!.sectionCourseId}|${i + 1}`
+            : `${scope.facultyGroup}|VIRTUAL|${courseName}|NEW|${i + 1}`;
+          groupUnits.push({
+            id,
+            facultyGroup: scope.facultyGroup,
+            campusName: 'VIRTUAL',
+            courseName,
+            courseId: scope.courseId,
+            size: chunkSize,
+            modality: 'VIRTUAL',
+            origin: useExisting ? 'EXISTING_FREE' : 'NEW_REQUIRED',
+            sectionCourseId: existingVirtual?.sectionCourseId ?? null,
+            hasExistingVirtual: useExisting,
+            sectionCode: existingVirtual?.sectionCode ?? null,
+            sectionCampusName: existingVirtual?.sectionCampusName ?? 'VIRTUAL',
+          });
+          if (useExisting) {
+            existingFreeSeatsDetected += chunkSize;
+          } else {
+            newRequiredSeats += chunkSize;
+            groupsConvertedToVirtual += 1;
+          }
+        }
+        continue;
+      }
 
       for (const candidate of existingCandidates) {
         if (candidate.availableSeats <= 0) continue;
@@ -4311,8 +4736,7 @@ export class LevelingService {
       for (const section of existingSections) {
         const code = String(section.code ?? '').trim();
         if (!code) continue;
-        const facultyGroup =
-          this.scopeKey(section.facultyGroup) === 'SALUD' ? 'SALUD' : 'FICA';
+        const facultyGroup = this.normalizeFacultyGroup(section.facultyGroup, 'FICA');
         const modality = this.isVirtualModality(section.modality)
           ? 'VIRTUAL'
           : 'PRESENCIAL';
@@ -4340,8 +4764,7 @@ export class LevelingService {
       campusCodeInput: string,
       modalityInput: 'PRESENCIAL' | 'VIRTUAL'
     ) => {
-      const facultyGroup =
-        this.scopeKey(facultyGroupInput) === 'SALUD' ? 'SALUD' : 'FICA';
+      const facultyGroup = this.normalizeFacultyGroup(facultyGroupInput, 'FICA');
       const campusCode = this.scopeKey(campusCodeInput) || 'CH';
       const scopeKey = `${facultyGroup}|${campusCode}|${modalityInput}`;
       const modalityChar = modalityInput === 'VIRTUAL' ? 'V' : 'P';
@@ -4609,7 +5032,7 @@ export class LevelingService {
         if (size <= 0) continue;
         const courseId = String(unit.courseId ?? '').trim();
         if (!courseId) continue;
-        const facultyGroup = this.scopeKey(unit.facultyGroup) || 'FICA';
+        const facultyGroup = this.normalizeFacultyGroup(unit.facultyGroup, 'FICA');
         const campusName = this.scopeKey(this.fullCampusFromShort(unit.campusName).name);
         if (!facultyGroup || !campusName) continue;
         const key = `${facultyGroup}|${campusName}|${courseId}`;
@@ -4921,7 +5344,7 @@ export class LevelingService {
       reservedCodes: params.reservedCodes,
     });
     const campus = this.normalizeCampus(params.campusName);
-    const facultyGroup = this.scopeKey(params.facultyGroup) === 'SALUD' ? 'SALUD' : 'FICA';
+    const facultyGroup = this.normalizeFacultyGroup(params.facultyGroup, 'FICA');
     const facultyName = this.defaultFacultyName(facultyGroup);
     if (params.reservedCodes) {
       params.reservedCodes.add(this.scopeKey(sectionCode));
@@ -5716,6 +6139,76 @@ export class LevelingService {
     return out;
   }
 
+  private async ensureCourseIdByName(
+    manager: EntityManager,
+    courseIdByName: Map<CourseName, string>,
+    courseName: string
+  ) {
+    const normalized = this.courseKey(courseName);
+    if (!normalized) {
+      throw new BadRequestException('Nombre de curso invalido');
+    }
+    const existing = courseIdByName.get(normalized);
+    if (existing) return existing;
+    const resolved = await this.resolveOrCreateCourseByName(manager, courseName);
+    const resolvedKey = this.courseKey(resolved.name);
+    courseIdByName.set(resolvedKey, String(resolved.id));
+    return String(resolved.id);
+  }
+
+  private async resolveOrCreateCourseByName(
+    manager: EntityManager,
+    courseName: string
+  ) {
+    const normalized = this.courseKey(courseName);
+    if (!normalized) {
+      throw new BadRequestException('Nombre de curso invalido');
+    }
+    const trimmedName = String(courseName ?? '').trim();
+    const rows: Array<{ id: string; name: string }> = await manager.query(
+      `
+      SELECT id, name
+      FROM courses
+      `
+    );
+    for (const row of rows) {
+      const candidateName = String(row.name ?? '').trim();
+      if (!candidateName) continue;
+      if (this.courseKey(candidateName) === normalized) {
+        return {
+          id: String(row.id),
+          name: candidateName,
+        };
+      }
+    }
+    await manager.query(
+      `
+      INSERT INTO courses (id, name, idakademic)
+      VALUES (?, ?, NULL)
+      `,
+      [randomUUID(), trimmedName || courseName]
+    );
+    const afterRows: Array<{ id: string; name: string }> = await manager.query(
+      `
+      SELECT id, name
+      FROM courses
+      `
+    );
+    for (const row of afterRows) {
+      const candidateName = String(row.name ?? '').trim();
+      if (!candidateName) continue;
+      if (this.courseKey(candidateName) === normalized) {
+        return {
+          id: String(row.id),
+          name: candidateName,
+        };
+      }
+    }
+    throw new BadRequestException(
+      `No se pudo resolver o crear el curso: ${courseName}`
+    );
+  }
+
   private async loadPendingDemandsByFacultyCourse(params: {
     runId: string;
     periodId: string;
@@ -6223,8 +6716,15 @@ export class LevelingService {
 
       const studentBlocks = getStudentBlocks(studentId);
 
+      // For GENERAL virtual cohorts (welcome split), first respect each section's
+      // planned target before allowing overflow.
+      const candidatePool = this.pickCandidatesByPlannedVirtualDistribution(
+        demand.facultyGroup,
+        demand.candidates
+      );
+
       // Filter candidates: capacity OK + no schedule conflict
-      const available = demand.candidates.filter((candidate) => {
+      const available = candidatePool.filter((candidate) => {
         if (this.isCapacityBlocked(candidate)) return false;
         if (this.hasScheduleOverlap(studentBlocks, candidate.blocks)) return false;
         return true;
@@ -6488,7 +6988,10 @@ export class LevelingService {
   }
 
   private defaultFacultyName(facultyGroup: string) {
-    return this.norm(facultyGroup) === 'SALUD' ? SALUD_NAME : FICA_NAME;
+    const group = this.normalizeFacultyGroup(facultyGroup, 'FICA');
+    if (group === 'SALUD') return SALUD_NAME;
+    if (group === 'GENERAL') return 'GENERAL';
+    return FICA_NAME;
   }
 
   private scopeKey(value: string | null | undefined) {
@@ -6575,6 +7078,31 @@ export class LevelingService {
     return this.modalityPriority(modality) === 1;
   }
 
+  private pickCandidatesByPlannedVirtualDistribution<
+    T extends {
+      modality: string | null;
+      assignedCount: number;
+      initialCapacity: number;
+    }
+  >(facultyGroup: string | null | undefined, candidates: T[]) {
+    if (this.scopeKey(facultyGroup) !== 'GENERAL') return candidates;
+    const virtualCandidates = candidates.filter((candidate) =>
+      this.isVirtualModality(candidate.modality)
+    );
+    if (virtualCandidates.length < 2) return candidates;
+    const hasAnyTarget = virtualCandidates.some(
+      (candidate) => Math.max(0, Number(candidate.initialCapacity ?? 0)) > 0
+    );
+    if (!hasAnyTarget) return candidates;
+    const candidatesUnderTarget = candidates.filter((candidate) => {
+      if (!this.isVirtualModality(candidate.modality)) return true;
+      const target = Math.max(0, Number(candidate.initialCapacity ?? 0));
+      if (target <= 0) return true;
+      return Math.max(0, Number(candidate.assignedCount ?? 0)) < target;
+    });
+    return candidatesUnderTarget.length > 0 ? candidatesUnderTarget : candidates;
+  }
+
   private sortCandidatesForAssignment<
     T extends {
       modality: string | null;
@@ -6642,6 +7170,36 @@ export class LevelingService {
 
   private hashBuffer(buffer: Buffer) {
     return createHash('sha256').update(buffer).digest('hex');
+  }
+
+  private normalizeFacultyGroup(value: string | null | undefined, fallback = 'FICA') {
+    const normalized = this.scopeKey(value);
+    if (!normalized) return this.scopeKey(fallback) || 'FICA';
+    if (normalized === 'SALUD') return 'SALUD';
+    if (normalized === 'FICA') return 'FICA';
+    if (normalized === 'GENERAL') return 'GENERAL';
+    return normalized;
+  }
+
+  private resolveDemandScopeForCourse(params: {
+    student: ParsedStudent;
+    courseName: string;
+    welcomeCourseName?: string | null;
+  }) {
+    const welcomeKey = this.courseKey(params.welcomeCourseName ?? '');
+    const courseKey = this.courseKey(params.courseName ?? '');
+    if (welcomeKey && welcomeKey === courseKey) {
+      return {
+        facultyGroup: 'GENERAL',
+        campusName: 'VIRTUAL',
+        sourceModality: 'VIRTUAL',
+      };
+    }
+    return {
+      facultyGroup: params.student.facultyGroup,
+      campusName: params.student.campusName,
+      sourceModality: params.student.sourceModality,
+    };
   }
 
   private toIsoDateOnly(value: unknown): string | null {
@@ -6898,7 +7456,10 @@ export class LevelingService {
   }
 
   private facultyChar(group: string) {
-    return group === 'SALUD' ? 'S' : 'F';
+    const normalized = this.normalizeFacultyGroup(group, 'FICA');
+    if (normalized === 'SALUD') return 'S';
+    if (normalized === 'GENERAL') return 'G';
+    return normalized.slice(0, 1) || 'F';
   }
 
   private normalizeCampus(raw: string) {
@@ -7427,6 +7988,19 @@ export class LevelingService {
       return [count];
     }
 
+    const out: number[] = [];
+    let remaining = count;
+    const cap = Math.max(1, capacity);
+    while (remaining > 0) {
+      const chunk = Math.min(cap, remaining);
+      out.push(chunk);
+      remaining -= chunk;
+    }
+    return out;
+  }
+
+  private splitByCapacity(count: number, capacity: number) {
+    if (count <= 0) return [];
     const out: number[] = [];
     let remaining = count;
     const cap = Math.max(1, capacity);

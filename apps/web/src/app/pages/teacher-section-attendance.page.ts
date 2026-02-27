@@ -75,6 +75,9 @@ interface TeacherRecordRow {
     <div *ngIf="error" class="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
       {{ error }}
     </div>
+    <div *ngIf="success" class="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+      {{ success }}
+    </div>
 
     <div class="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
       <label class="block">
@@ -97,29 +100,42 @@ interface TeacherRecordRow {
     </div>
 
     <div class="mt-4 rounded-2xl border border-slate-200 bg-white">
-      <div class="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+      <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
         <div>
-          <div class="text-sm font-semibold">Control semanal</div>
+          <div class="text-sm font-semibold">Control por fecha</div>
           <div class="text-xs text-slate-600">
             Alumnos: {{ students.length }} | Fechas: {{ weekDates.length }}
           </div>
         </div>
         <div class="flex items-center gap-2">
           <select
-            class="rounded-lg border border-slate-200 px-2 py-2 text-xs"
-            [(ngModel)]="selectedSaveDate"
+            class="rounded-lg border border-slate-200 px-2 py-2 text-xs min-w-[140px]"
+            [(ngModel)]="activeDate"
             [disabled]="weekDates.length===0"
           >
             <option value="">Seleccionar fecha</option>
-            <option [value]="allDatesOption">Todas las fechas</option>
             <option *ngFor="let d of weekDates; trackBy: trackText" [value]="d">
               {{ d }}
             </option>
           </select>
           <button
-            class="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
-            (click)="saveAll()"
-            [disabled]="saving || !selectedBlock || students.length===0 || weekDates.length===0 || !selectedSaveDate"
+            class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold hover:bg-slate-50 disabled:opacity-60"
+            (click)="markAllPresent()"
+            [disabled]="weekDates.length===0 || students.length===0 || !activeDate"
+          >
+            Asistieron todos
+          </button>
+          <button
+            class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold hover:bg-slate-50 disabled:opacity-60"
+            (click)="markAllAbsent()"
+            [disabled]="weekDates.length===0 || students.length===0 || !activeDate"
+          >
+            Faltaron todos
+          </button>
+          <button
+            class="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60 min-w-[150px]"
+            (click)="saveActiveDate()"
+            [disabled]="saving || !selectedBlock || students.length===0 || weekDates.length===0 || !activeDate"
           >
             {{ saving ? 'Guardando...' : 'Guardar asistencia' }}
           </button>
@@ -134,13 +150,10 @@ interface TeacherRecordRow {
                 Alumno
               </th>
               <th class="border-r border-slate-200 bg-slate-50 px-3 py-3">Codigo</th>
-              <th
-                *ngFor="let d of weekDates; trackBy: trackText"
-                class="min-w-[160px] border-r border-slate-200 px-3 py-3 text-center"
-              >
-                <div>{{ shortDayLabel(d) }}</div>
+              <th class="min-w-[140px] border-r border-slate-200 px-3 py-3 text-center">
+                <div>Asistio</div>
                 <div class="text-[11px] font-medium normal-case tracking-normal text-slate-500">
-                  {{ d }}
+                  {{ activeDate || '-' }}
                 </div>
               </th>
             </tr>
@@ -153,24 +166,19 @@ interface TeacherRecordRow {
               <td class="border-r border-slate-200 bg-white px-3 py-3 text-slate-600">
                 {{ studentCode(s.codigoAlumno) }}
               </td>
-              <td
-                *ngFor="let d of weekDates; trackBy: trackText"
-                class="border-r border-slate-100 px-2 py-2"
-              >
-                <select
-                  class="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs"
-                  [ngModel]="getStatus(d, s.id)"
-                  (ngModelChange)="setStatus(d, s.id, $event)"
-                  [ngModelOptions]="{ standalone: true }"
-                >
-                  <option [ngValue]="AttendanceStatus.ASISTIO">ASISTIO</option>
-                  <option [ngValue]="AttendanceStatus.FALTO">FALTO</option>
-                </select>
+              <td class="border-r border-slate-100 px-3 py-2 text-center">
+                <input
+                  type="checkbox"
+                  class="h-4 w-4 cursor-pointer accent-slate-900"
+                  [checked]="getActiveChecked(s.id)"
+                  (change)="setActiveChecked(s.id, $event)"
+                  [disabled]="!activeDate"
+                />
               </td>
             </tr>
 
             <tr *ngIf="students.length===0" class="border-t border-slate-100">
-              <td class="px-4 py-6 text-slate-600" [attr.colspan]="weekDates.length + 2">
+              <td class="px-4 py-6 text-slate-600" colspan="3">
                 No hay alumnos para este curso-seccion.
               </td>
             </tr>
@@ -201,14 +209,14 @@ export class TeacherSectionAttendancePage {
   students: TeacherStudentRow[] = [];
 
   selectedBlockId = '';
-  selectedSaveDate = '';
+  activeDate = '';
   weekDates: string[] = [];
   statusMatrix: Record<string, Record<string, AttendanceStatus>> = {};
   sessionsByDate = new Map<string, TeacherSession>();
 
   error: string | null = null;
+  success: string | null = null;
   saving = false;
-  readonly allDatesOption = '__ALL__';
 
   get selectedBlock() {
     return this.blocks.find((b) => b.id === this.selectedBlockId) ?? null;
@@ -266,8 +274,9 @@ export class TeacherSectionAttendancePage {
 
   async loadAll() {
     this.error = null;
+    this.success = null;
     this.selectedBlockId = '';
-    this.selectedSaveDate = '';
+    this.activeDate = '';
     this.weekDates = [];
     this.statusMatrix = {};
     this.sessionsByDate.clear();
@@ -301,7 +310,10 @@ export class TeacherSectionAttendancePage {
       this.assignment =
         assignments.find((x) => x.sectionCourseId === this.sectionCourseId) ?? null;
       this.blocks = blocks;
-      this.sessions = sessions;
+      this.sessions = sessions.map((s) => ({
+        ...s,
+        sessionDate: this.normalizeIsoDate(s.sessionDate),
+      }));
       this.students = students;
 
       if (this.blocks.length > 0) {
@@ -317,7 +329,8 @@ export class TeacherSectionAttendancePage {
 
   async onBlockChange() {
     this.error = null;
-    this.selectedSaveDate = '';
+    this.success = null;
+    this.activeDate = '';
     this.weekDates = [];
     this.statusMatrix = {};
     this.sessionsByDate.clear();
@@ -334,9 +347,13 @@ export class TeacherSectionAttendancePage {
       .sort((a, b) => a.sessionDate.localeCompare(b.sessionDate));
 
     this.weekDates = this.computeWeekDates(block, blockSessions);
-    this.selectedSaveDate = this.weekDates[0] ?? '';
+    const latestSessionDate = blockSessions[blockSessions.length - 1]?.sessionDate ?? '';
+    this.activeDate =
+      (latestSessionDate && this.weekDates.includes(latestSessionDate) ? latestSessionDate : '') ||
+      this.weekDates[0] ||
+      '';
     for (const session of blockSessions) {
-      this.sessionsByDate.set(session.sessionDate, session);
+      this.sessionsByDate.set(this.normalizeIsoDate(session.sessionDate), session);
     }
 
     try {
@@ -351,9 +368,10 @@ export class TeacherSectionAttendancePage {
       );
 
       for (const item of recordsBySession) {
-        this.statusMatrix[item.date] = this.statusMatrix[item.date] ?? {};
+        const dateKey = this.normalizeIsoDate(item.date);
+        this.statusMatrix[dateKey] = this.statusMatrix[dateKey] ?? {};
         for (const rec of item.records) {
-          this.statusMatrix[item.date][rec.studentId] = rec.status;
+          this.statusMatrix[dateKey][rec.studentId] = this.normalizeStatus(rec.status);
         }
       }
     } catch (e: any) {
@@ -372,53 +390,76 @@ export class TeacherSectionAttendancePage {
     this.statusMatrix[date][studentId] = status;
   }
 
-  async saveAll() {
+  getActiveChecked(studentId: string) {
+    if (!this.activeDate) return false;
+    return this.getStatus(this.activeDate, studentId) === AttendanceStatus.ASISTIO;
+  }
+
+  setActiveChecked(studentId: string, event: Event) {
+    if (!this.activeDate) return;
+    const target = event.target as HTMLInputElement;
+    this.setStatus(
+      this.activeDate,
+      studentId,
+      target.checked ? AttendanceStatus.ASISTIO : AttendanceStatus.FALTO
+    );
+  }
+
+  markAllPresent() {
+    if (!this.activeDate || this.students.length === 0) return;
+    for (const st of this.students) {
+      this.setStatus(this.activeDate, st.id, AttendanceStatus.ASISTIO);
+    }
+  }
+
+  markAllAbsent() {
+    if (!this.activeDate || this.students.length === 0) return;
+    for (const st of this.students) {
+      this.setStatus(this.activeDate, st.id, AttendanceStatus.FALTO);
+    }
+  }
+
+  async saveActiveDate() {
     const block = this.selectedBlock;
     if (!block) return;
-    if (this.students.length === 0 || this.weekDates.length === 0) return;
-    const datesToSave =
-      this.selectedSaveDate === this.allDatesOption
-        ? this.weekDates
-        : this.selectedSaveDate
-          ? [this.selectedSaveDate]
-          : [];
-    if (datesToSave.length === 0) return;
+    const date = String(this.activeDate ?? '').trim();
+    if (this.students.length === 0 || this.weekDates.length === 0 || !date) return;
 
     this.saving = true;
     this.error = null;
+    this.success = null;
     try {
-      for (const date of datesToSave) {
-        let session = this.sessionsByDate.get(date);
-        if (!session) {
-          const created = await firstValueFrom(
-            this.http.post<{ id: string; scheduleBlockId: string; sessionDate: string }>(
-              '/api/teacher/attendance-sessions',
-              {
-                scheduleBlockId: block.id,
-                sessionDate: date,
-              }
-            )
-          );
-          session = {
-            id: created.id,
-            scheduleBlockId: created.scheduleBlockId,
-            sessionDate: created.sessionDate,
-            courseName: block.courseName,
-            sectionCourseId: block.sectionCourseId,
-          };
-          this.sessionsByDate.set(date, session);
-          this.sessions.push(session);
-        }
-
-        await firstValueFrom(
-          this.http.put(`/api/teacher/attendance-sessions/${session.id}/records`, [
-            ...this.students.map((st) => ({
-              studentId: st.id,
-              status: this.getStatus(date, st.id),
-            })),
-          ])
+      let session = this.sessionsByDate.get(date);
+      if (!session) {
+        const created = await firstValueFrom(
+          this.http.post<{ id: string; scheduleBlockId: string; sessionDate: string }>(
+            '/api/teacher/attendance-sessions',
+            {
+              scheduleBlockId: block.id,
+              sessionDate: date,
+            }
+          )
         );
+        session = {
+          id: created.id,
+          scheduleBlockId: created.scheduleBlockId,
+          sessionDate: this.normalizeIsoDate(created.sessionDate),
+          courseName: block.courseName,
+          sectionCourseId: block.sectionCourseId,
+        };
+        this.sessionsByDate.set(date, session);
+        this.sessions.push(session);
       }
+
+      await firstValueFrom(
+        this.http.put(`/api/teacher/attendance-sessions/${session.id}/records`, [
+          ...this.students.map((st) => ({
+            studentId: st.id,
+            status: this.getStatus(date, st.id),
+          })),
+        ])
+      );
+      this.success = `Asistencia guardada para ${date}.`;
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo guardar asistencia';
     } finally {
@@ -457,5 +498,27 @@ export class TeacherSectionAttendancePage {
     const m = String(value.getMonth() + 1).padStart(2, '0');
     const d = String(value.getDate()).padStart(2, '0');
     return `${y}-${m}-${d}`;
+  }
+
+  private normalizeIsoDate(value: unknown) {
+    const text = String(value ?? '').trim();
+    if (!text) return '';
+    const direct = text.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (direct) return direct[1];
+    const parsed = new Date(text);
+    if (Number.isNaN(parsed.getTime())) return text;
+    return parsed.toISOString().slice(0, 10);
+  }
+
+  private normalizeStatus(value: unknown): AttendanceStatus {
+    const text = String(value ?? '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim()
+      .toUpperCase();
+    if (text === AttendanceStatus.ASISTIO || text === 'ASISTIO') {
+      return AttendanceStatus.ASISTIO;
+    }
+    return AttendanceStatus.FALTO;
   }
 }

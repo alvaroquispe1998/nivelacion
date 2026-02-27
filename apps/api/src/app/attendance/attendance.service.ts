@@ -6,6 +6,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { AttendanceStatus, Role } from '@uai/shared';
 import { Repository } from 'typeorm';
+import { PeriodsService } from '../periods/periods.service';
 import { ScheduleBlockEntity } from '../schedule-blocks/schedule-block.entity';
 import { UsersService } from '../users/users.service';
 import { AttendanceRecordEntity } from './attendance-record.entity';
@@ -20,7 +21,8 @@ export class AttendanceService {
     private readonly recordsRepo: Repository<AttendanceRecordEntity>,
     @InjectRepository(ScheduleBlockEntity)
     private readonly blocksRepo: Repository<ScheduleBlockEntity>,
-    private readonly usersService: UsersService
+    private readonly usersService: UsersService,
+    private readonly periodsService: PeriodsService
   ) {}
 
   async createSession(params: {
@@ -84,7 +86,7 @@ export class AttendanceService {
   }
 
   async listSessionsBySection(sectionId: string) {
-    const activePeriodId = await this.loadActivePeriodIdOrThrow();
+    const activePeriodId = await this.loadOperationalPeriodIdOrThrow();
     const rows: Array<{
       id: string;
       scheduleBlockId: string;
@@ -110,7 +112,7 @@ export class AttendanceService {
     return rows.map((row) => ({
       id: String(row.id),
       scheduleBlockId: String(row.scheduleBlockId),
-      sessionDate: String(row.sessionDate),
+      sessionDate: this.toIsoDateOnly(row.sessionDate),
       courseName: String(row.courseName ?? ''),
     }));
   }
@@ -197,7 +199,7 @@ export class AttendanceService {
     return sessions.map((s) => ({
       id: s.id,
       scheduleBlockId: s.scheduleBlock.id,
-      sessionDate: s.sessionDate,
+      sessionDate: this.toIsoDateOnly(s.sessionDate),
       courseName: s.scheduleBlock.courseName,
       sectionCourseId: s.scheduleBlock.sectionCourseId,
     }));
@@ -227,7 +229,7 @@ export class AttendanceService {
     if (!sectionId) {
       throw new BadRequestException('Schedule block section not found');
     }
-    const activePeriodId = await this.loadActivePeriodIdOrThrow();
+    const activePeriodId = await this.loadOperationalPeriodIdOrThrow();
     const rows: Array<{ id: string; name: string }> = await this.blocksRepo.manager.query(
       `
       SELECT sc.id AS id, c.name AS name
@@ -248,21 +250,26 @@ export class AttendanceService {
     return String(matched.id);
   }
 
-  private async loadActivePeriodIdOrThrow() {
-    const rows: Array<{ id: string }> = await this.blocksRepo.manager.query(
-      `
-      SELECT id
-      FROM periods
-      WHERE status = 'ACTIVE'
-      ORDER BY updatedAt DESC, createdAt DESC
-      LIMIT 1
-      `
-    );
-    const id = String(rows[0]?.id ?? '').trim();
-    if (!id) {
-      throw new BadRequestException('No active period configured');
+  private loadOperationalPeriodIdOrThrow() {
+    return this.periodsService.getOperationalPeriodIdOrThrow();
+  }
+
+  private toIsoDateOnly(value: unknown): string {
+    if (!value) return '';
+    if (typeof value === 'string') {
+      const text = value.trim();
+      if (!text) return '';
+      const directDate = text.match(/^(\d{4}-\d{2}-\d{2})/);
+      if (directDate) return directDate[1];
+      const parsed = new Date(text);
+      if (Number.isNaN(parsed.getTime())) return text;
+      return parsed.toISOString().slice(0, 10);
     }
-    return id;
+    if (value instanceof Date) {
+      if (Number.isNaN(value.getTime())) return '';
+      return value.toISOString().slice(0, 10);
+    }
+    return String(value);
   }
 
   private async loadStudentIdsBySectionCourse(params: {

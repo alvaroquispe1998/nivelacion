@@ -4,6 +4,7 @@ import { Router, RouterLink } from '@angular/router';
 import { ChangeDetectorRef, Component, inject } from '@angular/core';
 import { FormBuilder, FormsModule, ReactiveFormsModule, Validators } from '@angular/forms';
 import { WorkflowStateService } from '../core/workflow/workflow-state.service';
+import { AdminPeriodContextService } from '../core/workflow/admin-period-context.service';
 import type {
   LevelingConfig,
   LevelingManualSectionCourseResult,
@@ -13,7 +14,7 @@ import type {
   LevelingRunDetailsResponse,
   LevelingRunSectionView,
 } from '@uai/shared';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, skip, Subscription } from 'rxjs';
 
 interface CourseColumn {
   key: string;
@@ -103,6 +104,53 @@ const PREFERRED_COURSE_ORDER = [
           <div class="mt-2 text-xs text-slate-600" *ngIf="selectedFileName">
             Archivo: <b>{{ selectedFileName }}</b>
           </div>
+          <div class="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <label class="flex items-center gap-2 text-xs font-semibold text-slate-800">
+              <input
+                type="checkbox"
+                class="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-500"
+                [(ngModel)]="includeWelcomeCourse"
+                [ngModelOptions]="{ standalone: true }"
+                (ngModelChange)="onWelcomeToggleChanged()"
+              />
+              Incluir curso de bienvenida para todos los ingresantes
+            </label>
+            <label *ngIf="includeWelcomeCourse" class="mt-2 block text-xs text-slate-700">
+              Nombre del curso de bienvenida
+              <input
+                type="text"
+                class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+                placeholder="Ej: BIENVENIDA UAI"
+                [(ngModel)]="welcomeCourseName"
+                [ngModelOptions]="{ standalone: true }"
+              />
+            </label>
+            <label *ngIf="includeWelcomeCourse" class="mt-2 block text-xs text-slate-700">
+              Modo de grupos de bienvenida
+              <select
+                class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+                [(ngModel)]="welcomeGroupingMode"
+                [ngModelOptions]="{ standalone: true }"
+                (ngModelChange)="onWelcomeGroupingModeChanged()"
+              >
+                <option value="BY_SIZE">Por tamaño de grupo</option>
+                <option value="SINGLE_GROUP">Grupo único</option>
+              </select>
+            </label>
+            <label
+              *ngIf="includeWelcomeCourse && welcomeGroupingMode === 'BY_SIZE'"
+              class="mt-2 block text-xs text-slate-700"
+            >
+              Tamaño de grupo bienvenida
+              <input
+                type="number"
+                min="1"
+                class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+                [(ngModel)]="welcomeGroupSize"
+                [ngModelOptions]="{ standalone: true }"
+              />
+            </label>
+          </div>
 
           <div
             *ngIf="sectionsDirty"
@@ -159,6 +207,24 @@ const PREFERRED_COURSE_ORDER = [
             <div class="rounded-xl bg-slate-50 p-3">
               <div class="text-xs text-slate-600">Secciones generadas</div>
               <div class="text-lg font-semibold">{{ result.sections.length }}</div>
+            </div>
+          </div>
+          <div class="grid gap-2 sm:grid-cols-4">
+            <div class="rounded-xl bg-slate-50 p-3">
+              <div class="text-xs text-slate-600">Total procesadas</div>
+              <div class="text-lg font-semibold">{{ result.totalRowsProcessed ?? result.inputSummary.rowsRead }}</div>
+            </div>
+            <div class="rounded-xl bg-slate-50 p-3">
+              <div class="text-xs text-slate-600">Elegibles nivelacion</div>
+              <div class="text-lg font-semibold">{{ result.levelingEligibleCount ?? result.inputSummary.eligibleStudents }}</div>
+            </div>
+            <div class="rounded-xl bg-slate-50 p-3">
+              <div class="text-xs text-slate-600">Demandas nivelacion</div>
+              <div class="text-lg font-semibold">{{ result.levelingDemandCount ?? 0 }}</div>
+            </div>
+            <div class="rounded-xl bg-slate-50 p-3">
+              <div class="text-xs text-slate-600">Demandas bienvenida</div>
+              <div class="text-lg font-semibold">{{ result.welcomeDemandCount ?? 0 }}</div>
             </div>
           </div>
 
@@ -373,7 +439,7 @@ const PREFERRED_COURSE_ORDER = [
               <tr>
                 <th class="border border-slate-300 px-3 py-2 text-left">Sede</th>
                 <th
-                  *ngFor="let c of courseColumns; trackBy: trackCourse"
+                  *ngFor="let c of courseColumnsForFaculty(fac.facultyGroup); trackBy: trackCourse"
                   class="border border-slate-300 px-3 py-2 text-left"
                 >
                   {{ c.label }}
@@ -384,7 +450,7 @@ const PREFERRED_COURSE_ORDER = [
               <tr *ngFor="let row of fac.rows; trackBy: trackCampusRow">
                 <td class="border border-slate-300 px-3 py-2 font-medium">{{ row.campusName }}</td>
                 <td
-                  *ngFor="let c of courseColumns; trackBy: trackCourse"
+                  *ngFor="let c of courseColumnsForFaculty(fac.facultyGroup); trackBy: trackCourse"
                   class="border border-slate-300 px-3 py-2 align-top"
                 >
                   <div class="flex flex-wrap gap-1">
@@ -438,7 +504,7 @@ const PREFERRED_COURSE_ORDER = [
               <tr>
                 <th class="border border-slate-300 px-3 py-2 text-left">Sede - Modalidad</th>
                 <th
-                  *ngFor="let c of courseColumns; trackBy: trackCourse"
+                  *ngFor="let c of courseColumnsForFaculty(fac.facultyGroup); trackBy: trackCourse"
                   class="border border-slate-300 px-3 py-2 text-center"
                 >
                   {{ c.label }}
@@ -450,7 +516,7 @@ const PREFERRED_COURSE_ORDER = [
               <tr *ngFor="let row of fac.rows; trackBy: trackSummaryRow">
                 <td class="border border-slate-300 px-3 py-2 font-medium">{{ row.label }}</td>
                 <td
-                  *ngFor="let c of courseColumns; trackBy: trackCourse"
+                  *ngFor="let c of courseColumnsForFaculty(fac.facultyGroup); trackBy: trackCourse"
                   class="border border-slate-300 px-3 py-2 text-center"
                 >
                   <div>{{ row.courseGroups[c.key] }}</div>
@@ -585,37 +651,23 @@ const PREFERRED_COURSE_ORDER = [
       <div class="mt-2 text-xs text-emerald-700 leading-relaxed">
         Los pasos siguientes son:
         <ol class="mt-1 list-decimal list-inside space-y-1">
-          <li>Ve a <a routerLink="/admin/sections" class="underline font-semibold cursor-pointer">Horarios y Docentes</a> para asignar horarios y docentes a cada secciÃ³n-curso.</li>
-          <li>Una vez listos todos los horarios, regresa aquÃ­ para <b>Ejecutar MatrÃ­cula</b>.</li>
+          <li>Ve a <a routerLink="/admin/sections" class="underline font-semibold cursor-pointer">Horarios y Docentes</a> para asignar horarios y docentes a cada seccion-curso.</li>
+          <li>Una vez listos todos los horarios, regresa aqui para <b>Ejecutar Matricula</b>.</li>
         </ol>
       </div>
 
       <div class="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
-        <div class="flex flex-col gap-1">
+        <div class="flex flex-col gap-1" *ngFor="let fac of runMatriculationStatus">
           <button
             class="rounded-xl px-4 py-2 text-sm font-semibold text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            [ngClass]="canMatriculateFICA ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-slate-400'"
-            [disabled]="!canMatriculateFICA || runningMatriculation"
-            (click)="matriculateRun('FICA')"
+            [ngClass]="fac.ready ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-slate-400'"
+            [disabled]="!fac.ready || runningMatriculation"
+            (click)="matriculateRun(fac.facultyGroup)"
           >
-            Matricular FICA
+            Matricular {{ fac.facultyGroup }}
           </button>
-          <div *ngIf="!canMatriculateFICA" class="text-[10px] text-red-600 font-medium">
-            Faltan horarios en FICA
-          </div>
-        </div>
-
-        <div class="flex flex-col gap-1">
-          <button
-            class="rounded-xl px-4 py-2 text-sm font-semibold text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-             [ngClass]="canMatriculateSALUD ? 'bg-pink-600 hover:bg-pink-700' : 'bg-slate-400'"
-            [disabled]="!canMatriculateSALUD || runningMatriculation"
-            (click)="matriculateRun('SALUD')"
-          >
-            Matricular SALUD
-          </button>
-          <div *ngIf="!canMatriculateSALUD" class="text-[10px] text-red-600 font-medium">
-             Faltan horarios en SALUD
+          <div *ngIf="!fac.ready" class="text-[10px] text-red-600 font-medium">
+            Faltan horarios o docentes en {{ fac.facultyGroup }}
           </div>
         </div>
       </div>
@@ -651,11 +703,17 @@ export class AdminLevelingPage {
   private readonly cdr = inject(ChangeDetectorRef);
   private readonly router = inject(Router);
   private readonly workflowState = inject(WorkflowStateService);
+  private readonly adminPeriodContext = inject(AdminPeriodContextService);
+  private periodSub?: Subscription;
 
   error: string | null = null;
   result: LevelingPlanResponse | null = null;
   selectedFile: File | null = null;
   selectedFileName: string | null = null;
+  includeWelcomeCourse = false;
+  welcomeCourseName = '';
+  welcomeGroupingMode: 'BY_SIZE' | 'SINGLE_GROUP' = 'BY_SIZE';
+  welcomeGroupSize: number | null = null;
   groupModalityOverrides: Record<string, Modality> = {};
   sectionsDirty = false;
   studentsModalSection: LevelingPlanResponse['sections'][number] | null = null;
@@ -710,7 +768,16 @@ export class AdminLevelingPage {
 
   async ngOnInit() {
     await this.loadConfig();
-    this.checkActiveRun();
+    await this.checkActiveRun();
+    this.periodSub = this.adminPeriodContext.changes$
+      .pipe(skip(1))
+      .subscribe(() => {
+        void this.handlePeriodChanged();
+      });
+  }
+
+  ngOnDestroy() {
+    this.periodSub?.unsubscribe();
   }
 
   askConfirmation(title: string, message: string, onConfirm: () => void) {
@@ -733,6 +800,56 @@ export class AdminLevelingPage {
         await this.loadRunContext(s.run.id);
       }
     } catch { }
+  }
+
+  private async handlePeriodChanged() {
+    this.resetForPeriodChange();
+    await this.loadConfig();
+    await this.checkActiveRun();
+    this.workflowState.notifyWorkflowChanged({ reason: 'period-change' });
+    this.cdr.detectChanges();
+  }
+
+  private resetForPeriodChange() {
+    this.error = null;
+    this.result = null;
+    this.selectedFile = null;
+    this.selectedFileName = null;
+    this.includeWelcomeCourse = false;
+    this.welcomeCourseName = '';
+    this.welcomeGroupingMode = 'BY_SIZE';
+    this.welcomeGroupSize = null;
+    this.groupModalityOverrides = {};
+    this.sectionsDirty = false;
+    this.studentsModalSection = null;
+    this.studentsModalStudents = [];
+    this.programCampusFilter = 'ALL';
+    this.programModalityFilter = 'ALL';
+    this.sectionFacultyFilter = 'ALL';
+    this.sectionSiteModalityFilter = 'ALL';
+    this.sectionCourseFilter = 'ALL';
+    this.lastPlanMode = null;
+    this.runId = null;
+    this.runDetails = null;
+    this.runSections = [];
+    this.runFacultyFilter = 'ALL';
+    this.runCampusFilter = 'ALL';
+    this.runConflictRows = [];
+    this.runConflictsFacultyFilter = '';
+    this.runConflictsCampusFilter = '';
+    this.runConflictLoading = false;
+    this.loadingRunSections = false;
+    this.savingCapacityBySectionId = new Set<string>();
+    this.creatingManualSectionCourse = false;
+    this.deletingManualSectionCourseId = null;
+    this.runningMatriculation = false;
+    this.matriculationResult = null;
+    this.confirmState.isOpen = false;
+    this.running = false;
+    this.manualSectionCourseForm.patchValue({
+      campusName: '',
+      courseName: '',
+    });
   }
 
   trackCourse(_: number, item: CourseColumn) {
@@ -821,6 +938,44 @@ export class AdminLevelingPage {
     return unique.map((key) => ({ key, label: key }));
   }
 
+  courseColumnsForFaculty(facultyGroup: string): CourseColumn[] {
+    const all = this.courseColumns;
+    const welcomeCourseKey = this.detectWelcomeCourseKey();
+    if (!welcomeCourseKey) return all;
+
+    const isGeneral = this.normalizeKey(facultyGroup) === 'GENERAL';
+    if (isGeneral) {
+      return all.filter((column) => this.normalizeKey(column.key) === welcomeCourseKey);
+    }
+    return all.filter((column) => this.normalizeKey(column.key) !== welcomeCourseKey);
+  }
+
+  private detectWelcomeCourseKey(): string | null {
+    const fromInput = this.normalizeKey(this.welcomeCourseName);
+    if (fromInput) return fromInput;
+    if (!this.result) return null;
+
+    const generalPlan = (this.result.groupPlan.byFaculty ?? []).find(
+      (fac) => this.normalizeKey(fac.facultyGroup) === 'GENERAL'
+    );
+    if (!generalPlan) return null;
+
+    for (const row of generalPlan.rows ?? []) {
+      const courseEntries = Object.entries(row.courses ?? {});
+      for (const [courseName, groups] of courseEntries) {
+        if (Array.isArray(groups) && groups.length > 0) {
+          const key = this.normalizeKey(courseName);
+          if (key) return key;
+        }
+      }
+    }
+    return null;
+  }
+
+  private normalizeKey(value: string | null | undefined): string {
+    return String(value ?? '').trim().toUpperCase();
+  }
+
   get sectionFacultyOptions() {
     if (!this.result) return [] as string[];
     return Array.from(
@@ -841,7 +996,7 @@ export class AdminLevelingPage {
   get programRows() {
     if (!this.result) return [] as Array<{
       careerName: string;
-      facultyGroup: 'FICA' | 'SALUD';
+      facultyGroup: string;
       needsByCourse: Record<string, number>;
       totalNeeds: number;
     }>;
@@ -858,7 +1013,7 @@ export class AdminLevelingPage {
       string,
       {
         careerName: string;
-        facultyGroup: 'FICA' | 'SALUD';
+        facultyGroup: string;
         needsByCourse: Record<string, number>;
         totalNeeds: number;
       }
@@ -1057,6 +1212,37 @@ export class AdminLevelingPage {
     this.sectionCourseFilter = 'ALL';
   }
 
+  onWelcomeToggleChanged() {
+    if (!this.includeWelcomeCourse) {
+      this.welcomeCourseName = '';
+      this.welcomeGroupingMode = 'BY_SIZE';
+      this.welcomeGroupSize = null;
+      return;
+    }
+    if (
+      !Number.isFinite(Number(this.welcomeGroupSize)) ||
+      Number(this.welcomeGroupSize) <= 0
+    ) {
+      const fallback = Number(this.configForm.getRawValue().initialCapacity ?? 45);
+      this.welcomeGroupSize = Math.max(1, fallback);
+    }
+  }
+
+  onWelcomeGroupingModeChanged() {
+    if (!this.includeWelcomeCourse) return;
+    if (this.welcomeGroupingMode === 'BY_SIZE') {
+      if (
+        !Number.isFinite(Number(this.welcomeGroupSize)) ||
+        Number(this.welcomeGroupSize) <= 0
+      ) {
+        const fallback = Number(this.configForm.getRawValue().initialCapacity ?? 45);
+        this.welcomeGroupSize = Math.max(1, fallback);
+      }
+      return;
+    }
+    this.welcomeGroupSize = null;
+  }
+
   openStudentsModal(
     section: LevelingPlanResponse['sections'][number],
     students?: LevelingPlanResponse['sections'][number]['students']
@@ -1103,6 +1289,12 @@ export class AdminLevelingPage {
         initialCapacity: cfg.initialCapacity,
         maxExtraCapacity: cfg.maxExtraCapacity,
       });
+      if (
+        !Number.isFinite(Number(this.welcomeGroupSize)) ||
+        Number(this.welcomeGroupSize) <= 0
+      ) {
+        this.welcomeGroupSize = Number(cfg.initialCapacity ?? 45);
+      }
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo cargar configuracion';
     } finally {
@@ -1176,6 +1368,28 @@ export class AdminLevelingPage {
       formData.append('maxExtraCapacity', String(Number(value.maxExtraCapacity)));
       formData.append('apply', apply ? 'true' : 'false');
       formData.append('mode', mode);
+      formData.append('includeWelcomeCourse', this.includeWelcomeCourse ? 'true' : 'false');
+      if (this.includeWelcomeCourse) {
+        const name = String(this.welcomeCourseName ?? '').trim();
+        if (!name) {
+          this.error = 'Debes ingresar el nombre del curso de bienvenida.';
+          this.running = false;
+          this.cdr.detectChanges();
+          return;
+        }
+        formData.append('welcomeCourseName', name);
+        formData.append('welcomeGroupingMode', this.welcomeGroupingMode);
+        if (this.welcomeGroupingMode === 'BY_SIZE') {
+          const size = Math.floor(Number(this.welcomeGroupSize ?? 0));
+          if (!Number.isFinite(size) || size <= 0) {
+            this.error = 'Debes ingresar un tamaño de grupo válido para Bienvenida.';
+            this.running = false;
+            this.cdr.detectChanges();
+            return;
+          }
+          formData.append('welcomeGroupSize', String(size));
+        }
+      }
 
       const overrideKeys = Object.keys(this.groupModalityOverrides);
       if (overrideKeys.length > 0) {
@@ -1221,8 +1435,7 @@ export class AdminLevelingPage {
   }
 
   private async syncWorkflowMenuAfterApply() {
-    this.workflowState.notifyWorkflowChanged();
-    let synced = false;
+    this.workflowState.notifyWorkflowChanged({ reason: 'run-applied' });
     for (let attempt = 0; attempt < 4; attempt += 1) {
       try {
         const summary = await firstValueFrom(
@@ -1230,19 +1443,16 @@ export class AdminLevelingPage {
         );
         const hasActivePeriod = Boolean(summary?.activePeriod);
         const hasRun = Boolean(summary?.run);
-        this.workflowState.notifyWorkflowChanged();
         if (hasActivePeriod && hasRun) {
-          synced = true;
-          break;
+          this.workflowState.notifyWorkflowChanged({ reason: 'run-applied' });
+          return;
         }
       } catch {
         // ignore transient errors and continue retries
       }
       await this.sleep(450);
     }
-    if (!synced) {
-      window.location.reload();
-    }
+    this.workflowState.notifyWorkflowChanged({ reason: 'run-applied' });
   }
 
   private sleep(ms: number) {
@@ -1393,36 +1603,53 @@ export class AdminLevelingPage {
     }
   }
 
-  get canMatriculateFICA() {
-    if (!this.runId || this.runSections.length === 0) return false;
-    const ficaSections = this.runSections.filter((s) => s.facultyGroup === 'FICA');
-    if (ficaSections.length === 0) return false;
-    return ficaSections.every((s) =>
-      s.sectionCourses.every((sc) => sc.hasSchedule && Boolean(sc.hasTeacher))
+  get runMatriculationStatus() {
+    const groups = new Map<
+      string,
+      {
+        facultyGroup: string;
+        ready: boolean;
+      }
+    >();
+    for (const section of this.runSections) {
+      const facultyGroup = String(section.facultyGroup ?? '').trim();
+      if (!facultyGroup) continue;
+      if (!groups.has(facultyGroup)) {
+        groups.set(facultyGroup, { facultyGroup, ready: true });
+      }
+      const current = groups.get(facultyGroup)!;
+      const rowReady = (section.sectionCourses ?? []).every(
+        (sc) => Boolean(sc.hasSchedule) && Boolean(sc.hasTeacher)
+      );
+      current.ready = current.ready && rowReady;
+    }
+    return Array.from(groups.values()).sort((a, b) =>
+      a.facultyGroup.localeCompare(b.facultyGroup)
     );
   }
 
-  get canMatriculateSALUD() {
-    if (!this.runId || this.runSections.length === 0) return false;
-    const saludSections = this.runSections.filter((s) => s.facultyGroup === 'SALUD');
-    if (saludSections.length === 0) return false;
-    return saludSections.every((s) =>
-      s.sectionCourses.every((sc) => sc.hasSchedule && Boolean(sc.hasTeacher))
+  private canMatriculateFaculty(facultyGroup: string) {
+    const normalized = String(facultyGroup ?? '').trim();
+    if (!normalized || !this.runId || this.runSections.length === 0) return false;
+    const rows = this.runSections.filter(
+      (s) => String(s.facultyGroup ?? '').trim() === normalized
+    );
+    if (rows.length === 0) return false;
+    return rows.every((s) =>
+      (s.sectionCourses ?? []).every((sc) => Boolean(sc.hasSchedule) && Boolean(sc.hasTeacher))
     );
   }
 
   async matriculateRun(facultyGroup?: string) {
     if (!this.runId || this.runningMatriculation) return;
 
-    if (facultyGroup === 'FICA' && !this.canMatriculateFICA) return;
-    if (facultyGroup === 'SALUD' && !this.canMatriculateSALUD) return;
-    if (!facultyGroup && (!this.canMatriculateFICA || !this.canMatriculateSALUD)) return;
+    if (facultyGroup && !this.canMatriculateFaculty(facultyGroup)) return;
 
-    const label = facultyGroup ? `Matricula ${facultyGroup}` : 'Matricula COMPLETA';
+    const label = facultyGroup ? `Matricula ${facultyGroup}` : 'Matricula';
 
     this.askConfirmation(
       `Ejecutar ${label}`,
-      `Se ejecutara la matricula automatica schedule-aware para ${facultyGroup ?? 'TODAS las facultades'}. Continuar?`,
+      `Se ejecutara la matricula automatica schedule-aware para ${facultyGroup ?? 'la facultad seleccionada'}. Continuar?`,
       () => this.executeMatriculateRun(facultyGroup)
     );
   }
@@ -1440,7 +1667,7 @@ export class AdminLevelingPage {
       );
       await this.loadRunContext(this.runId);
       await this.loadRunConflicts();
-      this.workflowState.notifyWorkflowChanged();
+      this.workflowState.notifyWorkflowChanged({ reason: 'matricula-generated' });
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo matricular automaticamente';
     } finally {

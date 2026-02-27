@@ -2,12 +2,13 @@ import { CommonModule } from '@angular/common';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { ChangeDetectorRef, Component, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, skip, Subscription } from 'rxjs';
 import type {
   LevelingMatriculationPreviewResponse,
   LevelingMatriculationResult,
   LevelingRunConflictItem,
 } from '@uai/shared';
+import { AdminPeriodContextService } from '../core/workflow/admin-period-context.service';
 import { WorkflowStateService } from '../core/workflow/workflow-state.service';
 
 interface ActiveRunSummary {
@@ -36,6 +37,9 @@ interface ActiveRunSummary {
     <div *ngIf="error" class="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
       {{ error }}
     </div>
+    <div *ngIf="success" class="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+      {{ success }}
+    </div>
 
     <div *ngIf="loading" class="mt-4 rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600">
       Cargando contexto de matricula...
@@ -59,6 +63,7 @@ interface ActiveRunSummary {
           <select
             class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm"
             [(ngModel)]="selectedFaculty"
+            (ngModelChange)="onSelectedFacultyChange($event)"
             [ngModelOptions]="{ standalone: true }"
           >
             <option value="" disabled>Selecciona facultad</option>
@@ -308,11 +313,14 @@ export class AdminMatriculaPage {
   private readonly http = inject(HttpClient);
   private readonly cdr = inject(ChangeDetectorRef);
   private readonly workflowState = inject(WorkflowStateService);
+  private readonly adminPeriodContext = inject(AdminPeriodContextService);
+  private periodSub?: Subscription;
 
   loading = false;
   previewLoading = false;
   generating = false;
   error: string | null = null;
+  success: string | null = null;
 
   runId: string | null = null;
   runStatus: string | null = null;
@@ -422,7 +430,37 @@ export class AdminMatriculaPage {
 
 
   async ngOnInit() {
+    this.periodSub = this.adminPeriodContext.changes$
+      .pipe(skip(1))
+      .subscribe(() => {
+        void this.handlePeriodChanged();
+      });
     await this.loadContext();
+  }
+
+  ngOnDestroy() {
+    this.periodSub?.unsubscribe();
+  }
+
+  private async handlePeriodChanged() {
+    this.resetUiStateForPeriodChange();
+    await this.loadContext();
+    this.workflowState.notifyWorkflowChanged({ reason: 'period-change' });
+  }
+
+  private resetUiStateForPeriodChange() {
+    this.error = null;
+    this.success = null;
+    this.preview = null;
+    this.selectedFaculty = '';
+    this.generateConfirmOpen = false;
+    this.closeStudentsModal();
+  }
+
+  onSelectedFacultyChange(value: string) {
+    this.selectedFaculty = String(value ?? '').trim();
+    this.success = null;
+    this.error = null;
   }
 
 
@@ -517,6 +555,7 @@ export class AdminMatriculaPage {
     this.loading = true;
     this.previewLoading = false;
     this.error = null;
+    this.success = null;
     try {
       const summary = await firstValueFrom(
         this.http.get<ActiveRunSummary>('/api/admin/leveling/active-run-summary')
@@ -561,6 +600,7 @@ export class AdminMatriculaPage {
 
   async previewMatriculation() {
     if (!this.runId || !this.selectedFaculty) return;
+    this.success = null;
     if (
       !this.matriculableFaculties.some((row) => row.facultyGroup === this.selectedFaculty)
     ) {
@@ -595,6 +635,7 @@ export class AdminMatriculaPage {
 
     this.generating = true;
     this.error = null;
+    this.success = null;
     try {
       const result = await firstValueFrom(
         this.http.post<LevelingMatriculationResult>(
@@ -604,7 +645,11 @@ export class AdminMatriculaPage {
       );
       this.runStatus = result.status;
       await this.previewMatriculation();
-      this.workflowState.notifyWorkflowChanged();
+      const assigned = Math.max(0, Number(result.assignedCount ?? 0));
+      const unassigned = Array.isArray(result.unassigned) ? result.unassigned.length : 0;
+      const statusLabel = this.runStatusLabel(result.status);
+      this.success = `Matricula generada para ${this.selectedFaculty}. Asignados: ${assigned}. No asignados: ${unassigned}. Estado: ${statusLabel}.`;
+      this.workflowState.notifyWorkflowChanged({ reason: 'matricula-generated' });
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo generar la matricula';
     } finally {

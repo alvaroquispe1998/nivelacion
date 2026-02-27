@@ -48,6 +48,12 @@ export class ScheduleBlockEntity {
   @Column({ type: 'varchar', length: 200, nullable: true })
   location!: string | null;
 
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  referenceModality!: string | null;
+
+  @Column({ type: 'varchar', length: 150, nullable: true })
+  referenceClassroom!: string | null;
+
   @CreateDateColumn()
   createdAt!: Date;
 

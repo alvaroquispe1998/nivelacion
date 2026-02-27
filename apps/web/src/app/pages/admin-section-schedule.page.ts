@@ -1,10 +1,10 @@
 import { CommonModule } from '@angular/common';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpParams } from '@angular/common/http';
 import { ChangeDetectorRef, Component, inject } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute } from '@angular/router';
-import type { AdminScheduleBlock } from '@uai/shared';
-import { combineLatest, firstValueFrom } from 'rxjs';
+import type { AdminScheduleBlock, AdminSection } from '@uai/shared';
+import { combineLatest, firstValueFrom, skip } from 'rxjs';
 import type { Subscription } from 'rxjs';
 import { AdminPeriodContextService } from '../core/workflow/admin-period-context.service';
 import { DAYS } from '../shared/days';
@@ -16,6 +16,20 @@ interface ActivePeriod {
   name: string;
   startsAt?: string | null;
   endsAt?: string | null;
+}
+
+interface CourseReferenceDefaults {
+  referenceModality: string;
+  referenceClassroom: string;
+}
+
+interface BulkApplyFromMotherResponse {
+  motherSectionCourseId: string;
+  updatedCount?: number;
+  updatedSections?: number;
+  removedBlocks?: number;
+  createdBlocks?: number;
+  skipped?: Array<{ sectionCourseId: string; reason: string }>;
 }
 
 const COURSE_CONTEXT_STORAGE_KEY = 'admin.sections.selectedCourseName';
@@ -44,6 +58,9 @@ const COURSE_CONTEXT_STORAGE_KEY = 'admin.sections.selectedCourseName';
     <div *ngIf="error" class="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
       {{ error }}
     </div>
+    <div *ngIf="success" class="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+      {{ success }}
+    </div>
 
     <div class="mt-5 grid gap-4 xl:grid-cols-3">
       <div class="xl:col-span-2 rounded-2xl border border-slate-200 bg-white overflow-x-auto">
@@ -53,6 +70,8 @@ const COURSE_CONTEXT_STORAGE_KEY = 'admin.sections.selectedCourseName';
               <th class="px-4 py-3">Curso</th>
               <th class="px-4 py-3">Dia</th>
               <th class="px-4 py-3">Hora</th>
+              <th class="px-4 py-3">Modalidad</th>
+              <th class="px-4 py-3">Aula</th>
               <th class="px-4 py-3">Vigencia</th>
               <th class="px-4 py-3">Accion</th>
             </tr>
@@ -62,6 +81,8 @@ const COURSE_CONTEXT_STORAGE_KEY = 'admin.sections.selectedCourseName';
               <td class="px-4 py-3 font-medium">{{ b.courseName }}</td>
               <td class="px-4 py-3">{{ dayLabel(b.dayOfWeek) }}</td>
               <td class="px-4 py-3 text-slate-700">{{ b.startTime }}-{{ b.endTime }}</td>
+              <td class="px-4 py-3 text-slate-700">{{ blockReferenceModalityLabel(b) }}</td>
+              <td class="px-4 py-3 text-slate-700">{{ blockReferenceClassroomLabel(b) }}</td>
               <td class="px-4 py-3 text-slate-700">
                 {{ formatDateRange(b.startDate, b.endDate) }}
               </td>
@@ -83,7 +104,7 @@ const COURSE_CONTEXT_STORAGE_KEY = 'admin.sections.selectedCourseName';
               </td>
             </tr>
             <tr *ngIf="visibleBlocks.length===0" class="border-t border-slate-100">
-              <td class="px-4 py-6 text-slate-600" colspan="5">Sin bloques</td>
+              <td class="px-4 py-6 text-slate-600" colspan="7">Sin bloques</td>
             </tr>
           </tbody>
         </table>
@@ -135,6 +156,51 @@ const COURSE_CONTEXT_STORAGE_KEY = 'admin.sections.selectedCourseName';
             </div>
           </div>
           <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <div>
+              <div class="mb-1 text-xs text-slate-500">Modalidad</div>
+              <select
+                class="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+                formControlName="referenceModality"
+              >
+                <option value="PRESENCIAL">PRESENCIAL</option>
+                <option value="VIRTUAL">VIRTUAL</option>
+              </select>
+            </div>
+            <div>
+              <div class="mb-1 text-xs text-slate-500">Aula</div>
+              <input
+                class="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+                formControlName="referenceClassroom"
+                placeholder="Sin aula"
+              />
+            </div>
+          </div>
+          <label
+            *ngIf="canApplyWholeCourse"
+            class="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700"
+          >
+            <input
+              type="checkbox"
+              formControlName="applyToWholeCourse"
+              class="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-500"
+            />
+            Horario para todo el curso (todas las secciones)
+          </label>
+          <label
+            *ngIf="canApplyWholeCourse && form.value.applyToWholeCourse"
+            class="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700"
+          >
+            <input
+              type="checkbox"
+              formControlName="applyTeacherToWholeCourse"
+              class="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-500"
+            />
+            Aplicar tambien el docente de seccion madre a todo el curso
+          </label>
+          <div *ngIf="showMotherOnlyInfo" class="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            La sincronizacion masiva se habilita solo cuando editas desde la seccion madre del curso.
+          </div>
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <button
               class="w-full rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
               [disabled]="form.invalid || loading"
@@ -172,14 +238,24 @@ export class AdminSectionSchedulePage {
   readonly days = DAYS;
   sectionId = '';
   private routeSub?: Subscription;
+  private periodSub?: Subscription;
 
   blocks: AdminScheduleBlock[] = [];
   error: string | null = null;
+  success: string | null = null;
   loading = false;
   selectedCourseName = '';
   contextCourseName = '';
+  scopeFacultyGroup = '';
+  scopeCampusName = '';
+  scopeCourseName = '';
+  isMotherSection = false;
   editingBlockId: string | null = null;
   period: ActivePeriod | null = null;
+  referenceDefaults: CourseReferenceDefaults = {
+    referenceModality: 'PRESENCIAL',
+    referenceClassroom: 'Sin aula',
+  };
 
   get visibleBlocks() {
     const course = this.selectedCourseName.trim();
@@ -195,7 +271,35 @@ export class AdminSectionSchedulePage {
     endTime: ['10:00', [Validators.required]],
     startDate: [''],
     endDate: [''],
+    referenceModality: ['PRESENCIAL', [Validators.required]],
+    referenceClassroom: ['Sin aula'],
+    applyToWholeCourse: [false],
+    applyTeacherToWholeCourse: [false],
   });
+
+  get isWelcomeScope() {
+    return this.scopeKey(this.scopeFacultyGroup) === 'GENERAL';
+  }
+
+  get hasScopeFilters() {
+    return (
+      Boolean(String(this.scopeFacultyGroup ?? '').trim()) &&
+      Boolean(String(this.scopeCampusName ?? '').trim()) &&
+      Boolean(String(this.effectiveScopeCourseName).trim())
+    );
+  }
+
+  get canApplyWholeCourse() {
+    return this.isWelcomeScope && this.isMotherSection && this.hasScopeFilters;
+  }
+
+  get showMotherOnlyInfo() {
+    return this.isWelcomeScope && this.hasScopeFilters && !this.isMotherSection;
+  }
+
+  private get effectiveScopeCourseName() {
+    return String(this.scopeCourseName ?? '').trim() || String(this.selectedCourseName ?? '').trim();
+  }
 
   async ngOnInit() {
     this.routeSub = combineLatest([this.route.paramMap, this.route.queryParamMap]).subscribe(
@@ -203,13 +307,31 @@ export class AdminSectionSchedulePage {
         this.sectionId = String(params.get('id') ?? '');
         this.contextCourseName =
           String(queryParams.get('courseName') ?? '').trim() || this.readStoredCourseName();
+        this.scopeFacultyGroup = String(queryParams.get('facultyGroup') ?? '').trim();
+        this.scopeCampusName = String(queryParams.get('campusName') ?? '').trim();
+        this.scopeCourseName = String(queryParams.get('courseName') ?? '').trim();
         void this.load();
       }
     );
+    this.periodSub = this.adminPeriodContext.changes$
+      .pipe(skip(1))
+      .subscribe(() => {
+        void this.handlePeriodChanged();
+      });
   }
 
   ngOnDestroy() {
     this.routeSub?.unsubscribe();
+    this.periodSub?.unsubscribe();
+  }
+
+  private async handlePeriodChanged() {
+    this.error = null;
+    this.success = null;
+    this.cancelEdit(false);
+    await this.load();
+    this.workflowState.notifyWorkflowChanged({ reason: 'period-change' });
+    this.cdr.detectChanges();
   }
 
   dayLabel(dow: number) {
@@ -227,8 +349,22 @@ export class AdminSectionSchedulePage {
     return 'Sin rango';
   }
 
+  blockReferenceModalityLabel(block: AdminScheduleBlock) {
+    const modality = String(block.referenceModality ?? '').trim().toUpperCase();
+    if (!modality) return '-';
+    return modality;
+  }
+
+  blockReferenceClassroomLabel(block: AdminScheduleBlock) {
+    const modality = this.blockReferenceModalityLabel(block);
+    if (modality === 'VIRTUAL') return 'Sin aula';
+    const classroom = String(block.referenceClassroom ?? '').trim();
+    return classroom || 'Sin aula';
+  }
+
   async load() {
     this.error = null;
+    this.success = null;
     try {
       const [allCourses, blocks, period] = await Promise.all([
         firstValueFrom(
@@ -248,10 +384,16 @@ export class AdminSectionSchedulePage {
       this.blocks = blocks;
       const selectedCourseName = this.resolveCourseContext(allCourses);
       this.selectedCourseName = selectedCourseName;
+      this.referenceDefaults = await this.loadReferenceDefaults(selectedCourseName);
+      await this.refreshMotherSectionContext();
       this.form.patchValue({
         courseName: selectedCourseName,
         startDate: this.form.get('startDate')?.value || this.period?.startsAt || '',
         endDate: this.form.get('endDate')?.value || this.period?.endsAt || '',
+        referenceModality: this.referenceDefaults.referenceModality,
+        referenceClassroom: this.referenceDefaults.referenceClassroom,
+        applyToWholeCourse: false,
+        applyTeacherToWholeCourse: false,
       });
       if (selectedCourseName) {
         this.saveStoredCourseName(selectedCourseName);
@@ -305,6 +447,7 @@ export class AdminSectionSchedulePage {
 
   startEdit(block: AdminScheduleBlock) {
     this.error = null;
+    this.success = null;
     this.editingBlockId = block.id;
     this.form.patchValue({
       courseName: block.courseName,
@@ -313,6 +456,12 @@ export class AdminSectionSchedulePage {
       endTime: String(block.endTime ?? ''),
       startDate: String(block.startDate ?? '').trim(),
       endDate: String(block.endDate ?? '').trim(),
+      referenceModality:
+        String(block.referenceModality ?? '').trim().toUpperCase() || 'PRESENCIAL',
+      referenceClassroom:
+        String(block.referenceClassroom ?? '').trim() || 'Sin aula',
+      applyToWholeCourse: false,
+      applyTeacherToWholeCourse: false,
     });
     this.cdr.detectChanges();
   }
@@ -326,6 +475,10 @@ export class AdminSectionSchedulePage {
       endTime: '10:00',
       startDate: this.period?.startsAt || '',
       endDate: this.period?.endsAt || '',
+      referenceModality: this.referenceDefaults.referenceModality,
+      referenceClassroom: this.referenceDefaults.referenceClassroom,
+      applyToWholeCourse: false,
+      applyTeacherToWholeCourse: false,
     });
     if (detectChanges) {
       this.cdr.detectChanges();
@@ -335,6 +488,7 @@ export class AdminSectionSchedulePage {
   async create() {
     this.loading = true;
     this.error = null;
+    this.success = null;
     try {
       const v = this.form.value;
       await firstValueFrom(
@@ -346,11 +500,20 @@ export class AdminSectionSchedulePage {
           endTime: String(v.endTime ?? ''),
           startDate: String(v.startDate ?? '').trim() || null,
           endDate: String(v.endDate ?? '').trim() || null,
+          referenceModality:
+            String(v.referenceModality ?? '').trim().toUpperCase() || null,
+          referenceClassroom: String(v.referenceClassroom ?? '').trim() || null,
+          applyToWholeCourse: Boolean(v.applyToWholeCourse),
+          applyTeacherToWholeCourse: Boolean(v.applyTeacherToWholeCourse),
+          scopeFacultyGroup: this.scopeFacultyGroup || null,
+          scopeCampusName: this.scopeCampusName || null,
+          scopeCourseName: this.effectiveScopeCourseName || null,
         })
       );
+      await this.applyWholeCourseFromMotherIfNeeded();
       this.cancelEdit(false);
       await this.load();
-      this.workflowState.notifyWorkflowChanged();
+      this.workflowState.notifyWorkflowChanged({ reason: 'schedule-saved' });
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo crear bloque';
     } finally {
@@ -362,6 +525,7 @@ export class AdminSectionSchedulePage {
   async update(id: string) {
     this.loading = true;
     this.error = null;
+    this.success = null;
     try {
       const v = this.form.value;
       await firstValueFrom(
@@ -372,11 +536,20 @@ export class AdminSectionSchedulePage {
           endTime: String(v.endTime ?? ''),
           startDate: String(v.startDate ?? '').trim() || null,
           endDate: String(v.endDate ?? '').trim() || null,
+          referenceModality:
+            String(v.referenceModality ?? '').trim().toUpperCase() || null,
+          referenceClassroom: String(v.referenceClassroom ?? '').trim() || null,
+          applyToWholeCourse: Boolean(v.applyToWholeCourse),
+          applyTeacherToWholeCourse: Boolean(v.applyTeacherToWholeCourse),
+          scopeFacultyGroup: this.scopeFacultyGroup || null,
+          scopeCampusName: this.scopeCampusName || null,
+          scopeCourseName: this.effectiveScopeCourseName || null,
         })
       );
+      await this.applyWholeCourseFromMotherIfNeeded();
       this.cancelEdit(false);
       await this.load();
-      this.workflowState.notifyWorkflowChanged();
+      this.workflowState.notifyWorkflowChanged({ reason: 'schedule-saved' });
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo actualizar bloque';
     } finally {
@@ -387,14 +560,92 @@ export class AdminSectionSchedulePage {
 
   async remove(id: string) {
     this.error = null;
+    this.success = null;
     try {
       await firstValueFrom(this.http.delete(`/api/admin/schedule-blocks/${id}`));
       await this.load();
-      this.workflowState.notifyWorkflowChanged();
+      this.workflowState.notifyWorkflowChanged({ reason: 'schedule-saved' });
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo eliminar bloque';
     } finally {
       this.cdr.detectChanges();
+    }
+  }
+
+  private async refreshMotherSectionContext() {
+    this.isMotherSection = false;
+    if (!this.hasScopeFilters) return;
+    try {
+      const params = new HttpParams()
+        .set('facultyGroup', this.scopeFacultyGroup)
+        .set('campusName', this.scopeCampusName)
+        .set('courseName', this.effectiveScopeCourseName);
+      const rows = await firstValueFrom(
+        this.http.get<AdminSection[]>('/api/admin/sections', { params })
+      );
+      const mother = rows.find((row) => Boolean(row.isMotherSection)) ?? null;
+      this.isMotherSection = Boolean(mother && String(mother.id ?? '').trim() === this.sectionId);
+    } catch {
+      this.isMotherSection = false;
+    }
+  }
+
+  private async applyWholeCourseFromMotherIfNeeded() {
+    const shouldApply = Boolean(this.form.value.applyToWholeCourse);
+    const shouldApplyTeacher = Boolean(this.form.value.applyTeacherToWholeCourse);
+    if (!shouldApply) return;
+    if (!this.canApplyWholeCourse) {
+      throw new BadRequestLikeError(
+        'La sincronizacion masiva solo se permite desde la seccion madre de Bienvenida.'
+      );
+    }
+
+    const scheduleResult = await firstValueFrom(
+      this.http.post<BulkApplyFromMotherResponse>(
+        '/api/admin/sections/course-schedule/bulk-apply-from-mother',
+        {
+          facultyGroup: this.scopeFacultyGroup,
+          campusName: this.scopeCampusName,
+          courseName: this.effectiveScopeCourseName,
+        }
+      )
+    );
+
+    let teacherResult: BulkApplyFromMotherResponse | null = null;
+    if (shouldApplyTeacher) {
+      teacherResult = await firstValueFrom(
+        this.http.post<BulkApplyFromMotherResponse>(
+          '/api/admin/sections/course-teacher/bulk-apply-from-mother',
+          {
+            facultyGroup: this.scopeFacultyGroup,
+            campusName: this.scopeCampusName,
+            courseName: this.effectiveScopeCourseName,
+          }
+        )
+      );
+    }
+
+    const scheduleUpdated = Number(scheduleResult.updatedSections ?? 0);
+    const scheduleSkipped = Array.isArray(scheduleResult.skipped)
+      ? scheduleResult.skipped.length
+      : 0;
+    const teacherUpdated = Number(teacherResult?.updatedCount ?? 0);
+    const teacherSkipped = Array.isArray(teacherResult?.skipped)
+      ? teacherResult!.skipped!.length
+      : 0;
+
+    const messageParts = [
+      `Horario aplicado a ${scheduleUpdated} seccion(es)`,
+      scheduleSkipped > 0 ? `omitidas ${scheduleSkipped}` : '',
+      shouldApplyTeacher
+        ? `docente aplicado a ${teacherUpdated} seccion(es)${
+            teacherSkipped > 0 ? `, omitidas ${teacherSkipped}` : ''
+          }`
+        : '',
+    ].filter(Boolean);
+    this.success = `${messageParts.join(' | ')}.`;
+    if (shouldApplyTeacher) {
+      this.workflowState.notifyWorkflowChanged({ reason: 'teacher-saved' });
     }
   }
 
@@ -424,4 +675,50 @@ export class AdminSectionSchedulePage {
     if (!value) return;
     window.localStorage.setItem(COURSE_CONTEXT_STORAGE_KEY, value);
   }
+
+  private async loadReferenceDefaults(
+    courseName: string
+  ): Promise<CourseReferenceDefaults> {
+    const normalizedCourseName = String(courseName ?? '').trim();
+    if (!normalizedCourseName || !this.sectionId) {
+      return {
+        referenceModality: 'PRESENCIAL',
+        referenceClassroom: 'Sin aula',
+      };
+    }
+    try {
+      const context = await firstValueFrom(
+        this.http.get<{
+          referenceModality?: string | null;
+          referenceClassroom?: string | null;
+        }>(
+          `/api/admin/sections/${encodeURIComponent(
+            this.sectionId
+          )}/course-capacity?courseName=${encodeURIComponent(normalizedCourseName)}`
+        )
+      );
+      const referenceModality = String(context?.referenceModality ?? '')
+        .trim()
+        .toUpperCase();
+      return {
+        referenceModality:
+          referenceModality === 'VIRTUAL' ? 'VIRTUAL' : 'PRESENCIAL',
+        referenceClassroom:
+          String(context?.referenceClassroom ?? '').trim() || 'Sin aula',
+      };
+    } catch {
+      return {
+        referenceModality: 'PRESENCIAL',
+        referenceClassroom: 'Sin aula',
+      };
+    }
+  }
+
+  private scopeKey(value: string | null | undefined) {
+    return String(value ?? '')
+      .trim()
+      .toUpperCase();
+  }
 }
+
+class BadRequestLikeError extends Error {}

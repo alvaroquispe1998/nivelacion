@@ -32,6 +32,7 @@ export class AdminPeriodContextService {
 
   setSelectedPeriod(value: AdminPeriodContextValue | null) {
     if (!value) {
+      if (!this.selectedSubject.value) return;
       this.selectedSubject.next(null);
       this.removeStored();
       return;
@@ -44,6 +45,10 @@ export class AdminPeriodContextService {
       endsAt: String(value.endsAt ?? '').trim() || null,
     };
     if (!normalized.id) return;
+    if (this.isSameContext(this.selectedSubject.value, normalized)) {
+      this.writeStored(normalized);
+      return;
+    }
     this.selectedSubject.next(normalized);
     this.writeStored(normalized);
   }
@@ -114,5 +119,22 @@ export class AdminPeriodContextService {
   private removeStored() {
     if (typeof window === 'undefined') return;
     window.localStorage.removeItem(ADMIN_PERIOD_CONTEXT_STORAGE_KEY);
+  }
+
+  private isSameContext(
+    left: AdminPeriodContextValue | null,
+    right: AdminPeriodContextValue | null
+  ) {
+    if (!left && !right) return true;
+    if (!left || !right) return false;
+    return (
+      String(left.id ?? '').trim() === String(right.id ?? '').trim() &&
+      String(left.code ?? '').trim() === String(right.code ?? '').trim() &&
+      String(left.name ?? '').trim() === String(right.name ?? '').trim() &&
+      (String(left.startsAt ?? '').trim() || null) ===
+        (String(right.startsAt ?? '').trim() || null) &&
+      (String(left.endsAt ?? '').trim() || null) ===
+        (String(right.endsAt ?? '').trim() || null)
+    );
   }
 }

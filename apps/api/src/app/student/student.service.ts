@@ -27,6 +27,8 @@ export class StudentService {
       classroomName: string | null;
       zoomUrl: string | null;
       location: string | null;
+      referenceModality: string | null;
+      referenceClassroom: string | null;
     }> = await this.blocksRepo.manager.query(
       `
       SELECT
@@ -40,7 +42,9 @@ export class StudentService {
         cl.code AS classroomCode,
         cl.name AS classroomName,
         sb.zoomUrl AS zoomUrl,
-        sb.location AS location
+        sb.location AS location,
+        sb.referenceModality AS referenceModality,
+        sb.referenceClassroom AS referenceClassroom
       FROM section_student_courses ssc
       INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
       INNER JOIN sections s ON s.id = sc.sectionId
@@ -62,7 +66,9 @@ export class StudentService {
         cl.code,
         cl.name,
         sb.zoomUrl,
-        sb.location
+        sb.location,
+        sb.referenceModality,
+        sb.referenceClassroom
       ORDER BY sb.dayOfWeek ASC, sb.startTime ASC
       `,
       [studentId, activePeriodId]
@@ -80,6 +86,12 @@ export class StudentService {
       classroomName: row.classroomName ? String(row.classroomName) : null,
       zoomUrl: row.zoomUrl ? String(row.zoomUrl) : null,
       location: row.location ? String(row.location) : null,
+      referenceModality: row.referenceModality
+        ? String(row.referenceModality)
+        : null,
+      referenceClassroom: row.referenceClassroom
+        ? String(row.referenceClassroom)
+        : null,
     }));
   }
 

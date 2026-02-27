@@ -12,7 +12,8 @@ import type {
   AdminSection,
   AdminTeacher,
 } from '@uai/shared';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, skip, Subscription } from 'rxjs';
+import { AdminPeriodContextService } from '../core/workflow/admin-period-context.service';
 import { WorkflowStateService } from '../core/workflow/workflow-state.service';
 
 const COURSE_CONTEXT_STORAGE_KEY = 'admin.sections.selectedCourseName';
@@ -27,6 +28,21 @@ interface SectionStudentRow {
   fullName: string;
   careerName?: string | null;
   sectionCourseId?: string;
+}
+
+interface BulkApplyFromMotherResponse {
+  motherSectionCourseId: string;
+  updatedCount?: number;
+  updatedSections?: number;
+  removedBlocks?: number;
+  createdBlocks?: number;
+  skipped?: Array<{ sectionCourseId: string; reason: string }>;
+}
+
+interface ConfirmDialogOptions {
+  title: string;
+  message: string;
+  confirmLabel: string;
 }
 
 @Component({
@@ -52,6 +68,9 @@ interface SectionStudentRow {
 
     <div *ngIf="error" class="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
       {{ error }}
+    </div>
+    <div *ngIf="success" class="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+      {{ success }}
     </div>
 
     <div class="mt-5 rounded-2xl border border-slate-200 bg-white p-4">
@@ -146,6 +165,27 @@ interface SectionStudentRow {
           Faltan {{ courseProgress.brecha }} cupos por planificar.
         </span>
       </div>
+      <div
+        *ngIf="hasMandatoryFilters && viewMode === 'schedule'"
+        class="mt-3 flex flex-wrap gap-2"
+      >
+        <button
+          type="button"
+          class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50 disabled:opacity-60"
+          [disabled]="loadingBulkTeacher || loadingBulkSchedule || !canRunBulkByMother"
+          (click)="applyTeacherToAllFromMother()"
+        >
+          {{ loadingBulkTeacher ? 'Aplicando docente...' : 'Aplicar docente para todas las secciones' }}
+        </button>
+        <button
+          type="button"
+          class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50 disabled:opacity-60"
+          [disabled]="loadingBulkTeacher || loadingBulkSchedule || !canRunBulkByMother"
+          (click)="applyScheduleToAllFromMother()"
+        >
+          {{ loadingBulkSchedule ? 'Aplicando horario...' : 'Aplicar horario para todas las secciones' }}
+        </button>
+      </div>
 
       <div class="mt-3 overflow-x-auto">
         <table class="min-w-full text-sm">
@@ -166,7 +206,17 @@ interface SectionStudentRow {
           </thead>
           <tbody>
             <tr *ngFor="let s of sections; trackBy: trackSection" class="border-t border-slate-100">
-              <td class="px-4 py-3 font-semibold">{{ s.code || s.name }}</td>
+              <td class="px-4 py-3 font-semibold">
+                <div class="flex items-center gap-2">
+                  <span>{{ s.code || s.name }}</span>
+                  <span
+                    *ngIf="viewMode === 'schedule' && s.isMotherSection"
+                    class="inline-flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-700"
+                  >
+                    Seccion madre
+                  </span>
+                </div>
+              </td>
               <td class="px-4 py-3">{{ s.modality || '-' }}</td>
               <td class="px-4 py-3 text-xs">
                 <span *ngIf="isVirtualSection(s)">Virtual</span>
@@ -226,7 +276,7 @@ interface SectionStudentRow {
                   <a
                     class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
                     [routerLink]="['/admin/sections', s.id, 'schedule']"
-                    [queryParams]="courseFilter ? { courseName: courseFilter } : undefined"
+                    [queryParams]="sectionContextQueryParams()"
                     *ngIf="viewMode === 'students'"
                   >
                     Ver horario
@@ -243,7 +293,7 @@ interface SectionStudentRow {
                   <a
                     class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
                     [routerLink]="['/admin/sections', s.id, 'schedule']"
-                    [queryParams]="courseFilter ? { courseName: courseFilter } : undefined"
+                    [queryParams]="sectionContextQueryParams()"
                     *ngIf="viewMode === 'schedule'"
                   >
                     Horario
@@ -323,7 +373,7 @@ interface SectionStudentRow {
             <a
               class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
               [routerLink]="['/admin/sections', studentsModalSection.id, 'attendance']"
-              [queryParams]="modalCourseName ? { courseName: modalCourseName } : undefined"
+              [queryParams]="sectionContextQueryParams(modalCourseName)"
               (click)="closeStudentsModal()"
             >
               Ver asistencia
@@ -579,6 +629,44 @@ interface SectionStudentRow {
         </div>
       </div>
     </div>
+
+    <div
+      *ngIf="confirmDialogOpen"
+      class="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 p-4"
+      (click)="closeConfirmDialog()"
+    >
+      <div
+        class="w-full max-w-lg rounded-2xl border border-slate-200 bg-white shadow-2xl"
+        (click)="$event.stopPropagation()"
+      >
+        <div class="border-b border-slate-200 px-5 py-4">
+          <div class="text-base font-semibold text-slate-900">
+            {{ confirmDialogTitle }}
+          </div>
+          <p class="mt-2 text-sm text-slate-600">
+            {{ confirmDialogMessage }}
+          </p>
+        </div>
+        <div class="flex items-center justify-end gap-2 px-5 py-4">
+          <button
+            type="button"
+            class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            [disabled]="confirmDialogLoading"
+            (click)="closeConfirmDialog()"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            class="rounded-lg border border-slate-900 bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+            [disabled]="confirmDialogLoading"
+            (click)="submitConfirmDialog()"
+          >
+            {{ confirmDialogLoading ? 'Procesando...' : confirmDialogConfirmLabel }}
+          </button>
+        </div>
+      </div>
+    </div>
   `,
 })
 export class AdminSectionsPage {
@@ -586,6 +674,9 @@ export class AdminSectionsPage {
   private readonly cdr = inject(ChangeDetectorRef);
   private readonly route = inject(ActivatedRoute);
   private readonly workflowState = inject(WorkflowStateService);
+  private readonly adminPeriodContext = inject(AdminPeriodContextService);
+  private routeSub?: Subscription;
+  private periodSub?: Subscription;
 
   sections: AdminSection[] = [];
   teachers: AdminTeacher[] = [];
@@ -593,6 +684,7 @@ export class AdminSectionsPage {
   campuses: string[] = [];
   courses: string[] = [];
   error: string | null = null;
+  success: string | null = null;
 
   facultyFilter = '';
   campusFilter = '';
@@ -625,9 +717,34 @@ export class AdminSectionsPage {
   classroomModalClassroomId = '';
   loadingClassrooms = false;
   loadingClassroomAssign = false;
+  loadingBulkTeacher = false;
+  loadingBulkSchedule = false;
+  confirmDialogOpen = false;
+  confirmDialogTitle = '';
+  confirmDialogMessage = '';
+  confirmDialogConfirmLabel = 'Confirmar';
+  confirmDialogLoading = false;
+  private confirmDialogAction: (() => Promise<void>) | null = null;
 
   get hasMandatoryFilters() {
     return Boolean(this.facultyFilter && this.campusFilter && this.courseFilter);
+  }
+
+  get motherSection(): AdminSection | null {
+    return (
+      this.sections.find((section) => Boolean(section.isMotherSection)) ??
+      this.sections[0] ??
+      null
+    );
+  }
+
+  get canRunBulkByMother() {
+    return (
+      this.viewMode === 'schedule' &&
+      this.hasMandatoryFilters &&
+      this.sections.length > 0 &&
+      Boolean(this.motherSection)
+    );
   }
 
   get selectedReassignTarget() {
@@ -640,11 +757,68 @@ export class AdminSectionsPage {
 
   viewMode: 'schedule' | 'students' = 'schedule';
 
+  sectionContextQueryParams(courseName?: string) {
+    const resolvedCourse = String(courseName ?? this.courseFilter ?? '').trim();
+    const query: Record<string, string> = {
+      view: this.viewMode,
+    };
+    if (resolvedCourse) query['courseName'] = resolvedCourse;
+    if (String(this.facultyFilter ?? '').trim()) query['facultyGroup'] = this.facultyFilter;
+    if (String(this.campusFilter ?? '').trim()) query['campusName'] = this.campusFilter;
+    return query;
+  }
+
   async ngOnInit() {
-    this.route.queryParams.subscribe((params) => {
+    this.routeSub = this.route.queryParams.subscribe((params) => {
       this.viewMode = params['view'] === 'students' ? 'students' : 'schedule';
-      this.reloadAll();
+      const facultyFromQuery = String(params['facultyGroup'] ?? '').trim();
+      const campusFromQuery = String(params['campusName'] ?? '').trim();
+      const courseFromQuery = String(params['courseName'] ?? '').trim();
+      if (facultyFromQuery) {
+        this.facultyFilter = facultyFromQuery;
+      }
+      if (campusFromQuery) {
+        this.campusFilter = campusFromQuery;
+      }
+      if (courseFromQuery) {
+        this.courseFilter = courseFromQuery;
+      }
+      void this.reloadAll();
     });
+    this.periodSub = this.adminPeriodContext.changes$
+      .pipe(skip(1))
+      .subscribe(() => {
+        void this.handlePeriodChanged();
+      });
+  }
+
+  ngOnDestroy() {
+    this.routeSub?.unsubscribe();
+    this.periodSub?.unsubscribe();
+  }
+
+  private async handlePeriodChanged() {
+    this.resetForPeriodChange();
+    await this.reloadAll();
+    this.workflowState.notifyWorkflowChanged({ reason: 'period-change' });
+  }
+
+  private resetForPeriodChange() {
+    this.error = null;
+    this.success = null;
+    this.sections = [];
+    this.courseProgress = null;
+    this.facultyFilter = '';
+    this.campusFilter = '';
+    this.courseFilter = '';
+    this.campuses = [];
+    this.courses = [];
+    this.closeStudentsModal();
+    this.closeTeacherModal();
+    this.closeClassroomModal();
+    this.closeReassignModal();
+    this.closeConfirmDialog();
+    this.persistFilters();
   }
 
   trackSection(_: number, item: AdminSection) {
@@ -696,12 +870,14 @@ export class AdminSectionsPage {
 
   async reloadAll() {
     this.error = null;
+    this.success = null;
     this.sections = [];
     this.courseProgress = null;
     this.campuses = [];
     this.courses = [];
     this.closeStudentsModal();
     this.closeTeacherModal();
+    this.closeConfirmDialog();
     if (!this.facultyFilter && !this.campusFilter && !this.courseFilter) {
       this.restoreFiltersFromStorage();
     }
@@ -764,6 +940,7 @@ export class AdminSectionsPage {
 
   async onFacultyChange() {
     this.error = null;
+    this.success = null;
     this.sections = [];
     this.courseProgress = null;
     this.courses = [];
@@ -789,6 +966,7 @@ export class AdminSectionsPage {
 
   async onCampusChange() {
     this.error = null;
+    this.success = null;
     this.sections = [];
     this.courseProgress = null;
     this.courseFilter = '';
@@ -811,6 +989,7 @@ export class AdminSectionsPage {
   }
 
   async onCourseChange() {
+    this.success = null;
     this.persistFilters();
     this.persistSelectedCourse(this.courseFilter);
     this.closeStudentsModal();
@@ -988,7 +1167,7 @@ export class AdminSectionsPage {
         })
       );
       await this.loadSections();
-      this.workflowState.notifyWorkflowChanged();
+      this.workflowState.notifyWorkflowChanged({ reason: 'classroom-saved' });
       this.closeClassroomModal();
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo guardar aula';
@@ -1174,7 +1353,7 @@ export class AdminSectionsPage {
       );
       await this.loadSections();
       await this.reloadStudentsModalRows();
-      this.workflowState.notifyWorkflowChanged();
+      this.workflowState.notifyWorkflowChanged({ reason: 'generic' });
       this.closeReassignModal();
     } catch (e: any) {
       const message = String(e?.error?.message ?? 'No se pudo reubicar alumno');
@@ -1212,6 +1391,7 @@ export class AdminSectionsPage {
     if (!this.teacherModalSection || !this.teacherModalTeacherId || !this.courseFilter) return;
     this.loadingAssignId = this.teacherModalSection.id;
     this.error = null;
+    this.success = null;
     try {
       await firstValueFrom(
         this.http.patch(`/api/admin/sections/${this.teacherModalSection.id}/course-teacher`, {
@@ -1221,11 +1401,138 @@ export class AdminSectionsPage {
       );
       await this.loadSections();
       this.closeTeacherModal();
-      this.workflowState.notifyWorkflowChanged();
+      this.workflowState.notifyWorkflowChanged({ reason: 'teacher-saved' });
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo asignar docente';
     } finally {
       this.loadingAssignId = null;
+      this.cdr.detectChanges();
+    }
+  }
+
+  async applyTeacherToAllFromMother() {
+    if (!this.canRunBulkByMother || this.loadingBulkTeacher || !this.courseFilter) return;
+    this.openConfirmDialog(
+      {
+        title: 'Aplicar docente masivo',
+        message:
+          'Se aplicará el docente de la sección madre a todas las secciones visibles de este curso.',
+        confirmLabel: 'Aplicar docente',
+      },
+      async () => {
+        await this.executeApplyTeacherToAllFromMother();
+      }
+    );
+  }
+
+  private async executeApplyTeacherToAllFromMother() {
+    this.loadingBulkTeacher = true;
+    this.error = null;
+    this.success = null;
+    try {
+      const response = await firstValueFrom(
+        this.http.post<BulkApplyFromMotherResponse>(
+          '/api/admin/sections/course-teacher/bulk-apply-from-mother',
+          {
+            facultyGroup: this.facultyFilter,
+            campusName: this.campusFilter,
+            courseName: this.courseFilter,
+          }
+        )
+      );
+      await this.loadSections();
+      const skippedCount = Array.isArray(response.skipped)
+        ? response.skipped.length
+        : 0;
+      const suffix =
+        skippedCount > 0 ? ` Omitidos: ${skippedCount}.` : '';
+      this.success = `Docente aplicado a ${
+        Number(response.updatedCount ?? 0)
+      } seccion(es).${suffix}`;
+      this.workflowState.notifyWorkflowChanged({ reason: 'teacher-saved' });
+    } catch (e: any) {
+      this.error = e?.error?.message ?? 'No se pudo aplicar docente masivo';
+    } finally {
+      this.loadingBulkTeacher = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  async applyScheduleToAllFromMother() {
+    if (!this.canRunBulkByMother || this.loadingBulkSchedule || !this.courseFilter) return;
+    this.openConfirmDialog(
+      {
+        title: 'Aplicar horario masivo',
+        message:
+          'Se clonará el horario de la sección madre sobre todas las secciones visibles de este curso.',
+        confirmLabel: 'Aplicar horario',
+      },
+      async () => {
+        await this.executeApplyScheduleToAllFromMother();
+      }
+    );
+  }
+
+  private async executeApplyScheduleToAllFromMother() {
+    this.loadingBulkSchedule = true;
+    this.error = null;
+    this.success = null;
+    try {
+      const response = await firstValueFrom(
+        this.http.post<BulkApplyFromMotherResponse>(
+          '/api/admin/sections/course-schedule/bulk-apply-from-mother',
+          {
+            facultyGroup: this.facultyFilter,
+            campusName: this.campusFilter,
+            courseName: this.courseFilter,
+          }
+        )
+      );
+      await this.loadSections();
+      const skippedCount = Array.isArray(response.skipped)
+        ? response.skipped.length
+        : 0;
+      const suffix =
+        skippedCount > 0 ? ` Omitidos: ${skippedCount}.` : '';
+      this.success = `Horario sincronizado en ${
+        Number(response.updatedSections ?? 0)
+      } seccion(es).${suffix}`;
+      this.workflowState.notifyWorkflowChanged({ reason: 'schedule-saved' });
+    } catch (e: any) {
+      this.error = e?.error?.message ?? 'No se pudo aplicar horario masivo';
+    } finally {
+      this.loadingBulkSchedule = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  private openConfirmDialog(options: ConfirmDialogOptions, action: () => Promise<void>) {
+    this.confirmDialogTitle = options.title;
+    this.confirmDialogMessage = options.message;
+    this.confirmDialogConfirmLabel = options.confirmLabel;
+    this.confirmDialogAction = action;
+    this.confirmDialogOpen = true;
+    this.confirmDialogLoading = false;
+  }
+
+  closeConfirmDialog(force = false) {
+    if (this.confirmDialogLoading && !force) return;
+    this.confirmDialogOpen = false;
+    this.confirmDialogTitle = '';
+    this.confirmDialogMessage = '';
+    this.confirmDialogConfirmLabel = 'Confirmar';
+    this.confirmDialogAction = null;
+  }
+
+  async submitConfirmDialog() {
+    if (!this.confirmDialogAction || this.confirmDialogLoading) return;
+    this.confirmDialogLoading = true;
+    try {
+      await this.confirmDialogAction();
+      this.confirmDialogLoading = false;
+      this.closeConfirmDialog(true);
+    } finally {
+      this.confirmDialogLoading = false;
       this.cdr.detectChanges();
     }
   }

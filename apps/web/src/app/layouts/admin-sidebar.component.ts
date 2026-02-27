@@ -10,7 +10,8 @@ import {
 } from '@angular/core';
 import { NgClass, NgFor, NgIf } from '@angular/common';
 import { RouterLink, RouterLinkActive } from '@angular/router';
-import { Subscription } from 'rxjs';
+import { firstValueFrom, skip, Subscription } from 'rxjs';
+import { AdminPeriodContextService } from '../core/workflow/admin-period-context.service';
 import { WorkflowStateService } from '../core/workflow/workflow-state.service';
 
 // ─── Menu model ───────────────────────────────────────────────────────────────
@@ -494,7 +495,9 @@ export class AdminSidebarComponent implements OnInit, OnDestroy {
 
   private http = inject(HttpClient);
   private workflowState = inject(WorkflowStateService);
+  private adminPeriodContext = inject(AdminPeriodContextService);
   private workflowSub?: Subscription;
+  private periodSub?: Subscription;
   private refreshRequestId = 0;
   private readonly resizeHandler = () => this.checkMobile();
 
@@ -530,32 +533,47 @@ export class AdminSidebarComponent implements OnInit, OnDestroy {
     this.checkMobile();
     window.addEventListener('resize', this.resizeHandler);
     this.collapsedChange.emit(this.collapsed);
-    this.workflowSub = this.workflowState.changes$.subscribe(() => this.refreshStatus());
+    this.workflowSub = this.workflowState.changes$.subscribe(() => {
+      void this.refreshStatusWithRetry();
+    });
+    this.periodSub = this.adminPeriodContext.changes$
+      .pipe(skip(1))
+      .subscribe(() => {
+        void this.refreshStatusWithRetry();
+      });
 
-    this.refreshStatus();
+    void this.refreshStatusWithRetry();
   }
 
   ngOnDestroy() {
     this.workflowSub?.unsubscribe();
+    this.periodSub?.unsubscribe();
     window.removeEventListener('resize', this.resizeHandler);
   }
 
   // ── Workflow Status ──────────────────────────────────────────────────────
 
-  refreshStatus() {
+  private async refreshStatusWithRetry() {
     const requestId = ++this.refreshRequestId;
-    this.http
-      .get<any>(`/api/admin/leveling/active-run-summary?t=${Date.now()}`)
-      .subscribe({
-      next: (summary) => {
+    const retryDelays = [0, 200, 400];
+    for (const delay of retryDelays) {
+      if (delay > 0) {
+        await this.sleep(delay);
+      }
+      if (requestId !== this.refreshRequestId) return;
+      try {
+        const summary = await firstValueFrom(
+          this.http.get<any>(`/api/admin/leveling/active-run-summary?t=${Date.now()}`)
+        );
         if (requestId !== this.refreshRequestId) return;
         this.updateMenu(summary);
-      },
-      error: () => {
-        if (requestId !== this.refreshRequestId) return;
-        console.warn('Could not fetch workflow status for sidebar');
-      },
-      });
+        return;
+      } catch {
+        // continue retries
+      }
+    }
+    if (requestId !== this.refreshRequestId) return;
+    console.warn('Could not fetch workflow status for sidebar');
   }
 
   updateMenu(s: any) {
@@ -640,6 +658,10 @@ export class AdminSidebarComponent implements OnInit, OnDestroy {
     if (this.isMobile && !wasMobile && !this.collapsed) {
       this.collapse();
     }
+  }
+
+  private sleep(ms: number) {
+    return new Promise<void>((resolve) => setTimeout(resolve, ms));
   }
 }
 

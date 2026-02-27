@@ -173,7 +173,14 @@ interface AdminPeriod {
                   [disabled]="clearingId === p.id"
                   (click)="clearData(p.id)"
                 >
-                  {{ clearingId === p.id ? '...' : 'Borrar' }}
+                  {{ clearingId === p.id ? '...' : 'Borrar datos' }}
+                </button>
+                <button
+                  class="ml-2 rounded-lg border border-red-300 bg-white text-red-700 px-3 py-1.5 text-xs font-semibold hover:bg-red-50 disabled:opacity-60"
+                  [disabled]="deletingId === p.id"
+                  (click)="deleteAll(p.id)"
+                >
+                  {{ deletingId === p.id ? '...' : 'Borrar todo' }}
                 </button>
               </td>
             </tr>
@@ -218,6 +225,7 @@ export class AdminPeriodsPage {
   loadingCreate = false;
   activatingId: string | null = null;
   clearingId: string | null = null;
+  deletingId: string | null = null;
   editingId: string | null = null;
   loadingEdit = false;
   confirmState = {
@@ -367,8 +375,8 @@ export class AdminPeriodsPage {
 
   clearData(id: string) {
     this.askConfirmation(
-      'Eliminar periodo',
-      'Estas seguro de eliminar este periodo y todos sus datos (secciones, alumnos, horarios y matriculas)? Esta accion no se puede deshacer.',
+      'Borrar datos del periodo',
+      'Se eliminaran secciones, alumnos, horarios, asistencias y matriculas del periodo, pero el periodo se conservara.',
       () => this.executeClearData(id)
     );
   }
@@ -380,13 +388,40 @@ export class AdminPeriodsPage {
       await firstValueFrom(
         this.http.delete(`/api/admin/periods/${encodeURIComponent(id)}/data`)
       );
-      // Wait a moment before reloading or just reload
-      window.location.reload();
+      await this.load();
     } catch (e: any) {
-      this.error = e?.error?.message ?? 'No se pudo eliminar el periodo';
+      this.error = e?.error?.message ?? 'No se pudo borrar datos del periodo';
       this.clearingId = null;
       this.cdr.detectChanges();
+      return;
     }
+    this.clearingId = null;
+    this.cdr.detectChanges();
+  }
+
+  deleteAll(id: string) {
+    this.askConfirmation(
+      'Borrar todo el periodo',
+      'Se eliminara el periodo completo junto con todos sus datos. Esta accion no se puede deshacer.',
+      () => this.executeDeleteAll(id)
+    );
+  }
+
+  async executeDeleteAll(id: string) {
+    this.deletingId = id;
+    this.error = null;
+    try {
+      await firstValueFrom(this.http.delete(`/api/admin/periods/${encodeURIComponent(id)}`));
+      await this.load();
+      window.location.reload();
+    } catch (e: any) {
+      this.error = e?.error?.message ?? 'No se pudo borrar todo el periodo';
+      this.deletingId = null;
+      this.cdr.detectChanges();
+      return;
+    }
+    this.deletingId = null;
+    this.cdr.detectChanges();
   }
 }
 

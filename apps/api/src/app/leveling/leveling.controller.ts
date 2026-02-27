@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   Param,
   Post,
   Query,
@@ -37,6 +38,7 @@ export class LevelingController {
   }
 
   @Get('active-run-summary')
+  @Header('Cache-Control', 'no-store')
   getActiveRunSummary() {
     return this.levelingService.getActiveRunSummary();
   }
@@ -64,6 +66,10 @@ export class LevelingController {
       apply: dto.apply,
       mode: dto.mode,
       groupModalityOverrides: dto.groupModalityOverrides,
+      includeWelcomeCourse: dto.includeWelcomeCourse,
+      welcomeCourseName: dto.welcomeCourseName,
+      welcomeGroupingMode: dto.welcomeGroupingMode,
+      welcomeGroupSize: dto.welcomeGroupSize,
       createdById: String(req?.user?.id ?? '').trim() || null,
     });
   }

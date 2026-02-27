@@ -40,6 +40,8 @@ export interface StudentScheduleItem {
   classroomName?: string | null;
   zoomUrl?: string | null;
   location?: string | null;
+  referenceModality?: string | null;
+  referenceClassroom?: string | null;
 }
 
 export interface StudentAttendanceItem {
@@ -79,6 +81,7 @@ export interface AdminSection {
   hasClassroomConflict?: boolean;
   hasTeacherConflict?: boolean;
   availableSeats?: number | null;
+  isMotherSection?: boolean;
 }
 
 export interface AdminCourseScopeProgress {
@@ -204,6 +207,8 @@ export interface AdminScheduleBlock {
   endDate?: string | null;
   zoomUrl?: string | null;
   location?: string | null;
+  referenceModality?: string | null;
+  referenceClassroom?: string | null;
 }
 
 export interface AdminAttendanceSession {
@@ -295,13 +300,17 @@ export interface LevelingPlanResponse {
     modalities: string[];
     rows: Array<{
       careerName: string;
-      facultyGroup: 'FICA' | 'SALUD';
+      facultyGroup: string;
       campusName: string;
       sourceModality: 'PRESENCIAL' | 'VIRTUAL' | 'SIN DATO';
       needsByCourse: Record<string, number>;
       totalNeeds: number;
     }>;
   };
+  totalRowsProcessed?: number;
+  levelingEligibleCount?: number;
+  levelingDemandCount?: number;
+  welcomeDemandCount?: number;
   summary: {
     hoursPerGroup: number;
     pricePerHour: number;

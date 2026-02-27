@@ -112,6 +112,13 @@ export class ScheduleBlocksService {
     endDate?: string | null;
     zoomUrl?: string | null;
     location?: string | null;
+    referenceModality?: string | null;
+    referenceClassroom?: string | null;
+    applyToWholeCourse?: boolean;
+    applyTeacherToWholeCourse?: boolean;
+    scopeFacultyGroup?: string | null;
+    scopeCampusName?: string | null;
+    scopeCourseName?: string | null;
   }) {
     if (body.startTime >= body.endTime) {
       throw new BadRequestException('La hora de inicio debe ser menor a la hora de fin');
@@ -138,6 +145,32 @@ export class ScheduleBlocksService {
       );
     }
 
+    const sectionCourseContext =
+      (await this.sectionsService.getSectionCourseById(sectionCourse.id)) ?? null;
+    const defaultReference = this.buildReferenceDefaults(
+      sectionCourseContext?.modality,
+      sectionCourseContext?.classroomCode,
+      sectionCourseContext?.classroomName
+    );
+    const referenceModality = this.normalizeReferenceModality(
+      body.referenceModality,
+      defaultReference.referenceModality
+    );
+    const referenceClassroom = this.normalizeReferenceClassroom(
+      body.referenceClassroom,
+      referenceModality,
+      defaultReference.referenceClassroom
+    );
+    const ignoredSectionCourseIds =
+      await this.resolveIgnoredSectionCourseIdsForWholeCourse({
+        applyToWholeCourse: Boolean(body.applyToWholeCourse),
+        sectionId: section.id,
+        courseName: sectionCourse.courseName,
+        scopeFacultyGroup: body.scopeFacultyGroup ?? null,
+        scopeCampusName: body.scopeCampusName ?? null,
+        scopeCourseName: body.scopeCourseName ?? null,
+      });
+
     await this.assertNoOverlap({
       sectionId: section.id,
       dayOfWeek: body.dayOfWeek,
@@ -157,6 +190,7 @@ export class ScheduleBlocksService {
         endTime: body.endTime,
         startDate: body.startDate ?? null,
         endDate: body.endDate ?? null,
+        ignoredSectionCourseIds,
       });
     }
 
@@ -167,6 +201,7 @@ export class ScheduleBlocksService {
       endTime: body.endTime,
       startDate: body.startDate ?? null,
       endDate: body.endDate ?? null,
+      ignoredSectionCourseIds,
     });
 
     const block = this.blocksRepo.create({
@@ -180,6 +215,8 @@ export class ScheduleBlocksService {
       endDate: body.endDate ?? null,
       zoomUrl: body.zoomUrl ?? null,
       location: body.location ?? null,
+      referenceModality,
+      referenceClassroom,
     });
     return this.blocksRepo.save(block);
   }
@@ -195,6 +232,13 @@ export class ScheduleBlocksService {
       endDate: string | null;
       zoomUrl: string | null;
       location: string | null;
+      referenceModality: string | null;
+      referenceClassroom: string | null;
+      applyToWholeCourse: boolean;
+      applyTeacherToWholeCourse: boolean;
+      scopeFacultyGroup: string | null;
+      scopeCampusName: string | null;
+      scopeCourseName: string | null;
     }>
   ) {
     const block = await this.blocksRepo.findOne({
@@ -231,6 +275,32 @@ export class ScheduleBlocksService {
       );
     }
 
+    const nextSectionCourseContext =
+      (await this.sectionsService.getSectionCourseById(nextSectionCourse.id)) ?? null;
+    const defaultReference = this.buildReferenceDefaults(
+      nextSectionCourseContext?.modality,
+      nextSectionCourseContext?.classroomCode,
+      nextSectionCourseContext?.classroomName
+    );
+    const referenceModality = this.normalizeReferenceModality(
+      body.referenceModality ?? block.referenceModality ?? null,
+      defaultReference.referenceModality
+    );
+    const referenceClassroom = this.normalizeReferenceClassroom(
+      body.referenceClassroom ?? block.referenceClassroom ?? null,
+      referenceModality,
+      defaultReference.referenceClassroom
+    );
+    const ignoredSectionCourseIds =
+      await this.resolveIgnoredSectionCourseIdsForWholeCourse({
+        applyToWholeCourse: Boolean(body.applyToWholeCourse),
+        sectionId: block.section.id,
+        courseName: nextSectionCourse.courseName,
+        scopeFacultyGroup: body.scopeFacultyGroup ?? null,
+        scopeCampusName: body.scopeCampusName ?? null,
+        scopeCourseName: body.scopeCourseName ?? null,
+      });
+
     await this.assertNoOverlap({
       sectionId: block.section.id,
       dayOfWeek: next.dayOfWeek,
@@ -252,6 +322,7 @@ export class ScheduleBlocksService {
         startDate: next.startDate ?? null,
         endDate: next.endDate ?? null,
         excludeBlockId: block.id,
+        ignoredSectionCourseIds,
       });
     }
 
@@ -263,6 +334,7 @@ export class ScheduleBlocksService {
       startDate: next.startDate ?? null,
       endDate: next.endDate ?? null,
       excludeBlockId: block.id,
+      ignoredSectionCourseIds,
     });
 
     block.sectionCourseId = nextSectionCourse.id;
@@ -274,6 +346,8 @@ export class ScheduleBlocksService {
     block.endDate = next.endDate ?? null;
     block.zoomUrl = next.zoomUrl;
     block.location = next.location;
+    block.referenceModality = referenceModality;
+    block.referenceClassroom = referenceClassroom;
 
     return this.blocksRepo.save(block);
   }
@@ -287,5 +361,110 @@ export class ScheduleBlocksService {
 
   private async loadActivePeriodIdOrThrow() {
     return this.periodsService.getOperationalPeriodIdOrThrow();
+  }
+
+  private isVirtualModality(modality: string | null | undefined) {
+    return String(modality ?? '')
+      .trim()
+      .toUpperCase()
+      .includes('VIRTUAL');
+  }
+
+  private buildReferenceDefaults(
+    modality: string | null | undefined,
+    classroomCode: string | null | undefined,
+    classroomName: string | null | undefined
+  ) {
+    const isVirtual = this.isVirtualModality(modality);
+    if (isVirtual) {
+      return {
+        referenceModality: 'VIRTUAL',
+        referenceClassroom: 'Sin aula',
+      };
+    }
+    const classroomLabel =
+      String(classroomCode ?? '').trim() ||
+      String(classroomName ?? '').trim() ||
+      'Sin aula';
+    return {
+      referenceModality: 'PRESENCIAL',
+      referenceClassroom: classroomLabel,
+    };
+  }
+
+  private normalizeReferenceModality(
+    value: string | null | undefined,
+    fallback: string
+  ) {
+    const normalized = String(value ?? '')
+      .trim()
+      .toUpperCase();
+    if (normalized === 'VIRTUAL') return 'VIRTUAL';
+    if (normalized === 'PRESENCIAL') return 'PRESENCIAL';
+    return fallback;
+  }
+
+  private normalizeReferenceClassroom(
+    value: string | null | undefined,
+    referenceModality: string,
+    fallback: string
+  ) {
+    if (String(referenceModality ?? '').trim().toUpperCase() === 'VIRTUAL') {
+      return 'Sin aula';
+    }
+    const normalized = String(value ?? '').trim();
+    if (normalized) return normalized;
+    return fallback || 'Sin aula';
+  }
+
+  private async resolveIgnoredSectionCourseIdsForWholeCourse(params: {
+    applyToWholeCourse: boolean;
+    sectionId: string;
+    courseName: string;
+    scopeFacultyGroup?: string | null;
+    scopeCampusName?: string | null;
+    scopeCourseName?: string | null;
+  }) {
+    if (!params.applyToWholeCourse) return [];
+    const facultyGroup = String(params.scopeFacultyGroup ?? '').trim();
+    const campusName = String(params.scopeCampusName ?? '').trim();
+    const scopeCourseName =
+      String(params.scopeCourseName ?? '').trim() ||
+      String(params.courseName ?? '').trim();
+    if (!facultyGroup || !campusName || !scopeCourseName) {
+      throw new BadRequestException(
+        'Para aplicar horario a todo el curso se requiere facultyGroup, campusName y courseName.'
+      );
+    }
+    if (this.courseKey(facultyGroup) !== 'general') {
+      throw new BadRequestException(
+        'La sincronizacion masiva desde horario de seccion esta habilitada solo para Bienvenida.'
+      );
+    }
+    const scope = await this.sectionsService.resolveMotherAndSiblingsForScope({
+      facultyGroup,
+      campusName,
+      courseName: scopeCourseName,
+    });
+    if (String(scope.mother.sectionId ?? '').trim() !== String(params.sectionId ?? '').trim()) {
+      throw new BadRequestException(
+        'La sincronizacion masiva solo se permite desde la seccion madre del curso.'
+      );
+    }
+    if (
+      this.courseKey(scope.mother.courseName) !==
+      this.courseKey(String(params.courseName ?? ''))
+    ) {
+      throw new BadRequestException(
+        'El curso del bloque no coincide con el alcance de sincronizacion.'
+      );
+    }
+    return scope.scoped
+      .map((item) => String(item.sectionCourseId ?? '').trim())
+      .filter(Boolean);
+  }
+
+  private courseKey(value: string | null | undefined) {
+    return String(value ?? '').trim().toLocaleLowerCase();
   }
 }

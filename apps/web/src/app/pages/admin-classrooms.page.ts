@@ -235,8 +235,8 @@ interface CampusOption {
         </div>
 
         <div class="lg:col-span-2 rounded-2xl border border-slate-200 bg-white overflow-x-auto">
-          <table class="min-w-full text-sm">
-            <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600">
+          <table class="min-w-full text-xs">
+            <thead class="bg-slate-50 text-left uppercase tracking-wide text-slate-600">
               <tr>
                 <th class="px-4 py-3">Nivel</th>
                 <th class="px-4 py-3">Codigo</th>
@@ -249,47 +249,13 @@ interface CampusOption {
             </thead>
             <tbody>
               <tr *ngFor="let r of classroomsBySelectedPavilion; trackBy: trackClassroom" class="border-t border-slate-100">
-                <td class="px-4 py-3">
-                  <input
-                    class="w-28 rounded-lg border border-slate-200 px-2 py-1 text-xs"
-                    [(ngModel)]="draftFor(r.id).levelName"
-                    [ngModelOptions]="{ standalone: true }"
-                  />
+                <td class="px-4 py-2.5 text-slate-700">{{ r.levelName || '-' }}</td>
+                <td class="px-4 py-2.5 font-semibold text-slate-800">{{ r.code }}</td>
+                <td class="px-4 py-2.5">
+                  <div class="max-w-[260px] truncate text-slate-700" [title]="r.name">{{ r.name }}</div>
                 </td>
-                <td class="px-4 py-3">
-                  <input
-                    class="w-28 rounded-lg border border-slate-200 px-2 py-1 text-xs"
-                    [(ngModel)]="draftFor(r.id).code"
-                    [ngModelOptions]="{ standalone: true }"
-                  />
-                </td>
-                <td class="px-4 py-3">
-                  <input
-                    class="w-48 rounded-lg border border-slate-200 px-2 py-1 text-xs"
-                    [(ngModel)]="draftFor(r.id).name"
-                    [ngModelOptions]="{ standalone: true }"
-                  />
-                </td>
-                <td class="px-4 py-3">
-                  <input
-                    type="number"
-                    min="1"
-                    class="w-20 rounded-lg border border-slate-200 px-2 py-1 text-xs"
-                    [(ngModel)]="draftFor(r.id).capacity"
-                    [ngModelOptions]="{ standalone: true }"
-                  />
-                </td>
-                <td class="px-4 py-3">
-                  <select
-                    class="w-36 rounded-lg border border-slate-200 px-2 py-1 text-xs"
-                    [(ngModel)]="draftFor(r.id).type"
-                    [ngModelOptions]="{ standalone: true }"
-                  >
-                    <option value="AULA">AULA</option>
-                    <option value="LABORATORIO">LABORATORIO</option>
-                    <option value="AUDITORIO">AUDITORIO</option>
-                  </select>
-                </td>
+                <td class="px-4 py-2.5 text-slate-700">{{ r.capacity }}</td>
+                <td class="px-4 py-2.5 text-slate-700">{{ r.type }}</td>
                 <td class="px-4 py-3">
                   <span
                     class="inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold"
@@ -302,10 +268,9 @@ interface CampusOption {
                   <div class="flex flex-wrap gap-2">
                     <button
                       class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50 disabled:opacity-60"
-                      (click)="updateClassroom(r.id)"
-                      [disabled]="loadingUpdateId === r.id"
+                      (click)="openEditClassroom(r)"
                     >
-                      {{ loadingUpdateId === r.id ? 'Guardando...' : 'Guardar' }}
+                      Editar
                     </button>
                     <button
                       class="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-60"
@@ -338,6 +303,87 @@ interface CampusOption {
         Selecciona un pabellon para gestionar sus aulas.
       </div>
     </ng-template>
+
+    <div *ngIf="editingClassroomId" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+      <div class="w-full max-w-xl rounded-2xl border border-slate-200 bg-white shadow-xl">
+        <div class="flex items-center justify-between border-b border-slate-200 px-5 py-3">
+          <div>
+            <div class="text-base font-semibold">Editar aula</div>
+            <div class="text-xs text-slate-500">Actualiza nivel, codigo, nombre, aforo, tipo y observacion.</div>
+          </div>
+          <button
+            class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
+            type="button"
+            (click)="closeEditClassroom()"
+          >
+            Cerrar
+          </button>
+        </div>
+
+        <form class="space-y-3 px-5 py-4" [formGroup]="editForm" (ngSubmit)="saveClassroomEdit()">
+          <div class="grid gap-3 sm:grid-cols-2">
+            <input
+              class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+              formControlName="levelName"
+              placeholder="Nivel/Piso (ej: 1 PISO)"
+            />
+            <input
+              class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+              formControlName="code"
+              placeholder="Codigo (ej: 101C)"
+            />
+          </div>
+
+          <input
+            class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+            formControlName="name"
+            placeholder="Nombre (ej: AULA 101 C)"
+          />
+
+          <div class="grid gap-3 sm:grid-cols-2">
+            <input
+              type="number"
+              min="1"
+              class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+              formControlName="capacity"
+              placeholder="Aforo"
+            />
+            <select
+              class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+              formControlName="type"
+            >
+              <option value="AULA">AULA</option>
+              <option value="LABORATORIO">LABORATORIO</option>
+              <option value="AUDITORIO">AUDITORIO</option>
+            </select>
+          </div>
+
+          <textarea
+            rows="2"
+            class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+            formControlName="notes"
+            placeholder="Observacion (opcional)"
+          ></textarea>
+
+          <div class="flex justify-end gap-2 border-t border-slate-200 pt-3">
+            <button
+              class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold hover:bg-slate-50"
+              type="button"
+              (click)="closeEditClassroom()"
+            >
+              Cancelar
+            </button>
+            <button
+              class="rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white disabled:opacity-60"
+              type="submit"
+              [disabled]="!editingClassroomId || editForm.invalid || loadingUpdateId === editingClassroomId"
+            >
+              {{ loadingUpdateId === editingClassroomId ? 'Guardando...' : 'Guardar cambios' }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   `,
 })
 export class AdminClassroomsPage {
@@ -354,20 +400,6 @@ export class AdminClassroomsPage {
   selectedPavilionLabel = '';
 
   pavilionCampusFilterId = '';
-
-  drafts: Record<
-    string,
-    {
-      campusId: string;
-      pavilionId: string;
-      code: string;
-      name: string;
-      capacity: number;
-      levelName: string;
-      type: 'AULA' | 'LABORATORIO' | 'AUDITORIO';
-      notes: string;
-    }
-  > = {};
 
   pavilionDrafts: Record<
     string,
@@ -391,6 +423,8 @@ export class AdminClassroomsPage {
   loadingStatusPavilionId: string | null = null;
   loadingDeletePavilionId: string | null = null;
 
+  editingClassroomId: string | null = null;
+
   createPavilionForm = this.fb.group({
     campusId: ['', [Validators.required]],
     code: ['', [Validators.required, Validators.maxLength(60)]],
@@ -400,6 +434,15 @@ export class AdminClassroomsPage {
   createForm = this.fb.group({
     campusId: ['', [Validators.required]],
     pavilionId: ['', [Validators.required]],
+    levelName: ['', [Validators.required, Validators.maxLength(80)]],
+    code: ['', [Validators.required, Validators.maxLength(60)]],
+    name: ['', [Validators.required, Validators.maxLength(160)]],
+    capacity: [45, [Validators.required, Validators.min(1)]],
+    type: ['AULA' as 'AULA' | 'LABORATORIO' | 'AUDITORIO', [Validators.required]],
+    notes: [''],
+  });
+
+  editForm = this.fb.group({
     levelName: ['', [Validators.required, Validators.maxLength(80)]],
     code: ['', [Validators.required, Validators.maxLength(60)]],
     name: ['', [Validators.required, Validators.maxLength(160)]],
@@ -455,22 +498,6 @@ export class AdminClassroomsPage {
     return this.pavilionDrafts[id];
   }
 
-  draftFor(id: string) {
-    if (!this.drafts[id]) {
-      this.drafts[id] = {
-        campusId: this.selectedCampusId,
-        pavilionId: this.selectedPavilionId,
-        code: '',
-        name: '',
-        capacity: 45,
-        levelName: '',
-        type: 'AULA',
-        notes: '',
-      };
-    }
-    return this.drafts[id];
-  }
-
   isPavilionSelected(pavilion: AdminPavilion) {
     return String(this.selectedPavilionId ?? '') === String(pavilion.id ?? '');
   }
@@ -504,7 +531,7 @@ export class AdminClassroomsPage {
     this.selectedCampusId = '';
     this.selectedPavilionLabel = '';
     this.classroomsBySelectedPavilion = [];
-    this.drafts = {};
+    this.closeEditClassroom();
     this.createForm.reset({
       campusId: '',
       pavilionId: '',
@@ -520,7 +547,7 @@ export class AdminClassroomsPage {
   private async loadClassroomsForSelectedPavilion() {
     if (!this.selectedPavilionId) {
       this.classroomsBySelectedPavilion = [];
-      this.drafts = {};
+      this.closeEditClassroom();
       return;
     }
 
@@ -532,18 +559,11 @@ export class AdminClassroomsPage {
       );
       this.classroomsBySelectedPavilion = classrooms;
 
-      this.drafts = {};
-      for (const room of classrooms) {
-        this.drafts[room.id] = {
-          campusId: String(room.campusId ?? this.selectedCampusId).trim(),
-          pavilionId: String(room.pavilionId ?? this.selectedPavilionId).trim(),
-          code: room.code,
-          name: room.name,
-          capacity: Number(room.capacity ?? 45),
-          levelName: String(room.levelName ?? '').trim(),
-          type: room.type ?? 'AULA',
-          notes: room.notes ?? '',
-        };
+      if (
+        this.editingClassroomId &&
+        !this.classroomsBySelectedPavilion.some((r) => r.id === this.editingClassroomId)
+      ) {
+        this.closeEditClassroom();
       }
     } finally {
       this.loadingPavilionClassrooms = false;
@@ -717,24 +737,50 @@ export class AdminClassroomsPage {
     }
   }
 
-  async updateClassroom(id: string) {
+  openEditClassroom(room: AdminClassroom) {
+    this.editingClassroomId = room.id;
+    this.editForm.reset({
+      levelName: String(room.levelName ?? '').trim(),
+      code: String(room.code ?? '').trim(),
+      name: String(room.name ?? '').trim(),
+      capacity: Number(room.capacity ?? 45),
+      type: room.type ?? 'AULA',
+      notes: String(room.notes ?? '').trim(),
+    });
+  }
+
+  closeEditClassroom() {
+    this.editingClassroomId = null;
+    this.editForm.reset({
+      levelName: '',
+      code: '',
+      name: '',
+      capacity: 45,
+      type: 'AULA',
+      notes: '',
+    });
+  }
+
+  async saveClassroomEdit() {
+    const id = this.editingClassroomId;
+    if (!id || this.editForm.invalid) return;
     this.loadingUpdateId = id;
     this.error = null;
     try {
-      const d = this.draftFor(id);
       await firstValueFrom(
         this.http.patch(`/api/admin/classrooms/${id}`, {
           campusId: this.selectedCampusId,
           pavilionId: this.selectedPavilionId,
-          levelName: String(d.levelName ?? '').trim(),
-          code: String(d.code ?? '').trim().toUpperCase(),
-          name: String(d.name ?? '').trim(),
-          capacity: Math.max(1, Number(d.capacity ?? 1)),
-          type: d.type,
-          notes: String(d.notes ?? '').trim() || null,
+          levelName: String(this.editForm.value.levelName ?? '').trim(),
+          code: String(this.editForm.value.code ?? '').trim().toUpperCase(),
+          name: String(this.editForm.value.name ?? '').trim(),
+          capacity: Math.max(1, Number(this.editForm.value.capacity ?? 1)),
+          type: this.editForm.value.type,
+          notes: String(this.editForm.value.notes ?? '').trim() || null,
         })
       );
       await this.loadClassroomsForSelectedPavilion();
+      this.closeEditClassroom();
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo actualizar aula';
     } finally {

@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsInt,
   IsNotEmpty,
   IsOptional,
@@ -52,4 +53,32 @@ export class CreateScheduleBlockDto {
   @IsOptional()
   @IsString()
   location?: string;
+
+  @IsOptional()
+  @IsString()
+  referenceModality?: string;
+
+  @IsOptional()
+  @IsString()
+  referenceClassroom?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  applyToWholeCourse?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  applyTeacherToWholeCourse?: boolean;
+
+  @IsOptional()
+  @IsString()
+  scopeFacultyGroup?: string;
+
+  @IsOptional()
+  @IsString()
+  scopeCampusName?: string;
+
+  @IsOptional()
+  @IsString()
+  scopeCourseName?: string;
 }
