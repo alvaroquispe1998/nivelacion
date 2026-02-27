@@ -378,6 +378,16 @@ interface ConfirmDialogOptions {
             >
               Ver asistencia
             </a>
+            <a
+              class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              [routerLink]="['/admin/grades']"
+              [queryParams]="notesContextQueryParams()"
+              [class.pointer-events-none]="!sectionCourseIdForNotes()"
+              [class.opacity-50]="!sectionCourseIdForNotes()"
+              (click)="sectionCourseIdForNotes() ? closeStudentsModal() : $event.preventDefault()"
+            >
+              Ver notas
+            </a>
             <button
               type="button"
               class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
@@ -763,6 +773,24 @@ export class AdminSectionsPage {
       view: this.viewMode,
     };
     if (resolvedCourse) query['courseName'] = resolvedCourse;
+    if (String(this.facultyFilter ?? '').trim()) query['facultyGroup'] = this.facultyFilter;
+    if (String(this.campusFilter ?? '').trim()) query['campusName'] = this.campusFilter;
+    return query;
+  }
+
+  sectionCourseIdForNotes() {
+    const firstWithSectionCourse = this.studentsModalRows.find((row) =>
+      String(row.sectionCourseId ?? '').trim()
+    );
+    return String(firstWithSectionCourse?.sectionCourseId ?? '').trim();
+  }
+
+  notesContextQueryParams() {
+    const query: Record<string, string> = {};
+    const sectionCourseId = this.sectionCourseIdForNotes();
+    const courseName = String(this.modalCourseName || this.courseFilter || '').trim();
+    if (sectionCourseId) query['sectionCourseId'] = sectionCourseId;
+    if (courseName) query['courseName'] = courseName;
     if (String(this.facultyFilter ?? '').trim()) query['facultyGroup'] = this.facultyFilter;
     if (String(this.campusFilter ?? '').trim()) query['campusName'] = this.campusFilter;
     return query;

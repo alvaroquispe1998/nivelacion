@@ -40,6 +40,15 @@ export const appRoutes: Route[] = [
           ),
       },
       {
+        path: 'student/grades',
+        canActivate: [roleGuard],
+        data: { roles: [Role.ALUMNO] },
+        loadComponent: () =>
+          import('./pages/student-grades.page').then(
+            (m) => m.StudentGradesPage
+          ),
+      },
+      {
         path: 'teacher/schedule',
         canActivate: [roleGuard],
         data: { roles: [Role.DOCENTE] },
@@ -64,6 +73,24 @@ export const appRoutes: Route[] = [
         loadComponent: () =>
           import('./pages/teacher-section-attendance.page').then(
             (m) => m.TeacherSectionAttendancePage
+          ),
+      },
+      {
+        path: 'teacher/grades',
+        canActivate: [roleGuard],
+        data: { roles: [Role.DOCENTE] },
+        loadComponent: () =>
+          import('./pages/teacher-grades.page').then(
+            (m) => m.TeacherGradesPage
+          ),
+      },
+      {
+        path: 'teacher/grades/:sectionCourseId',
+        canActivate: [roleGuard],
+        data: { roles: [Role.DOCENTE] },
+        loadComponent: () =>
+          import('./pages/teacher-section-grades.page').then(
+            (m) => m.TeacherSectionGradesPage
           ),
       },
       {
@@ -168,6 +195,33 @@ export const appRoutes: Route[] = [
         loadComponent: () =>
           import('./pages/admin-reports-summary.page').then(
             (m) => m.AdminReportsSummaryPage
+          ),
+      },
+      {
+        path: 'admin/grades/config',
+        canActivate: [roleGuard],
+        data: { roles: [Role.ADMIN] },
+        loadComponent: () =>
+          import('./pages/admin-grade-config.page').then(
+            (m) => m.AdminGradeConfigPage
+          ),
+      },
+      {
+        path: 'admin/grades/reports',
+        canActivate: [roleGuard],
+        data: { roles: [Role.ADMIN] },
+        loadComponent: () =>
+          import('./pages/admin-grades-reports.page').then(
+            (m) => m.AdminGradesReportsPage
+          ),
+      },
+      {
+        path: 'admin/grades',
+        canActivate: [roleGuard],
+        data: { roles: [Role.ADMIN] },
+        loadComponent: () =>
+          import('./pages/admin-grades.page').then(
+            (m) => m.AdminGradesPage
           ),
       },
       {

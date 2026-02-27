@@ -272,12 +272,19 @@ export class TeacherController {
 
       const parsed = new Date(text);
       if (Number.isNaN(parsed.getTime())) return null;
-      return parsed.toISOString().slice(0, 10);
+      return this.toLocalIsoDate(parsed);
     }
     if (value instanceof Date) {
       if (Number.isNaN(value.getTime())) return null;
-      return value.toISOString().slice(0, 10);
+      return this.toLocalIsoDate(value);
     }
     return null;
+  }
+
+  private toLocalIsoDate(value: Date) {
+    const y = value.getFullYear();
+    const m = String(value.getMonth() + 1).padStart(2, '0');
+    const d = String(value.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
   }
 }

@@ -188,6 +188,42 @@ export class PeriodsService {
   private async clearPeriodDataInTransaction(manager: EntityManager, periodId: string) {
     await manager.query(
       `
+      DELETE g
+      FROM section_course_grades g
+      INNER JOIN section_courses sc ON sc.id = g.sectionCourseId
+      WHERE sc.periodId = ?
+      `,
+      [periodId]
+    );
+
+    await manager.query(
+      `
+      DELETE FROM section_course_grade_publications
+      WHERE periodId = ?
+      `,
+      [periodId]
+    );
+
+    await manager.query(
+      `
+      DELETE gsc
+      FROM grade_scheme_components gsc
+      INNER JOIN grade_schemes gs ON gs.id = gsc.schemeId
+      WHERE gs.periodId = ?
+      `,
+      [periodId]
+    );
+
+    await manager.query(
+      `
+      DELETE FROM grade_schemes
+      WHERE periodId = ?
+      `,
+      [periodId]
+    );
+
+    await manager.query(
+      `
       DELETE ssc
       FROM section_student_courses ssc
       INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId

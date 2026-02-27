@@ -127,6 +127,12 @@ export const ADMIN_SIDEBAR_GROUPS: SidebarGroup[] = [
         icon: ICON.home,
         tooltip: 'Pabellón y Aulas',
       },
+      {
+        label: 'Configuracion de notas',
+        route: '/admin/grades/config',
+        icon: ICON.chart,
+        tooltip: 'Configuracion de notas',
+      },
     ],
   },
   {
@@ -176,6 +182,12 @@ export const ADMIN_SIDEBAR_GROUPS: SidebarGroup[] = [
         route: '/admin/reports/summary',
         icon: ICON.clock,
         tooltip: 'Panorámica por Facultades',
+      },
+      {
+        label: 'Reportes por carrera',
+        route: '/admin/grades/reports',
+        icon: ICON.chart,
+        tooltip: 'Reportes por carrera',
       },
       {
         label: 'Exportar',

@@ -13,6 +13,7 @@ import { AdminPeriodContextMiddleware } from './common/context/admin-period-cont
 import { DatabaseModule } from './database/database.module';
 import { IntegrationsModule } from './integrations/integrations.module';
 import { LevelingModule } from './leveling/leveling.module';
+import { GradesModule } from './grades/grades.module';
 import { PeriodsModule } from './periods/periods.module';
 import { ScheduleBlocksModule } from './schedule-blocks/schedule-blocks.module';
 import { SectionsModule } from './sections/sections.module';
@@ -37,6 +38,7 @@ import { AppController } from './app.controller';
     StudentModule,
     IntegrationsModule,
     LevelingModule,
+    GradesModule,
     TeachersModule,
     TeacherModule,
   ],

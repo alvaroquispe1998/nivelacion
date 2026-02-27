@@ -225,6 +225,87 @@ export interface AdminAttendanceRecord {
   notes?: string | null;
 }
 
+export type GradeComponentCode = 'DIAGNOSTICO' | 'FK1' | 'FK2' | 'PARCIAL';
+
+export interface GradeSchemeComponent {
+  id: Uuid;
+  schemeId: Uuid;
+  code: GradeComponentCode;
+  name: string;
+  weight: number;
+  orderIndex: number;
+  minScore: number;
+  maxScore: number;
+  isActive: boolean;
+}
+
+export interface GradeSchemeResponse {
+  id: Uuid;
+  periodId: Uuid;
+  status: 'DRAFT' | 'LOCKED';
+  components: GradeSchemeComponent[];
+}
+
+export interface GradesSectionCourseOption {
+  sectionCourseId: Uuid;
+  sectionId: Uuid;
+  sectionCode?: string | null;
+  sectionName: string;
+  courseName: string;
+  facultyGroup?: string | null;
+  facultyName?: string | null;
+  campusName?: string | null;
+  modality?: string | null;
+  studentCount: number;
+}
+
+export interface SectionCourseGradesPublication {
+  isPublished: boolean;
+  publishedAt?: string | null;
+  publishedBy?: string | null;
+}
+
+export interface SectionCourseGradesStudentRow {
+  studentId: Uuid;
+  dni: string;
+  codigoAlumno?: string | null;
+  fullName: string;
+  careerName?: string | null;
+  scores: Record<string, number | null>;
+  finalAverage: number;
+  approved: boolean;
+}
+
+export interface SectionCourseGradesResponse {
+  periodId: Uuid;
+  sectionCourse: {
+    sectionCourseId: Uuid;
+    sectionId: Uuid;
+    periodId: Uuid;
+    courseId: Uuid;
+    courseName: string;
+    sectionCode?: string | null;
+    sectionName: string;
+    facultyGroup?: string | null;
+    facultyName?: string | null;
+    campusName?: string | null;
+    modality?: string | null;
+  };
+  scheme: {
+    id: Uuid;
+    status: 'DRAFT' | 'LOCKED';
+    components: GradeSchemeComponent[];
+  };
+  publication: SectionCourseGradesPublication;
+  stats: {
+    students: number;
+    requiredCells: number;
+    gradedCells: number;
+    missingCells: number;
+  };
+  students: SectionCourseGradesStudentRow[];
+}
+
 export interface LevelingConfig {
   initialCapacity: number;
   maxExtraCapacity: number;

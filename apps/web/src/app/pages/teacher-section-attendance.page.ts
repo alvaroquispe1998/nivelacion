@@ -78,6 +78,11 @@ interface TeacherRecordRow {
     <div *ngIf="success" class="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
       {{ success }}
     </div>
+    <div class="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+      Solo puedes editar asistencia en la fecha de la sesión.
+      Fecha activa: <span class="font-semibold">{{ activeDate || 'sin seleccionar' }}</span>.
+      Hoy: <span class="font-semibold">{{ todayIso }}</span>.
+    </div>
 
     <div class="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
       <label class="block">
@@ -121,21 +126,21 @@ interface TeacherRecordRow {
           <button
             class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold hover:bg-slate-50 disabled:opacity-60"
             (click)="markAllPresent()"
-            [disabled]="weekDates.length===0 || students.length===0 || !activeDate"
+            [disabled]="weekDates.length===0 || students.length===0 || !activeDate || !canEditActiveDate"
           >
             Asistieron todos
           </button>
           <button
             class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold hover:bg-slate-50 disabled:opacity-60"
             (click)="markAllAbsent()"
-            [disabled]="weekDates.length===0 || students.length===0 || !activeDate"
+            [disabled]="weekDates.length===0 || students.length===0 || !activeDate || !canEditActiveDate"
           >
             Faltaron todos
           </button>
           <button
             class="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60 min-w-[150px]"
             (click)="saveActiveDate()"
-            [disabled]="saving || !selectedBlock || students.length===0 || weekDates.length===0 || !activeDate"
+            [disabled]="saving || !selectedBlock || students.length===0 || weekDates.length===0 || !activeDate || !canEditActiveDate"
           >
             {{ saving ? 'Guardando...' : 'Guardar asistencia' }}
           </button>
@@ -172,7 +177,7 @@ interface TeacherRecordRow {
                   class="h-4 w-4 cursor-pointer accent-slate-900"
                   [checked]="getActiveChecked(s.id)"
                   (change)="setActiveChecked(s.id, $event)"
-                  [disabled]="!activeDate"
+                  [disabled]="!activeDate || !canEditActiveDate"
                 />
               </td>
             </tr>
@@ -217,9 +222,14 @@ export class TeacherSectionAttendancePage {
   error: string | null = null;
   success: string | null = null;
   saving = false;
+  todayIso = this.localTodayIso();
 
   get selectedBlock() {
     return this.blocks.find((b) => b.id === this.selectedBlockId) ?? null;
+  }
+
+  get canEditActiveDate() {
+    return !!this.activeDate && this.activeDate === this.todayIso;
   }
 
   get assignmentLabel() {
@@ -424,6 +434,11 @@ export class TeacherSectionAttendancePage {
     if (!block) return;
     const date = String(this.activeDate ?? '').trim();
     if (this.students.length === 0 || this.weekDates.length === 0 || !date) return;
+    if (!this.canEditActiveDate) {
+      this.error = 'Solo puedes editar asistencia en la fecha de la sesión.';
+      this.cdr.detectChanges();
+      return;
+    }
 
     this.saving = true;
     this.error = null;
@@ -520,5 +535,13 @@ export class TeacherSectionAttendancePage {
       return AttendanceStatus.ASISTIO;
     }
     return AttendanceStatus.FALTO;
+  }
+
+  private localTodayIso() {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
   }
 }

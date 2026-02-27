@@ -267,6 +267,16 @@ interface StudentPlatformItem {
                     </svg>
                     Asistencia
                   </a>
+                  <a
+                    routerLink="/student/grades"
+                    routerLinkActive="bg-blue-50 text-blue-700 font-semibold"
+                    class="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors"
+                  >
+                    <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3v18h16.5M7.5 15.75v-6m4.5 6v-10.5m4.5 10.5v-3.75" />
+                    </svg>
+                    Calificaciones
+                  </a>
                 </ng-container>
 
                 <!-- DOCENTE links -->
@@ -290,6 +300,16 @@ interface StudentPlatformItem {
                       <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6l4 2M3.75 12a8.25 8.25 0 1116.5 0 8.25 8.25 0 01-16.5 0z" />
                     </svg>
                     Registrar Asistencia
+                  </a>
+                  <a
+                    routerLink="/teacher/grades"
+                    routerLinkActive="bg-blue-50 text-blue-700 font-semibold"
+                    class="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors"
+                  >
+                    <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3v18h16.5M7.5 15.75v-6m4.5 6v-10.5m4.5 10.5v-3.75" />
+                    </svg>
+                    Registrar Notas
                   </a>
                 </ng-container>
 

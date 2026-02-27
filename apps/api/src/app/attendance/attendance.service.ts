@@ -46,6 +46,7 @@ export class AttendanceService {
         teacherId: actor.id,
         sectionCourseId,
       });
+      this.assertTeacherCanEditDateOrThrow(params.sessionDate);
     }
 
     const exists = await this.sessionsRepo.findOne({
@@ -158,6 +159,7 @@ export class AttendanceService {
         teacherId: actor.id,
         sectionCourseId,
       });
+      this.assertTeacherCanEditDateOrThrow(session.sessionDate);
     }
     const studentIds = Array.from(new Set(items.map((x) => x.studentId).filter(Boolean)));
     await this.assertStudentsInSectionCourseOrThrow({
@@ -263,13 +265,33 @@ export class AttendanceService {
       if (directDate) return directDate[1];
       const parsed = new Date(text);
       if (Number.isNaN(parsed.getTime())) return text;
-      return parsed.toISOString().slice(0, 10);
+      return this.toLocalIsoDate(parsed);
     }
     if (value instanceof Date) {
       if (Number.isNaN(value.getTime())) return '';
-      return value.toISOString().slice(0, 10);
+      return this.toLocalIsoDate(value);
     }
     return String(value);
+  }
+
+  private toLocalIsoDate(date: Date) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  private serverTodayIso() {
+    return this.toLocalIsoDate(new Date());
+  }
+
+  private assertTeacherCanEditDateOrThrow(sessionDate: string) {
+    const targetDate = this.toIsoDateOnly(sessionDate);
+    const today = this.serverTodayIso();
+    if (targetDate === today) return;
+    throw new BadRequestException(
+      'Solo puedes editar asistencia en la fecha de la sesion'
+    );
   }
 
   private async loadStudentIdsBySectionCourse(params: {
