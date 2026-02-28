@@ -107,7 +107,7 @@ import { firstValueFrom, Subscription } from 'rxjs';
             <span class="font-semibold" [class.text-emerald-700]="sectionGrades.publication.isPublished">
               {{ sectionGrades.publication.isPublished ? 'Si' : 'No' }}
             </span>
-            · Celdas completas: {{ sectionGrades.stats.gradedCells }}/{{ sectionGrades.stats.requiredCells }}
+            Celdas completas: {{ sectionGrades.stats.gradedCells }}/{{ sectionGrades.stats.requiredCells }}
           </div>
 
           <div class="mt-3 overflow-x-auto rounded-xl border border-slate-200">
@@ -140,16 +140,18 @@ import { firstValueFrom, Subscription } from 'rxjs';
                       (ngModelChange)="setScore(row.studentId, c.id, $event)"
                     />
                   </td>
-                  <td class="px-3 py-2">{{ row.finalAverage | number:'1.2-2' }}</td>
+                  <td class="px-3 py-2">{{ row.finalAverage | number:'1.0-0' }}</td>
                   <td class="px-3 py-2">
                     <span
                       class="inline-flex rounded-full px-2 py-0.5 text-xs font-semibold"
-                      [class.bg-emerald-100]="row.approved"
-                      [class.text-emerald-700]="row.approved"
-                      [class.bg-rose-100]="!row.approved"
-                      [class.text-rose-700]="!row.approved"
+                      [class.bg-emerald-100]="isRowComplete(row) && row.approved"
+                      [class.text-emerald-700]="isRowComplete(row) && row.approved"
+                      [class.bg-rose-100]="isRowComplete(row) && !row.approved"
+                      [class.text-rose-700]="isRowComplete(row) && !row.approved"
+                      [class.bg-amber-100]="!isRowComplete(row)"
+                      [class.text-amber-700]="!isRowComplete(row)"
                     >
-                      {{ row.approved ? 'SI' : 'NO' }}
+                      {{ isRowComplete(row) ? (row.approved ? 'SI' : 'NO') : 'PENDIENTE' }}
                     </span>
                   </td>
                 </tr>
@@ -237,6 +239,14 @@ export class AdminGradesPage implements OnDestroy {
 
   trackStudentGrade(_: number, item: { studentId: string }) {
     return item.studentId;
+  }
+
+  isRowComplete(row: SectionCourseGradesResponse['students'][number]) {
+    const scores = row.scores ? Object.values(row.scores) : [];
+    if (scores.length > 0) {
+      return scores.every((score) => score !== null);
+    }
+    return Boolean((row as any).isComplete);
   }
 
   applySectionCourseFilter() {

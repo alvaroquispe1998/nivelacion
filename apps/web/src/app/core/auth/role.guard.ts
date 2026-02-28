@@ -10,7 +10,7 @@ export const roleGuard: CanActivateFn = async (route: ActivatedRouteSnapshot) =>
   const roles = (route.data['roles'] as Role[] | undefined) ?? [];
   if (roles.length === 0) return true;
 
-  if (auth.token) {
+  if (!auth.user && auth.token) {
     await auth.loadMe();
   }
 

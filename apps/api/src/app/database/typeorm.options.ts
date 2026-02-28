@@ -48,6 +48,7 @@ import { PavilionsAndClassroomLevel031Migration1773700000000 } from './migration
 import { RenameFicaFacultyName032Migration1773800000000 } from './migrations/032-rename-fica-faculty-name.migration';
 import { ScheduleBlockReferenceFields033Migration1773900000000 } from './migrations/033-schedule-block-reference-fields.migration';
 import { GradesCore034Migration1774000000000 } from './migrations/034-grades-core.migration';
+import { UsersCodigoAlumnoRoleIndex035Migration1774100000000 } from './migrations/035-users-codigo-alumno-role-index.migration';
 
 export const TYPEORM_ENTITIES = [
   UserEntity,
@@ -99,6 +100,7 @@ export const TYPEORM_MIGRATIONS = [
   RenameFicaFacultyName032Migration1773800000000,
   ScheduleBlockReferenceFields033Migration1773900000000,
   GradesCore034Migration1774000000000,
+  UsersCodigoAlumnoRoleIndex035Migration1774100000000,
 ];
 
 export function createDataSourceOptionsFromEnv(): DataSourceOptions {

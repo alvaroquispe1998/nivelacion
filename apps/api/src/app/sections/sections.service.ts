@@ -2292,6 +2292,13 @@ export class SectionsService {
     ignoredSectionCourseIds?: string[];
   }) {
     const activePeriodId = await this.periodsService.getOperationalPeriodIdOrThrow();
+    const context = await this.getSectionCourseContextOrThrow({
+      sectionCourseId: params.sectionCourseId,
+      periodId: activePeriodId,
+    });
+    if (this.isWelcomeScheduleContext(context)) {
+      return;
+    }
     const conflicts = await this.findTeacherConflictingBlocks({
       teacherId: params.teacherId,
       periodId: activePeriodId,
@@ -2826,6 +2833,13 @@ export class SectionsService {
     ignoredSectionCourseIds?: string[];
   }) {
     const activePeriodId = await this.periodsService.getOperationalPeriodIdOrThrow();
+    const context = await this.getSectionCourseContextOrThrow({
+      sectionCourseId: params.sectionCourseId,
+      periodId: activePeriodId,
+    });
+    if (this.isWelcomeScheduleContext(context)) {
+      return;
+    }
     const blockRows: Array<{
       dayOfWeek: number;
       startTime: string;
@@ -3169,6 +3183,18 @@ export class SectionsService {
 
   private isVirtualModality(value: string | null | undefined) {
     return this.scopeKey(value).includes('VIRTUAL');
+  }
+
+  private isWelcomeScheduleContext(params: {
+    facultyGroup: string | null | undefined;
+    campusName: string | null | undefined;
+    modality: string | null | undefined;
+  }) {
+    return (
+      this.scopeKey(params.facultyGroup) === 'GENERAL' &&
+      this.scopeKey(params.campusName) === 'VIRTUAL' &&
+      this.isVirtualModality(params.modality)
+    );
   }
 
   private buildPlanningStatusAndAvailability(params: {

@@ -58,6 +58,7 @@ services:
       AKADEMIC_MODE: mock
     volumes:
       - ./:/workspace
+      - nx_api:/workspace/.nx
       - node_modules:/workspace/node_modules
       - pnpm_store:/pnpm-store
     ports:
@@ -67,8 +68,8 @@ services:
         condition: service_healthy
       deps:
         condition: service_completed_successfully
-    # NOTE: @nx/js:node uses --port/--host for the Node inspector; passing 3000 conflicts with Nest listen port.
-    command: bash -lc "pnpm nx reset && pnpm nx serve api --configuration=development --skip-nx-cache"
+    # Use a plain build+node start here to avoid nested pnpm/nx serve recursion in the container.
+    command: bash -lc "pnpm nx build api --configuration=development --skip-nx-cache && node apps/api/dist/main.js"
 
   web:
     build:
@@ -108,6 +109,7 @@ services:
 volumes:
   mysql_data:
   nx_deps:
+  nx_api:
   nx_web:
   node_modules:
   pnpm_store:

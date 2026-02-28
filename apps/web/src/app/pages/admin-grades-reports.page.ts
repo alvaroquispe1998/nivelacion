@@ -1,8 +1,14 @@
 import { CommonModule } from '@angular/common';
 import { HttpClient, HttpParams } from '@angular/common/http';
-import { ChangeDetectorRef, Component, inject } from '@angular/core';
+import {
+  ChangeDetectorRef,
+  Component,
+  OnDestroy,
+  inject,
+} from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { firstValueFrom } from 'rxjs';
+import { Subscription, firstValueFrom, skip } from 'rxjs';
+import { AdminPeriodContextService } from '../core/workflow/admin-period-context.service';
 
 interface GradesReportFilters {
   periodId: string;
@@ -40,19 +46,39 @@ interface AttendanceReportResponse {
   template: `
     <div class="space-y-5">
       <div class="rounded-2xl border border-slate-200 bg-white p-5">
-        <div class="flex items-center justify-between gap-3">
+        <div class="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div class="text-xl font-semibold">Reportes por carrera</div>
             <div class="text-sm text-slate-600">
               Reportes academicos y de asistencia por filtros.
             </div>
+            <div class="mt-1 text-xs text-slate-500">
+              Periodo:
+              <b>{{ currentPeriodLabel }}</b>
+            </div>
           </div>
-          <button
-            class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50"
-            (click)="loadAll()"
-          >
-            Refrescar
-          </button>
+          <div class="flex flex-wrap gap-2">
+            <button
+              class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50 disabled:opacity-60"
+              [disabled]="exportingExcel"
+              (click)="downloadActiveReport('excel')"
+            >
+              {{ exportingExcel ? 'Descargando...' : 'Exportar Excel' }}
+            </button>
+            <button
+              class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50 disabled:opacity-60"
+              [disabled]="exportingPdf"
+              (click)="downloadActiveReport('pdf')"
+            >
+              {{ exportingPdf ? 'Descargando...' : 'Exportar PDF' }}
+            </button>
+            <button
+              class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50"
+              (click)="loadAll()"
+            >
+              Refrescar
+            </button>
+          </div>
         </div>
       </div>
 
@@ -200,12 +226,16 @@ interface AttendanceReportResponse {
     </div>
   `,
 })
-export class AdminGradesReportsPage {
+export class AdminGradesReportsPage implements OnDestroy {
   private readonly http = inject(HttpClient);
   private readonly cdr = inject(ChangeDetectorRef);
+  private readonly adminPeriodContext = inject(AdminPeriodContextService);
+  private periodSub?: Subscription;
 
   error: string | null = null;
   activeTab: 'students' | 'averages' | 'attendance' = 'students';
+  exportingExcel = false;
+  exportingPdf = false;
 
   reportFilters: GradesReportFilters = {
     periodId: '',
@@ -220,8 +250,21 @@ export class AdminGradesReportsPage {
   averagesReport: AveragesReportRow[] = [];
   attendanceReport: AttendanceReportResponse = { dates: [], rows: [] };
 
+  get currentPeriodLabel() {
+    const period = this.adminPeriodContext.getSelectedPeriod();
+    if (!period?.id) return 'Periodo operativo actual';
+    return `${period.code} - ${period.name}`;
+  }
+
   async ngOnInit() {
     await this.loadAll();
+    this.periodSub = this.adminPeriodContext.changes$
+      .pipe(skip(1))
+      .subscribe(() => void this.loadAll());
+  }
+
+  ngOnDestroy() {
+    this.periodSub?.unsubscribe();
   }
 
   trackText(_: number, item: string) {
@@ -245,9 +288,14 @@ export class AdminGradesReportsPage {
   async loadAll() {
     this.error = null;
     try {
-      const filters = await firstValueFrom(this.http.get<GradesReportFilters>('/api/admin/grades/reports/filters'));
+      const filters = await firstValueFrom(
+        this.http.get<GradesReportFilters>('/api/admin/grades/reports/filters')
+      );
       this.reportFilters = filters;
-      if (this.reportFaculty && !filters.faculties.some((x) => x.facultyGroup === this.reportFaculty)) {
+      if (
+        this.reportFaculty &&
+        !filters.faculties.some((x) => x.facultyGroup === this.reportFaculty)
+      ) {
         this.reportFaculty = '';
       }
       if (this.reportCampus && !filters.campuses.includes(this.reportCampus)) {
@@ -259,7 +307,6 @@ export class AdminGradesReportsPage {
       await this.loadReports();
     } catch (e: any) {
       this.error = this.extractError(e, 'No se pudo cargar reportes por carrera.');
-    } finally {
       this.cdr.detectChanges();
     }
   }
@@ -269,9 +316,22 @@ export class AdminGradesReportsPage {
     try {
       const params = this.buildReportParams();
       const [students, averages, attendance] = await Promise.all([
-        firstValueFrom(this.http.get<StudentsReportRow[]>('/api/admin/grades/reports/students', { params })),
-        firstValueFrom(this.http.get<AveragesReportRow[]>('/api/admin/grades/reports/averages', { params })),
-        firstValueFrom(this.http.get<AttendanceReportResponse>('/api/admin/grades/reports/attendance', { params })),
+        firstValueFrom(
+          this.http.get<StudentsReportRow[]>('/api/admin/grades/reports/students', {
+            params,
+          })
+        ),
+        firstValueFrom(
+          this.http.get<AveragesReportRow[]>('/api/admin/grades/reports/averages', {
+            params,
+          })
+        ),
+        firstValueFrom(
+          this.http.get<AttendanceReportResponse>(
+            '/api/admin/grades/reports/attendance',
+            { params }
+          )
+        ),
       ]);
       this.studentsReport = students;
       this.averagesReport = averages;
@@ -286,12 +346,111 @@ export class AdminGradesReportsPage {
     }
   }
 
+  async downloadActiveReport(format: 'excel' | 'pdf') {
+    this.error = null;
+    if (format === 'excel') {
+      this.exportingExcel = true;
+    } else {
+      this.exportingPdf = true;
+    }
+    try {
+      const suffix = format === 'excel' ? 'excel' : 'pdf';
+      const extension = format === 'excel' ? 'xlsx' : 'pdf';
+      const endpoint =
+        this.activeTab === 'students'
+          ? `/api/admin/grades/reports/students/export/${suffix}`
+          : this.activeTab === 'averages'
+            ? `/api/admin/grades/reports/averages/export/${suffix}`
+            : `/api/admin/grades/reports/attendance/export/${suffix}`;
+      const response = await firstValueFrom(
+        this.http.get(endpoint, {
+          observe: 'response',
+          params: this.buildReportParams(),
+          responseType: 'blob',
+        })
+      );
+      const blob = response.body;
+      if (!blob) {
+        throw new Error('No se recibio archivo para descargar.');
+      }
+      const fileName = this.extractDownloadFileName(
+        response.headers.get('content-disposition'),
+        this.buildDownloadFileName(extension)
+      );
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e: any) {
+      this.error = this.extractError(e, 'No se pudo descargar el reporte.');
+    } finally {
+      this.exportingExcel = false;
+      this.exportingPdf = false;
+      this.cdr.detectChanges();
+    }
+  }
+
   private buildReportParams() {
     let params = new HttpParams();
     if (this.reportFaculty) params = params.set('facultyGroup', this.reportFaculty);
     if (this.reportCampus) params = params.set('campusName', this.reportCampus);
     if (this.reportCareer) params = params.set('careerName', this.reportCareer);
     return params;
+  }
+
+  private buildDownloadFileName(extension: 'xlsx' | 'pdf') {
+    const period = this.adminPeriodContext.getSelectedPeriod();
+    const periodPart = this.sanitizeFilePart(period?.code ?? 'periodo');
+    const filters = [this.reportFaculty, this.reportCampus, this.reportCareer]
+      .map((item) => this.sanitizeFilePart(item))
+      .filter(Boolean)
+      .join('_');
+    const base =
+      this.activeTab === 'students'
+        ? 'reporte_alumnado'
+        : this.activeTab === 'averages'
+          ? 'reporte_promedios'
+          : 'reporte_asistencia';
+    const fileName = [base, periodPart, filters]
+      .filter(Boolean)
+      .join('_')
+      .replace(/\s+/g, '_');
+    return `${fileName}.${extension}`;
+  }
+
+  private extractDownloadFileName(
+    disposition: string | null,
+    fallbackName: string
+  ) {
+    const encodedMatch = disposition?.match(/filename\*=UTF-8''([^;]+)/i);
+    if (encodedMatch?.[1]) {
+      return this.cleanFileName(decodeURIComponent(encodedMatch[1]));
+    }
+    const simpleMatch = disposition?.match(/filename=\"?([^\";]+)\"?/i);
+    if (simpleMatch?.[1]) {
+      return this.cleanFileName(simpleMatch[1]);
+    }
+    return fallbackName;
+  }
+
+  private cleanFileName(value: string) {
+    return String(value ?? '').trim().replace(/[\\/:*?"<>|]+/g, '_') || 'archivo';
+  }
+
+  private sanitizeFilePart(value: string | null | undefined) {
+    return String(value ?? '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim()
+      .replace(/\s+/g, '_')
+      .replace(/[^A-Za-z0-9_-]+/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .toLowerCase();
   }
 
   private extractError(error: any, fallback: string) {

@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { randomUUID } from 'crypto';
 import { Role } from '@uai/shared';
 import { DataSource } from 'typeorm';
+import * as XLSX from 'xlsx';
 import { PeriodsService } from '../periods/periods.service';
 import { SectionsService } from '../sections/sections.service';
 import { SaveSectionCourseGradesDto } from './dto/save-section-course-grades.dto';
@@ -32,6 +33,118 @@ interface GradesReportFilter {
   facultyGroup?: string;
   campusName?: string;
   careerName?: string;
+}
+
+interface PeriodMetadata {
+  id: string;
+  code: string;
+  name: string;
+}
+
+interface StudentScheduleReportItem {
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+  courseName: string;
+  sectionName: string;
+  teacherName: string | null;
+  modality: string | null;
+  classroomCode: string | null;
+  classroomName: string | null;
+  zoomUrl: string | null;
+  location: string | null;
+  referenceModality: string | null;
+  referenceClassroom: string | null;
+}
+
+interface StudentAttendanceReportItem {
+  courseName: string;
+  sessionDate: string;
+  status: 'ASISTIO' | 'FALTO';
+}
+
+interface StudentGradesReportComponentRow {
+  componentId: string;
+  code: string;
+  name: string;
+  weight: number;
+  score: number | null;
+}
+
+interface StudentGradesReportRow {
+  sectionCourseId: string;
+  courseName: string;
+  sectionCode: string | null;
+  sectionName: string;
+  facultyGroup: string | null;
+  facultyName: string | null;
+  campusName: string | null;
+  modality: string | null;
+  components: StudentGradesReportComponentRow[];
+  isComplete: boolean;
+  finalAverage: number;
+  approved: boolean;
+}
+
+interface StudentGradesReportResponse {
+  periodId: string;
+  components: GradeSchemeComponentRow[];
+  rows: StudentGradesReportRow[];
+}
+
+interface AdminStudentReportSearchItem {
+  studentId: string;
+  dni: string;
+  codigoAlumno: string | null;
+  fullName: string;
+  careerName: string | null;
+}
+
+interface AdminStudentEnrollmentItem {
+  sectionCourseId: string;
+  courseName: string;
+  sectionCode: string | null;
+  sectionName: string;
+  facultyGroup: string | null;
+  facultyName: string | null;
+  campusName: string | null;
+  modality: string | null;
+  teacherName: string | null;
+  classroomCode: string | null;
+  classroomName: string | null;
+  classroomLabel: string | null;
+}
+
+interface AdminStudentAttendanceSummaryItem {
+  courseName: string;
+  totalSessions: number;
+  attendedCount: number;
+  absentCount: number;
+  attendanceRate: number;
+}
+
+interface AdminStudentReportResponse {
+  periodId: string;
+  student: {
+    studentId: string;
+    dni: string;
+    codigoAlumno: string | null;
+    fullName: string;
+    names: string | null;
+    paternalLastName: string | null;
+    maternalLastName: string | null;
+    careerName: string | null;
+    sex: string | null;
+    email: string | null;
+    examDate: string | null;
+  };
+  schedule: StudentScheduleReportItem[];
+  enrollment: AdminStudentEnrollmentItem[];
+  grades: StudentGradesReportResponse;
+  attendance: {
+    summaryByCourse: AdminStudentAttendanceSummaryItem[];
+    sessions: StudentAttendanceReportItem[];
+  };
 }
 
 const COMPONENT_ORDER: GradeComponentCode[] = ['DIAGNOSTICO', 'FK1', 'FK2', 'PARCIAL'];
@@ -214,71 +327,7 @@ export class GradesService {
 
   async getStudentGrades(studentId: string) {
     const periodId = await this.periodsService.getActivePeriodIdOrThrow();
-    const scheme = await this.getOrCreateScheme(periodId);
-    const activeComponents = this.getActiveComponents(scheme.components);
-
-    const enrollments: Array<any> = await this.dataSource.query(
-      `
-      SELECT sc.id AS sectionCourseId, c.name AS courseName, s.code AS sectionCode, s.name AS sectionName,
-             s.facultyGroup AS facultyGroup, s.facultyName AS facultyName, s.campusName AS campusName, s.modality AS modality
-      FROM section_student_courses ssc
-      INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
-      INNER JOIN courses c ON c.id = sc.courseId
-      INNER JOIN sections s ON s.id = sc.sectionId
-      WHERE ssc.studentId = ? AND sc.periodId = ?
-      ORDER BY c.name ASC, s.code ASC, s.name ASC
-      `,
-      [studentId, periodId]
-    );
-    if (enrollments.length === 0) return { periodId, components: activeComponents, rows: [] };
-
-    const sectionCourseIds = enrollments.map((x) => String(x.sectionCourseId));
-    const placeholders = sectionCourseIds.map(() => '?').join(', ');
-    const grades: Array<any> = await this.dataSource.query(
-      `
-      SELECT sectionCourseId, componentId, score
-      FROM section_course_grades
-      WHERE studentId = ? AND sectionCourseId IN (${placeholders})
-      `,
-      [studentId, ...sectionCourseIds]
-    );
-    const gradeMap = new Map<string, number>();
-    for (const row of grades) {
-      gradeMap.set(this.gradeKey(studentId, String(row.sectionCourseId), String(row.componentId)), Number(row.score ?? 0));
-    }
-
-    const rows = enrollments.map((row) => {
-      const sectionCourseId = String(row.sectionCourseId);
-      const scores = new Map<string, number>();
-      for (const c of activeComponents) {
-        const key = this.gradeKey(studentId, sectionCourseId, c.id);
-        if (gradeMap.has(key)) scores.set(c.id, gradeMap.get(key) ?? 0);
-      }
-      const { finalAverage, approved } = this.computeFinalAverage(activeComponents, scores);
-      return {
-        sectionCourseId,
-        courseName: String(row.courseName ?? ''),
-        sectionCode: row.sectionCode ? String(row.sectionCode) : null,
-        sectionName: String(row.sectionName ?? ''),
-        facultyGroup: row.facultyGroup ? String(row.facultyGroup) : null,
-        facultyName: row.facultyName ? String(row.facultyName) : null,
-        campusName: row.campusName ? String(row.campusName) : null,
-        modality: row.modality ? String(row.modality) : null,
-        components: activeComponents.map((component) => {
-          const key = this.gradeKey(studentId, sectionCourseId, component.id);
-          return {
-            componentId: component.id,
-            code: component.code,
-            name: component.name,
-            weight: component.weight,
-            score: gradeMap.has(key) ? this.toFixed2(gradeMap.get(key) ?? 0) : null,
-          };
-        }),
-        finalAverage,
-        approved,
-      };
-    });
-    return { periodId, components: activeComponents, rows };
+    return this.getStudentGradesByStudentAndPeriod(studentId, periodId);
   }
 
   async getAdminReportFilters() {
@@ -472,6 +521,504 @@ export class GradesService {
     return { dates, rows };
   }
 
+  async searchAdminStudentsForReport(q: string): Promise<AdminStudentReportSearchItem[]> {
+    const periodId = await this.periodsService.getOperationalPeriodIdOrThrow();
+    const normalized = this.normalizeSearchText(q);
+    if (!normalized) return [];
+
+    const searchExpr =
+      "UPPER(CONCAT_WS(' ', COALESCE(u.fullName, ''), COALESCE(u.paternalLastName, ''), COALESCE(u.maternalLastName, ''), COALESCE(u.names, '')))";
+    const dniExpr = "COALESCE(u.dni, '')";
+    const codeExpr = "UPPER(COALESCE(u.codigoAlumno, ''))";
+    const fullNameExpr = "UPPER(COALESCE(u.fullName, ''))";
+    const tokens = normalized.split(' ').filter(Boolean);
+
+    const whereBlocks: string[] = [
+      `${dniExpr} = ?`,
+      `${dniExpr} LIKE ?`,
+      `${codeExpr} = ?`,
+      `${codeExpr} LIKE ?`,
+    ];
+    const params: unknown[] = [
+      periodId,
+      normalized,
+      `${normalized}%`,
+      normalized,
+      `${normalized}%`,
+    ];
+
+    if (tokens.length > 0) {
+      whereBlocks.push(
+        tokens.map(() => `${searchExpr} LIKE ?`).join(' AND ')
+      );
+      params.push(...tokens.map((token) => `%${token}%`));
+    }
+
+    const rows: Array<any> = await this.dataSource.query(
+      `
+      SELECT DISTINCT
+        u.id AS studentId,
+        u.dni AS dni,
+        u.codigoAlumno AS codigoAlumno,
+        u.fullName AS fullName,
+        u.careerName AS careerName
+      FROM users u
+      INNER JOIN section_student_courses ssc ON ssc.studentId = u.id
+      INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
+      WHERE u.role = 'ALUMNO'
+        AND sc.periodId = ?
+        AND (${whereBlocks.join(' OR ')})
+      ORDER BY
+        CASE
+          WHEN ${dniExpr} = ? THEN 1
+          WHEN ${codeExpr} = ? THEN 2
+          WHEN ${dniExpr} LIKE ? THEN 3
+          WHEN ${codeExpr} LIKE ? THEN 4
+          WHEN ${fullNameExpr} LIKE ? THEN 5
+          ELSE 6
+        END ASC,
+        u.fullName ASC,
+        u.dni ASC
+      LIMIT 20
+      `,
+      [
+        ...params,
+        normalized,
+        normalized,
+        `${normalized}%`,
+        `${normalized}%`,
+        `${normalized}%`,
+      ]
+    );
+
+    return rows.map((row) => ({
+      studentId: String(row.studentId),
+      dni: String(row.dni ?? ''),
+      codigoAlumno: row.codigoAlumno ? String(row.codigoAlumno) : null,
+      fullName: String(row.fullName ?? ''),
+      careerName: row.careerName ? String(row.careerName) : null,
+    }));
+  }
+
+  async getAdminStudentReport(studentId: string): Promise<AdminStudentReportResponse> {
+    const student = await this.getStudentProfileOrThrow(studentId);
+    const periodId = await this.periodsService.getOperationalPeriodIdOrThrow();
+    const [schedule, enrollment, grades, attendance] = await Promise.all([
+      this.getStudentScheduleByStudentAndPeriod(student.studentId, periodId),
+      this.getStudentEnrollmentByStudentAndPeriod(student.studentId, periodId),
+      this.getStudentGradesByStudentAndPeriod(student.studentId, periodId),
+      this.getStudentAttendanceByStudentAndPeriod(student.studentId, periodId),
+    ]);
+    return {
+      periodId,
+      student,
+      schedule,
+      enrollment,
+      grades,
+      attendance,
+    };
+  }
+
+  async buildAdminStudentReportExcel(studentId: string) {
+    const report = await this.getAdminStudentReport(studentId);
+    const period = await this.loadPeriodMetadata(report.periodId);
+    const workbook = XLSX.utils.book_new();
+
+    const profileRows = [
+      ['Periodo', `${period.code} - ${period.name}`],
+      ['Nombre completo', report.student.fullName || '-'],
+      ['Nombres', report.student.names || '-'],
+      ['Apellido paterno', report.student.paternalLastName || '-'],
+      ['Apellido materno', report.student.maternalLastName || '-'],
+      ['DNI', report.student.dni || '-'],
+      ['Codigo', report.student.codigoAlumno || 'SIN CODIGO'],
+      ['Carrera', report.student.careerName || 'SIN CARRERA'],
+      ['Sexo', report.student.sex || '-'],
+      ['Email', report.student.email || '-'],
+      ['Fecha de examen', report.student.examDate || '-'],
+    ];
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.aoa_to_sheet(profileRows),
+      'Datos Generales'
+    );
+
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.json_to_sheet(
+        report.schedule.map((item) => ({
+          Dia: this.dayLabel(item.dayOfWeek),
+          Inicio: item.startTime,
+          Fin: item.endTime,
+          Curso: item.courseName,
+          Seccion: item.sectionName,
+          Docente: item.teacherName || 'Sin docente asignado',
+          Modalidad: item.referenceModality || item.modality || '-',
+          Aula: this.classroomLabelForSchedule(item),
+        }))
+      ),
+      'Horario'
+    );
+
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.json_to_sheet(
+        report.enrollment.map((item) => ({
+          Curso: item.courseName,
+          Seccion: item.sectionCode || item.sectionName,
+          Sede: item.campusName || '-',
+          Modalidad: item.modality || '-',
+          Docente: item.teacherName || 'Sin docente asignado',
+          Aula: item.classroomLabel || 'Sin aula asignada',
+        }))
+      ),
+      'Matricula'
+    );
+
+    const gradeHeaders = report.grades.components.map((component) => component.name);
+    const gradeRows = report.grades.rows.map((row) => {
+      const base: Record<string, string | number> = {
+        Curso: row.courseName,
+        Seccion: row.sectionCode || row.sectionName,
+        Sede: row.campusName || '-',
+        Modalidad: row.modality || '-',
+      };
+      for (const component of report.grades.components) {
+        const score =
+          row.components.find((item) => item.componentId === component.id)?.score ??
+          null;
+        base[component.name] = score === null ? '-' : this.toFixed2(score);
+      }
+      base['Promedio final'] = row.finalAverage;
+      base['Estado'] = row.isComplete
+        ? row.approved
+          ? 'APROBADO'
+          : 'DESAPROBADO'
+        : 'PENDIENTE';
+      return base;
+    });
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.json_to_sheet(gradeRows, {
+        header: [
+          'Curso',
+          'Seccion',
+          'Sede',
+          'Modalidad',
+          ...gradeHeaders,
+          'Promedio final',
+          'Estado',
+        ],
+      }),
+      'Notas'
+    );
+
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.json_to_sheet(
+        report.attendance.summaryByCourse.map((item) => ({
+          Curso: item.courseName,
+          Sesiones: item.totalSessions,
+          Asistencias: item.attendedCount,
+          Faltas: item.absentCount,
+          '% asistencia': item.attendanceRate,
+        }))
+      ),
+      'Asistencia Resumen'
+    );
+
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.json_to_sheet(
+        report.attendance.sessions.map((item) => ({
+          Curso: item.courseName,
+          Fecha: item.sessionDate,
+          Estado: item.status,
+        }))
+      ),
+      'Asistencia Detalle'
+    );
+
+    return {
+      fileBuffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer,
+      fileName: this.buildStudentReportExportFileName(
+        report.student.codigoAlumno || report.student.dni || report.student.fullName,
+        period.code,
+        'xlsx'
+      ),
+    };
+  }
+
+  async buildAdminStudentReportPdf(studentId: string) {
+    const report = await this.getAdminStudentReport(studentId);
+    const period = await this.loadPeriodMetadata(report.periodId);
+    const doc = this.createPdfDocument();
+
+    doc.font('Helvetica-Bold').fontSize(16).text('Reporte por alumno', {
+      align: 'center',
+    });
+    doc.moveDown(0.5);
+    doc
+      .font('Helvetica')
+      .fontSize(10)
+      .text(`Periodo: ${period.code} - ${period.name}`, { align: 'center' });
+    doc.moveDown(1);
+
+    this.writePdfSection(doc, 'Datos generales', [
+      `Nombre completo: ${report.student.fullName || '-'}`,
+      `Nombres: ${report.student.names || '-'}`,
+      `Apellido paterno: ${report.student.paternalLastName || '-'}`,
+      `Apellido materno: ${report.student.maternalLastName || '-'}`,
+      `DNI: ${report.student.dni || '-'}`,
+      `Codigo: ${report.student.codigoAlumno || 'SIN CODIGO'}`,
+      `Carrera: ${report.student.careerName || 'SIN CARRERA'}`,
+      `Sexo: ${report.student.sex || '-'}`,
+      `Email: ${report.student.email || '-'}`,
+      `Fecha de examen: ${report.student.examDate || '-'}`,
+    ]);
+
+    this.writePdfSection(
+      doc,
+      'Horario',
+      report.schedule.length > 0
+        ? report.schedule.map(
+            (item) =>
+              `${this.dayLabel(item.dayOfWeek)} ${item.startTime}-${item.endTime} | ${item.courseName} | ${item.sectionName} | ${item.teacherName || 'Sin docente asignado'} | ${item.referenceModality || item.modality || '-'} | ${this.classroomLabelForSchedule(item)}`
+          )
+        : ['Sin horario registrado.']
+    );
+
+    this.writePdfSection(
+      doc,
+      'Matricula',
+      report.enrollment.length > 0
+        ? report.enrollment.map(
+            (item) =>
+              `${item.courseName} | ${item.sectionCode || item.sectionName} | ${item.campusName || '-'} | ${item.modality || '-'} | ${item.teacherName || 'Sin docente asignado'} | ${item.classroomLabel || 'Sin aula asignada'}`
+          )
+        : ['Sin matricula registrada.']
+    );
+
+    this.writePdfSection(
+      doc,
+      'Notas',
+      report.grades.rows.length > 0
+        ? report.grades.rows.map((row) => {
+            const componentText = row.components
+              .map((component) => `${component.name}: ${component.score === null ? '-' : this.toFixed2(component.score)}`)
+              .join(' | ');
+            const status = row.isComplete
+              ? row.approved
+                ? 'APROBADO'
+                : 'DESAPROBADO'
+              : 'PENDIENTE';
+            return `${row.courseName} | ${row.sectionCode || row.sectionName} | ${row.campusName || '-'} | ${row.modality || '-'} | ${componentText} | Promedio: ${row.finalAverage} | Estado: ${status}`;
+          })
+        : ['Sin notas registradas.']
+    );
+
+    this.writePdfSection(
+      doc,
+      'Asistencia resumen',
+      report.attendance.summaryByCourse.length > 0
+        ? report.attendance.summaryByCourse.map(
+            (item) =>
+              `${item.courseName} | Sesiones: ${item.totalSessions} | Asistencias: ${item.attendedCount} | Faltas: ${item.absentCount} | %: ${item.attendanceRate}`
+          )
+        : ['Sin asistencia registrada.']
+    );
+
+    this.writePdfSection(
+      doc,
+      'Asistencia detalle',
+      report.attendance.sessions.length > 0
+        ? report.attendance.sessions.map(
+            (item) => `${item.sessionDate} | ${item.courseName} | ${item.status}`
+          )
+        : ['Sin sesiones registradas.']
+    );
+
+    const fileBuffer = await this.finalizePdfDocument(doc);
+    return {
+      fileBuffer,
+      fileName: this.buildStudentReportExportFileName(
+        report.student.codigoAlumno || report.student.dni || report.student.fullName,
+        period.code,
+        'pdf'
+      ),
+    };
+  }
+
+  async buildAdminStudentsReportExcel(filter: GradesReportFilter) {
+    const periodId = await this.periodsService.getOperationalPeriodIdOrThrow();
+    const period = await this.loadPeriodMetadata(periodId);
+    const rows = await this.getAdminStudentsReport(filter);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.json_to_sheet(
+        rows.map((row) => ({
+          DNI: row.dni,
+          Codigo: row.codigoAlumno || 'SIN CODIGO',
+          'Nombres completos': row.fullName,
+          Carrera: row.careerName || 'SIN CARRERA',
+        }))
+      ),
+      'Alumnado'
+    );
+    return {
+      fileBuffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer,
+      fileName: this.buildCareerReportExportFileName('alumnado', filter, period.code, 'xlsx'),
+    };
+  }
+
+  async buildAdminStudentsReportPdf(filter: GradesReportFilter) {
+    const periodId = await this.periodsService.getOperationalPeriodIdOrThrow();
+    const period = await this.loadPeriodMetadata(periodId);
+    const rows = await this.getAdminStudentsReport(filter);
+    const doc = this.createPdfDocument();
+    doc.font('Helvetica-Bold').fontSize(16).text('Reporte de alumnado', { align: 'center' });
+    doc.moveDown(0.5);
+    doc.font('Helvetica').fontSize(10).text(`Periodo: ${period.code} - ${period.name}`, { align: 'center' });
+    doc.moveDown(1);
+    this.writePdfSection(doc, 'Filtros', this.buildFilterSummary(filter));
+    this.writePdfSection(
+      doc,
+      'Resultados',
+      rows.length > 0
+        ? rows.map(
+            (row) =>
+              `${row.dni} | ${row.codigoAlumno || 'SIN CODIGO'} | ${row.fullName} | ${row.careerName || 'SIN CARRERA'}`
+          )
+        : ['Sin datos.']
+    );
+    return {
+      fileBuffer: await this.finalizePdfDocument(doc),
+      fileName: this.buildCareerReportExportFileName('alumnado', filter, period.code, 'pdf'),
+    };
+  }
+
+  async buildAdminAveragesReportExcel(filter: GradesReportFilter) {
+    const periodId = await this.periodsService.getOperationalPeriodIdOrThrow();
+    const period = await this.loadPeriodMetadata(periodId);
+    const rows = await this.getAdminAveragesReport(filter);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.json_to_sheet(
+        rows.map((row) => ({
+          DNI: row.dni,
+          Codigo: row.codigoAlumno || 'SIN CODIGO',
+          'Nombres completos': row.fullName,
+          Promedio: row.average,
+          Aprobado: row.approved,
+        }))
+      ),
+      'Promedios'
+    );
+    return {
+      fileBuffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer,
+      fileName: this.buildCareerReportExportFileName('promedios', filter, period.code, 'xlsx'),
+    };
+  }
+
+  async buildAdminAveragesReportPdf(filter: GradesReportFilter) {
+    const periodId = await this.periodsService.getOperationalPeriodIdOrThrow();
+    const period = await this.loadPeriodMetadata(periodId);
+    const rows = await this.getAdminAveragesReport(filter);
+    const doc = this.createPdfDocument();
+    doc.font('Helvetica-Bold').fontSize(16).text('Reporte de promedios', { align: 'center' });
+    doc.moveDown(0.5);
+    doc.font('Helvetica').fontSize(10).text(`Periodo: ${period.code} - ${period.name}`, { align: 'center' });
+    doc.moveDown(1);
+    this.writePdfSection(doc, 'Filtros', this.buildFilterSummary(filter));
+    this.writePdfSection(
+      doc,
+      'Resultados',
+      rows.length > 0
+        ? rows.map(
+            (row) =>
+              `${row.dni} | ${row.codigoAlumno || 'SIN CODIGO'} | ${row.fullName} | Promedio: ${row.average} | Aprobado: ${row.approved}`
+          )
+        : ['Sin datos.']
+    );
+    return {
+      fileBuffer: await this.finalizePdfDocument(doc),
+      fileName: this.buildCareerReportExportFileName('promedios', filter, period.code, 'pdf'),
+    };
+  }
+
+  async buildAdminAttendanceReportExcel(filter: GradesReportFilter) {
+    const periodId = await this.periodsService.getOperationalPeriodIdOrThrow();
+    const period = await this.loadPeriodMetadata(periodId);
+    const report = await this.getAdminAttendanceReport(filter);
+    const workbook = XLSX.utils.book_new();
+    const rows = report.rows.map((row) => {
+      const base: Record<string, string | number> = {
+        DNI: row.dni,
+        Codigo: row.codigoAlumno || 'SIN CODIGO',
+        'Nombres completos': row.fullName,
+        Carrera: row.careerName || 'SIN CARRERA',
+      };
+      for (const date of report.dates) {
+        base[date] = row.attendanceByDate[date] || '-';
+      }
+      base['Asistencias totales'] = row.totalAsistencias;
+      return base;
+    });
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.json_to_sheet(rows, {
+        header: [
+          'DNI',
+          'Codigo',
+          'Nombres completos',
+          'Carrera',
+          ...report.dates,
+          'Asistencias totales',
+        ],
+      }),
+      'Asistencia'
+    );
+    return {
+      fileBuffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer,
+      fileName: this.buildCareerReportExportFileName('asistencia', filter, period.code, 'xlsx'),
+    };
+  }
+
+  async buildAdminAttendanceReportPdf(filter: GradesReportFilter) {
+    const periodId = await this.periodsService.getOperationalPeriodIdOrThrow();
+    const period = await this.loadPeriodMetadata(periodId);
+    const report = await this.getAdminAttendanceReport(filter);
+    const doc = this.createPdfDocument();
+    doc.font('Helvetica-Bold').fontSize(16).text('Reporte de asistencia', { align: 'center' });
+    doc.moveDown(0.5);
+    doc.font('Helvetica').fontSize(10).text(`Periodo: ${period.code} - ${period.name}`, { align: 'center' });
+    doc.moveDown(1);
+    this.writePdfSection(doc, 'Filtros', this.buildFilterSummary(filter));
+    this.writePdfSection(
+      doc,
+      'Fechas consideradas',
+      report.dates.length > 0 ? report.dates : ['Sin sesiones registradas.']
+    );
+    this.writePdfSection(
+      doc,
+      'Resultados',
+      report.rows.length > 0
+        ? report.rows.map((row) => {
+            const statuses = report.dates
+              .map((date) => `${date}: ${row.attendanceByDate[date] || '-'}`)
+              .join(' | ');
+            return `${row.dni} | ${row.codigoAlumno || 'SIN CODIGO'} | ${row.fullName} | ${row.careerName || 'SIN CARRERA'} | ${statuses} | Total: ${row.totalAsistencias}`;
+          })
+        : ['Sin datos.']
+    );
+    return {
+      fileBuffer: await this.finalizePdfDocument(doc),
+      fileName: this.buildCareerReportExportFileName('asistencia', filter, period.code, 'pdf'),
+    };
+  }
+
   private async getSectionCourseGrades(params: {
     sectionCourseId: string;
     periodId: string;
@@ -518,6 +1065,7 @@ export class GradesService {
         fullName: student.fullName,
         careerName: student.careerName,
         scores: rowScores,
+        isComplete: calc.isComplete,
         finalAverage: calc.finalAverage,
         approved: calc.approved,
       };
@@ -911,15 +1459,18 @@ export class GradesService {
     components: GradeSchemeComponentRow[],
     scoresByComponentId: Map<string, number>
   ) {
+    const isComplete = components.every((component) =>
+      scoresByComponentId.has(component.id)
+    );
     const weighted = components.filter((x) => x.weight > 0);
     const totalWeight = weighted.reduce((acc, x) => acc + x.weight, 0);
-    if (totalWeight <= 0) return { finalAverage: 0, approved: false };
+    if (totalWeight <= 0) return { finalAverage: 0, approved: false, isComplete };
     const weightedSum = weighted.reduce((acc, x) => {
       const score = this.toFixed2(scoresByComponentId.get(x.id) ?? 0);
       return acc + score * x.weight;
     }, 0);
-    const finalAverage = this.toFixed2(weightedSum / totalWeight);
-    return { finalAverage, approved: finalAverage >= 11 };
+    const finalAverage = this.roundUpGrade(weightedSum / totalWeight);
+    return { finalAverage, approved: finalAverage >= 11, isComplete };
   }
 
   private buildEnrollmentWhere(periodId: string, filter: GradesReportFilter) {
@@ -958,6 +1509,462 @@ export class GradesService {
     return { whereSql: where.join(' AND '), params };
   }
 
+  private async getStudentProfileOrThrow(studentId: string) {
+    const normalizedId = String(studentId ?? '').trim();
+    if (!normalizedId) {
+      throw new NotFoundException('Alumno no encontrado');
+    }
+    const rows: Array<any> = await this.dataSource.query(
+      `
+      SELECT
+        u.id AS studentId,
+        u.dni AS dni,
+        u.codigoAlumno AS codigoAlumno,
+        u.fullName AS fullName,
+        u.names AS names,
+        u.paternalLastName AS paternalLastName,
+        u.maternalLastName AS maternalLastName,
+        u.careerName AS careerName,
+        u.sex AS sex,
+        u.email AS email,
+        u.examDate AS examDate,
+        u.role AS role
+      FROM users u
+      WHERE u.id = ?
+      LIMIT 1
+      `,
+      [normalizedId]
+    );
+    const row = rows[0];
+    if (!row || String(row.role ?? '') !== Role.ALUMNO) {
+      throw new NotFoundException('Alumno no encontrado');
+    }
+    return {
+      studentId: String(row.studentId),
+      dni: String(row.dni ?? ''),
+      codigoAlumno: row.codigoAlumno ? String(row.codigoAlumno) : null,
+      fullName: String(row.fullName ?? ''),
+      names: row.names ? String(row.names) : null,
+      paternalLastName: row.paternalLastName ? String(row.paternalLastName) : null,
+      maternalLastName: row.maternalLastName ? String(row.maternalLastName) : null,
+      careerName: row.careerName ? String(row.careerName) : null,
+      sex: row.sex ? String(row.sex) : null,
+      email: row.email ? String(row.email) : null,
+      examDate: row.examDate ? String(row.examDate) : null,
+    };
+  }
+
+  private async getStudentScheduleByStudentAndPeriod(
+    studentId: string,
+    periodId: string
+  ): Promise<StudentScheduleReportItem[]> {
+    const rows: Array<any> = await this.dataSource.query(
+      `
+      SELECT
+        sb.dayOfWeek AS dayOfWeek,
+        sb.startTime AS startTime,
+        sb.endTime AS endTime,
+        sb.courseName AS courseName,
+        s.name AS sectionName,
+        MAX(COALESCE(tc.fullName, ts.fullName)) AS teacherName,
+        s.modality AS modality,
+        cl.code AS classroomCode,
+        cl.name AS classroomName,
+        sb.zoomUrl AS zoomUrl,
+        sb.location AS location,
+        sb.referenceModality AS referenceModality,
+        sb.referenceClassroom AS referenceClassroom
+      FROM section_student_courses ssc
+      INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
+      INNER JOIN sections s ON s.id = sc.sectionId
+      INNER JOIN schedule_blocks sb ON sb.sectionCourseId = sc.id
+      LEFT JOIN section_course_teachers sct ON sct.sectionCourseId = sc.id
+      LEFT JOIN users tc ON tc.id = sct.teacherId
+      LEFT JOIN users ts ON ts.id = s.teacherId
+      LEFT JOIN classrooms cl ON cl.id = sc.classroomId
+      WHERE ssc.studentId = ?
+        AND sc.periodId = ?
+      GROUP BY
+        sb.id,
+        sb.dayOfWeek,
+        sb.startTime,
+        sb.endTime,
+        sb.courseName,
+        s.name,
+        s.modality,
+        cl.code,
+        cl.name,
+        sb.zoomUrl,
+        sb.location,
+        sb.referenceModality,
+        sb.referenceClassroom
+      ORDER BY sb.dayOfWeek ASC, sb.startTime ASC
+      `,
+      [studentId, periodId]
+    );
+
+    return rows.map((row) => ({
+      dayOfWeek: Number(row.dayOfWeek ?? 0),
+      startTime: this.toHHmm(row.startTime),
+      endTime: this.toHHmm(row.endTime),
+      courseName: String(row.courseName ?? ''),
+      sectionName: String(row.sectionName ?? ''),
+      teacherName: row.teacherName ? String(row.teacherName) : null,
+      modality: row.modality ? String(row.modality) : null,
+      classroomCode: row.classroomCode ? String(row.classroomCode) : null,
+      classroomName: row.classroomName ? String(row.classroomName) : null,
+      zoomUrl: row.zoomUrl ? String(row.zoomUrl) : null,
+      location: row.location ? String(row.location) : null,
+      referenceModality: row.referenceModality ? String(row.referenceModality) : null,
+      referenceClassroom: row.referenceClassroom ? String(row.referenceClassroom) : null,
+    }));
+  }
+
+  private async getStudentEnrollmentByStudentAndPeriod(
+    studentId: string,
+    periodId: string
+  ): Promise<AdminStudentEnrollmentItem[]> {
+    const rows: Array<any> = await this.dataSource.query(
+      `
+      SELECT
+        sc.id AS sectionCourseId,
+        c.name AS courseName,
+        s.code AS sectionCode,
+        s.name AS sectionName,
+        s.facultyGroup AS facultyGroup,
+        s.facultyName AS facultyName,
+        s.campusName AS campusName,
+        s.modality AS modality,
+        MAX(COALESCE(tc.fullName, ts.fullName)) AS teacherName,
+        cl.code AS classroomCode,
+        cl.name AS classroomName
+      FROM section_student_courses ssc
+      INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
+      INNER JOIN sections s ON s.id = sc.sectionId
+      INNER JOIN courses c ON c.id = sc.courseId
+      LEFT JOIN section_course_teachers sct ON sct.sectionCourseId = sc.id
+      LEFT JOIN users tc ON tc.id = sct.teacherId
+      LEFT JOIN users ts ON ts.id = s.teacherId
+      LEFT JOIN classrooms cl ON cl.id = sc.classroomId
+      WHERE ssc.studentId = ?
+        AND sc.periodId = ?
+      GROUP BY
+        sc.id,
+        c.name,
+        s.code,
+        s.name,
+        s.facultyGroup,
+        s.facultyName,
+        s.campusName,
+        s.modality,
+        cl.code,
+        cl.name
+      ORDER BY c.name ASC, s.code ASC, s.name ASC
+      `,
+      [studentId, periodId]
+    );
+
+    return rows.map((row) => {
+      const classroomCode = row.classroomCode ? String(row.classroomCode) : null;
+      const classroomName = row.classroomName ? String(row.classroomName) : null;
+      return {
+        sectionCourseId: String(row.sectionCourseId),
+        courseName: String(row.courseName ?? ''),
+        sectionCode: row.sectionCode ? String(row.sectionCode) : null,
+        sectionName: String(row.sectionName ?? ''),
+        facultyGroup: row.facultyGroup ? String(row.facultyGroup) : null,
+        facultyName: row.facultyName ? String(row.facultyName) : null,
+        campusName: row.campusName ? String(row.campusName) : null,
+        modality: row.modality ? String(row.modality) : null,
+        teacherName: row.teacherName ? String(row.teacherName) : null,
+        classroomCode,
+        classroomName,
+        classroomLabel: classroomName || (classroomCode ? `Aula ${classroomCode}` : null),
+      };
+    });
+  }
+
+  private async getStudentGradesByStudentAndPeriod(
+    studentId: string,
+    periodId: string
+  ): Promise<StudentGradesReportResponse> {
+    const scheme = await this.getOrCreateScheme(periodId);
+    const activeComponents = this.getActiveComponents(scheme.components);
+
+    const enrollments: Array<any> = await this.dataSource.query(
+      `
+      SELECT sc.id AS sectionCourseId, c.name AS courseName, s.code AS sectionCode, s.name AS sectionName,
+             s.facultyGroup AS facultyGroup, s.facultyName AS facultyName, s.campusName AS campusName, s.modality AS modality
+      FROM section_student_courses ssc
+      INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
+      INNER JOIN courses c ON c.id = sc.courseId
+      INNER JOIN sections s ON s.id = sc.sectionId
+      WHERE ssc.studentId = ? AND sc.periodId = ?
+      ORDER BY c.name ASC, s.code ASC, s.name ASC
+      `,
+      [studentId, periodId]
+    );
+    if (enrollments.length === 0) {
+      return { periodId, components: activeComponents, rows: [] };
+    }
+
+    const sectionCourseIds = enrollments.map((x) => String(x.sectionCourseId));
+    const placeholders = sectionCourseIds.map(() => '?').join(', ');
+    const grades: Array<any> = await this.dataSource.query(
+      `
+      SELECT sectionCourseId, componentId, score
+      FROM section_course_grades
+      WHERE studentId = ? AND sectionCourseId IN (${placeholders})
+      `,
+      [studentId, ...sectionCourseIds]
+    );
+    const gradeMap = new Map<string, number>();
+    for (const row of grades) {
+      gradeMap.set(
+        this.gradeKey(
+          studentId,
+          String(row.sectionCourseId),
+          String(row.componentId)
+        ),
+        Number(row.score ?? 0)
+      );
+    }
+
+    const rows = enrollments.map((row) => {
+      const sectionCourseId = String(row.sectionCourseId);
+      const scores = new Map<string, number>();
+      for (const component of activeComponents) {
+        const key = this.gradeKey(studentId, sectionCourseId, component.id);
+        if (gradeMap.has(key)) scores.set(component.id, gradeMap.get(key) ?? 0);
+      }
+      const calc = this.computeFinalAverage(activeComponents, scores);
+      return {
+        sectionCourseId,
+        courseName: String(row.courseName ?? ''),
+        sectionCode: row.sectionCode ? String(row.sectionCode) : null,
+        sectionName: String(row.sectionName ?? ''),
+        facultyGroup: row.facultyGroup ? String(row.facultyGroup) : null,
+        facultyName: row.facultyName ? String(row.facultyName) : null,
+        campusName: row.campusName ? String(row.campusName) : null,
+        modality: row.modality ? String(row.modality) : null,
+        components: activeComponents.map((component) => {
+          const key = this.gradeKey(studentId, sectionCourseId, component.id);
+          return {
+            componentId: component.id,
+            code: component.code,
+            name: component.name,
+            weight: component.weight,
+            score: gradeMap.has(key) ? this.toFixed2(gradeMap.get(key) ?? 0) : null,
+          };
+        }),
+        isComplete: calc.isComplete,
+        finalAverage: calc.finalAverage,
+        approved: calc.approved,
+      };
+    });
+
+    return {
+      periodId,
+      components: activeComponents,
+      rows,
+    };
+  }
+
+  private async getStudentAttendanceByStudentAndPeriod(
+    studentId: string,
+    periodId: string
+  ): Promise<{
+    summaryByCourse: AdminStudentAttendanceSummaryItem[];
+    sessions: StudentAttendanceReportItem[];
+  }> {
+    const rows: Array<any> = await this.dataSource.query(
+      `
+      SELECT
+        sb.courseName AS courseName,
+        ses.sessionDate AS sessionDate,
+        r.status AS status
+      FROM attendance_records r
+      INNER JOIN attendance_sessions ses ON ses.id = r.attendanceSessionId
+      INNER JOIN schedule_blocks sb ON sb.id = ses.scheduleBlockId
+      INNER JOIN section_courses sc ON sc.id = sb.sectionCourseId
+      WHERE r.studentId = ?
+        AND sc.periodId = ?
+      ORDER BY ses.sessionDate DESC, sb.courseName ASC
+      `,
+      [studentId, periodId]
+    );
+
+    const sessions: StudentAttendanceReportItem[] = rows.map((row) => ({
+      courseName: String(row.courseName ?? ''),
+      sessionDate: this.toIsoDateOnly(row.sessionDate),
+      status: this.normalizeAttendanceStatus(row.status),
+    }));
+
+    const summaryMap = new Map<
+      string,
+      { courseName: string; totalSessions: number; attendedCount: number; absentCount: number }
+    >();
+    for (const row of sessions) {
+      const entry = summaryMap.get(row.courseName) ?? {
+        courseName: row.courseName,
+        totalSessions: 0,
+        attendedCount: 0,
+        absentCount: 0,
+      };
+      entry.totalSessions += 1;
+      if (row.status === 'ASISTIO') {
+        entry.attendedCount += 1;
+      } else {
+        entry.absentCount += 1;
+      }
+      summaryMap.set(row.courseName, entry);
+    }
+
+    const summaryByCourse = Array.from(summaryMap.values())
+      .sort((a, b) => a.courseName.localeCompare(b.courseName))
+      .map((entry) => ({
+        courseName: entry.courseName,
+        totalSessions: entry.totalSessions,
+        attendedCount: entry.attendedCount,
+        absentCount: entry.absentCount,
+        attendanceRate:
+          entry.totalSessions > 0
+            ? this.toFixed2((entry.attendedCount / entry.totalSessions) * 100)
+            : 0,
+      }));
+
+    return { summaryByCourse, sessions };
+  }
+
+  private async loadPeriodMetadata(periodId: string): Promise<PeriodMetadata> {
+    const rows: Array<any> = await this.dataSource.query(
+      `
+      SELECT id, code, name
+      FROM periods
+      WHERE id = ?
+      LIMIT 1
+      `,
+      [periodId]
+    );
+    const row = rows[0];
+    return {
+      id: String(row?.id ?? periodId),
+      code: String(row?.code ?? periodId),
+      name: String(row?.name ?? periodId),
+    };
+  }
+
+  private normalizeSearchText(value: string) {
+    return String(value ?? '')
+      .trim()
+      .replace(/\s+/g, ' ')
+      .toUpperCase();
+  }
+
+  private buildFilterSummary(filter: GradesReportFilter) {
+    return [
+      `Facultad: ${String(filter.facultyGroup ?? '').trim() || 'Todas'}`,
+      `Sede: ${String(filter.campusName ?? '').trim() || 'Todas'}`,
+      `Carrera: ${String(filter.careerName ?? '').trim() || 'Todas'}`,
+    ];
+  }
+
+  private buildStudentReportExportFileName(
+    studentRef: string,
+    periodCode: string,
+    extension: 'xlsx' | 'pdf'
+  ) {
+    const student = this.sanitizeFilePart(studentRef);
+    const period = this.sanitizeFilePart(periodCode || 'PERIODO');
+    return `reporte_alumno_${student}_${period}.${extension}`;
+  }
+
+  private buildCareerReportExportFileName(
+    reportType: string,
+    filter: GradesReportFilter,
+    periodCode: string,
+    extension: 'xlsx' | 'pdf'
+  ) {
+    const parts = [
+      this.sanitizeFilePart(reportType),
+      this.sanitizeFilePart(periodCode || 'PERIODO'),
+    ];
+    if (String(filter.facultyGroup ?? '').trim()) {
+      parts.push(this.sanitizeFilePart(String(filter.facultyGroup)));
+    }
+    if (String(filter.campusName ?? '').trim()) {
+      parts.push(this.sanitizeFilePart(String(filter.campusName)));
+    }
+    if (String(filter.careerName ?? '').trim()) {
+      parts.push(this.sanitizeFilePart(String(filter.careerName)));
+    }
+    return `reporte_${parts.join('_')}.${extension}`;
+  }
+
+  private sanitizeFilePart(value: string) {
+    const normalized = String(value ?? '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase()
+      .replace(/[^A-Z0-9_-]+/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '');
+    return normalized || 'ITEM';
+  }
+
+  private dayLabel(dayOfWeek: number) {
+    const labels = ['', 'Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado', 'Domingo'];
+    return labels[Number(dayOfWeek ?? 0)] || `Dia ${dayOfWeek}`;
+  }
+
+  private classroomLabelForSchedule(item: StudentScheduleReportItem) {
+    const reference = String(item.referenceClassroom ?? '').trim();
+    if (reference) return reference;
+    const name = String(item.classroomName ?? '').trim();
+    if (name) return name;
+    const code = String(item.classroomCode ?? '').trim();
+    if (code) return `Aula ${code}`;
+    const location = String(item.location ?? '').trim();
+    if (location) return location;
+    return 'Sin aula asignada';
+  }
+
+  private createPdfDocument() {
+    const PDFDocument = require('pdfkit');
+    return new PDFDocument({ margin: 40, size: 'A4' });
+  }
+
+  private async finalizePdfDocument(doc: any) {
+    const chunks: Buffer[] = [];
+    const bufferPromise = new Promise<Buffer>((resolve, reject) => {
+      doc.on('data', (chunk: Buffer | string) =>
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+      );
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+    });
+    doc.end();
+    return bufferPromise;
+  }
+
+  private writePdfSection(doc: any, title: string, lines: string[]) {
+    this.ensurePdfSpace(doc, 40);
+    doc.font('Helvetica-Bold').fontSize(12).text(title);
+    doc.moveDown(0.4);
+    doc.font('Helvetica').fontSize(9);
+    for (const line of lines) {
+      this.ensurePdfSpace(doc, 24);
+      doc.text(line, { width: 520 });
+    }
+    doc.moveDown(0.8);
+  }
+
+  private ensurePdfSpace(doc: any, minHeight: number) {
+    const maxY = doc.page.height - 45;
+    if (doc.y + minHeight <= maxY) return;
+    doc.addPage();
+  }
+
   private normalizeAttendanceStatus(value: unknown): 'ASISTIO' | 'FALTO' {
     const text = String(value ?? '')
       .normalize('NFD')
@@ -992,7 +1999,23 @@ export class GradesService {
     return `${y}-${m}-${d}`;
   }
 
+  private toHHmm(value: string) {
+    const text = String(value ?? '').trim();
+    const match = text.match(/(\d{1,2}):(\d{2})/);
+    if (!match) return text;
+    const hh = Number(match[1]);
+    const mm = Number(match[2]);
+    if (!Number.isFinite(hh) || !Number.isFinite(mm)) return text;
+    return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+  }
+
   private toFixed2(value: number) {
     return Math.round(Number(value || 0) * 100) / 100;
+  }
+
+  private roundUpGrade(value: number) {
+    const safeValue = Number(value || 0);
+    if (safeValue <= 0) return 0;
+    return Math.ceil(safeValue - 1e-9);
   }
 }

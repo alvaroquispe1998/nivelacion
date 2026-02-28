@@ -171,19 +171,31 @@ export class ScheduleBlocksService {
         scopeCourseName: body.scopeCourseName ?? null,
       });
 
-    await this.assertNoOverlap({
-      sectionId: section.id,
-      dayOfWeek: body.dayOfWeek,
-      startTime: body.startTime,
-      endTime: body.endTime,
-    });
+    if (!this.isWelcomeScheduleSection(section)) {
+      await this.assertNoOverlap({
+        sectionId: section.id,
+        dayOfWeek: body.dayOfWeek,
+        startTime: body.startTime,
+        endTime: body.endTime,
+      });
 
-    const teacherId = await this.sectionsService.getEffectiveTeacherIdBySectionCourse(
-      sectionCourse.id
-    );
-    if (teacherId) {
-      await this.sectionsService.assertTeacherScheduleAvailabilityForBlock({
-        teacherId,
+      const teacherId = await this.sectionsService.getEffectiveTeacherIdBySectionCourse(
+        sectionCourse.id
+      );
+      if (teacherId) {
+        await this.sectionsService.assertTeacherScheduleAvailabilityForBlock({
+          teacherId,
+          sectionCourseId: sectionCourse.id,
+          dayOfWeek: body.dayOfWeek,
+          startTime: body.startTime,
+          endTime: body.endTime,
+          startDate: body.startDate ?? null,
+          endDate: body.endDate ?? null,
+          ignoredSectionCourseIds,
+        });
+      }
+
+      await this.sectionsService.assertClassroomScheduleAvailabilityForBlock({
         sectionCourseId: sectionCourse.id,
         dayOfWeek: body.dayOfWeek,
         startTime: body.startTime,
@@ -193,16 +205,6 @@ export class ScheduleBlocksService {
         ignoredSectionCourseIds,
       });
     }
-
-    await this.sectionsService.assertClassroomScheduleAvailabilityForBlock({
-      sectionCourseId: sectionCourse.id,
-      dayOfWeek: body.dayOfWeek,
-      startTime: body.startTime,
-      endTime: body.endTime,
-      startDate: body.startDate ?? null,
-      endDate: body.endDate ?? null,
-      ignoredSectionCourseIds,
-    });
 
     const block = this.blocksRepo.create({
       section,
@@ -301,20 +303,33 @@ export class ScheduleBlocksService {
         scopeCourseName: body.scopeCourseName ?? null,
       });
 
-    await this.assertNoOverlap({
-      sectionId: block.section.id,
-      dayOfWeek: next.dayOfWeek,
-      startTime: next.startTime,
-      endTime: next.endTime,
-      excludeId: block.id,
-    });
+    if (!this.isWelcomeScheduleSection(block.section)) {
+      await this.assertNoOverlap({
+        sectionId: block.section.id,
+        dayOfWeek: next.dayOfWeek,
+        startTime: next.startTime,
+        endTime: next.endTime,
+        excludeId: block.id,
+      });
 
-    const teacherId = await this.sectionsService.getEffectiveTeacherIdBySectionCourse(
-      nextSectionCourse.id
-    );
-    if (teacherId) {
-      await this.sectionsService.assertTeacherScheduleAvailabilityForBlock({
-        teacherId,
+      const teacherId = await this.sectionsService.getEffectiveTeacherIdBySectionCourse(
+        nextSectionCourse.id
+      );
+      if (teacherId) {
+        await this.sectionsService.assertTeacherScheduleAvailabilityForBlock({
+          teacherId,
+          sectionCourseId: nextSectionCourse.id,
+          dayOfWeek: next.dayOfWeek,
+          startTime: next.startTime,
+          endTime: next.endTime,
+          startDate: next.startDate ?? null,
+          endDate: next.endDate ?? null,
+          excludeBlockId: block.id,
+          ignoredSectionCourseIds,
+        });
+      }
+
+      await this.sectionsService.assertClassroomScheduleAvailabilityForBlock({
         sectionCourseId: nextSectionCourse.id,
         dayOfWeek: next.dayOfWeek,
         startTime: next.startTime,
@@ -325,17 +340,6 @@ export class ScheduleBlocksService {
         ignoredSectionCourseIds,
       });
     }
-
-    await this.sectionsService.assertClassroomScheduleAvailabilityForBlock({
-      sectionCourseId: nextSectionCourse.id,
-      dayOfWeek: next.dayOfWeek,
-      startTime: next.startTime,
-      endTime: next.endTime,
-      startDate: next.startDate ?? null,
-      endDate: next.endDate ?? null,
-      excludeBlockId: block.id,
-      ignoredSectionCourseIds,
-    });
 
     block.sectionCourseId = nextSectionCourse.id;
     block.courseName = nextSectionCourse.courseName;
@@ -368,6 +372,24 @@ export class ScheduleBlocksService {
       .trim()
       .toUpperCase()
       .includes('VIRTUAL');
+  }
+
+  private isWelcomeScheduleSection(section: {
+    facultyGroup?: string | null;
+    campusName?: string | null;
+    modality?: string | null;
+  }) {
+    const facultyGroup = String(section.facultyGroup ?? '')
+      .trim()
+      .toUpperCase();
+    const campusName = String(section.campusName ?? '')
+      .trim()
+      .toUpperCase();
+    return (
+      facultyGroup === 'GENERAL' &&
+      campusName === 'VIRTUAL' &&
+      this.isVirtualModality(section.modality)
+    );
   }
 
   private buildReferenceDefaults(

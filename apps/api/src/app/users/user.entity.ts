@@ -3,6 +3,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
@@ -11,6 +12,7 @@ import { AttendanceRecordEntity } from '../attendance/attendance-record.entity';
 import { AttendanceSessionEntity } from '../attendance/attendance-session.entity';
 
 @Entity({ name: 'users' })
+@Index('IX_users_codigoAlumno_role', ['codigoAlumno', 'role'])
 export class UserEntity {
   @PrimaryGeneratedColumn('uuid')
   id!: string;

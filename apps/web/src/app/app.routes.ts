@@ -207,6 +207,15 @@ export const appRoutes: Route[] = [
           ),
       },
       {
+        path: 'admin/grades/reports/student',
+        canActivate: [roleGuard],
+        data: { roles: [Role.ADMIN] },
+        loadComponent: () =>
+          import('./pages/admin-student-report.page').then(
+            (m) => m.AdminStudentReportPage
+          ),
+      },
+      {
         path: 'admin/grades/reports',
         canActivate: [roleGuard],
         data: { roles: [Role.ADMIN] },

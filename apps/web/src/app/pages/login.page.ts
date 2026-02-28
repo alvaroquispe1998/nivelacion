@@ -70,26 +70,19 @@ export class LoginPage {
     const usuario = String(this.form.value.usuario ?? '').trim();
     const password = String(this.form.value.password ?? '');
 
-    if (!this.isSupportedLoginIdentifier(usuario)) {
-      this.error = 'Credenciales no validas.';
-      return;
-    }
-
     this.loading = true;
     this.error = null;
     try {
       const res = await this.auth.login({ usuario, password });
       await this.router.navigateByUrl(
         res.user.role === Role.ADMIN
-          ? '/admin/sections'
+          ? '/admin/dashboard'
           : res.user.role === Role.DOCENTE
             ? '/teacher/schedule'
-            : '/student/schedule'
+          : '/student/schedule'
       );
     } catch (e: any) {
-      if (e?.name === 'TimeoutError') {
-        this.error = 'La validacion tardo demasiado. Intente nuevamente.';
-      } else if (e?.status === 401) {
+      if (e?.status === 401) {
         this.error = 'Credenciales no validas.';
       } else if (e?.status === 0) {
         this.error = 'No se pudo conectar con el servidor.';
@@ -99,12 +92,5 @@ export class LoginPage {
     } finally {
       this.loading = false;
     }
-  }
-
-  private isSupportedLoginIdentifier(usuario: string) {
-    const lower = usuario.toLowerCase();
-    if (lower === 'administrador') return true;
-    if (/^\d{8,15}$/.test(usuario)) return true;
-    return /^[a-zA-Z]\d{5,20}$/.test(usuario);
   }
 }

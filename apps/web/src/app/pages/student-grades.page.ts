@@ -27,6 +27,7 @@ interface StudentGradesResponse {
       weight: number;
       score: number | null;
     }>;
+    isComplete: boolean;
     finalAverage: number;
     approved: boolean;
   }>;
@@ -64,15 +65,17 @@ interface StudentGradesResponse {
           </div>
           <div class="text-right">
             <div class="text-xs text-slate-500">Promedio final</div>
-            <div class="text-lg font-bold">{{ row.finalAverage | number:'1.2-2' }}</div>
+            <div class="text-lg font-bold">{{ row.finalAverage | number:'1.0-0' }}</div>
             <span
               class="inline-flex rounded-full px-2 py-0.5 text-xs font-semibold"
-              [class.bg-emerald-100]="row.approved"
-              [class.text-emerald-700]="row.approved"
-              [class.bg-rose-100]="!row.approved"
-              [class.text-rose-700]="!row.approved"
+              [class.bg-emerald-100]="isRowComplete(row) && row.approved"
+              [class.text-emerald-700]="isRowComplete(row) && row.approved"
+              [class.bg-rose-100]="isRowComplete(row) && !row.approved"
+              [class.text-rose-700]="isRowComplete(row) && !row.approved"
+              [class.bg-amber-100]="!isRowComplete(row)"
+              [class.text-amber-700]="!isRowComplete(row)"
             >
-              {{ row.approved ? 'APROBADO' : 'DESAPROBADO' }}
+              {{ isRowComplete(row) ? (row.approved ? 'APROBADO' : 'DESAPROBADO') : 'PENDIENTE' }}
             </span>
           </div>
         </div>
@@ -122,6 +125,13 @@ export class StudentGradesPage {
 
   trackComponent(_: number, item: { componentId: string }) {
     return item.componentId;
+  }
+
+  isRowComplete(row: StudentGradesResponse['rows'][number]) {
+    if (Array.isArray(row.components) && row.components.length > 0) {
+      return row.components.every((component) => component.score !== null);
+    }
+    return Boolean(row.isComplete);
   }
 
   async load() {

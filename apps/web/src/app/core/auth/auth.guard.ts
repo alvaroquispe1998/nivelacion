@@ -6,7 +6,8 @@ export const authGuard: CanActivateFn = async () => {
   const auth = inject(AuthService);
   const router = inject(Router);
 
-  // Always validate token against backend before entering protected routes.
+  if (auth.user) return true;
+
   if (auth.token) {
     const me = await auth.loadMe();
     if (auth.token && me) return true;

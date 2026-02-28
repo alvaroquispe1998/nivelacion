@@ -24,6 +24,9 @@ describe('SectionsService', () => {
       findOne: jest.fn(),
       create: jest.fn((x) => x),
     };
+    const classroomsRepo = {
+      findOne: jest.fn(),
+    };
     const sectionCourseTeachersRepo = {
       findOne: jest.fn(),
       create: jest.fn((x) => x),
@@ -32,11 +35,13 @@ describe('SectionsService', () => {
     };
     const periodsService = {
       getActivePeriodIdOrThrow: jest.fn().mockResolvedValue('period-1'),
+      getOperationalPeriodIdOrThrow: jest.fn().mockResolvedValue('period-1'),
     };
 
     const service = new SectionsService(
       sectionsRepo as any,
       usersRepo as any,
+      classroomsRepo as any,
       sectionCourseTeachersRepo as any,
       periodsService as any
     );
@@ -47,6 +52,7 @@ describe('SectionsService', () => {
       service,
       sectionsRepo,
       usersRepo,
+      classroomsRepo,
       sectionCourseTeachersRepo,
       periodsService,
     };
@@ -61,6 +67,30 @@ describe('SectionsService', () => {
     sectionsRepo.findOne.mockResolvedValue(section);
     sectionsRepo.manager.query.mockImplementation(async (sql: string) => {
       const normalized = sql.replace(/\s+/g, ' ').trim().toUpperCase();
+      if (
+        normalized.includes('FROM SECTION_COURSES SC') &&
+        normalized.includes('WHERE SC.ID = ?') &&
+        normalized.includes('AND SC.PERIODID = ?')
+      ) {
+        return [
+          {
+            sectionCourseId: 'sc-1',
+            sectionId: 'sec-1',
+            courseId: 'course-1',
+            courseName: 'COMUNICACION',
+            facultyGroup: 'FICA',
+            campusName: 'CHINCHA',
+            modality: 'PRESENCIAL',
+            initialCapacity: 45,
+            maxExtraCapacity: 0,
+            classroomId: 'class-1',
+            classroomCode: 'A101',
+            classroomName: 'A101',
+            classroomCapacity: 45,
+            capacitySource: 'AULA',
+          },
+        ];
+      }
       if (normalized.includes('SELECT ID, NAME FROM COURSES')) {
         return [{ id: 'course-1', name: 'COMUNICACION' }];
       }
@@ -207,6 +237,11 @@ describe('SectionsService', () => {
             modality: 'PRESENCIAL',
             initialCapacity: 45,
             maxExtraCapacity: 2,
+            classroomId: 'class-1',
+            classroomCode: 'A101',
+            classroomName: 'A101',
+            classroomCapacity: 45,
+            capacitySource: 'AULA',
           },
         ];
       }
@@ -226,6 +261,11 @@ describe('SectionsService', () => {
             modality: 'PRESENCIAL',
             initialCapacity: 45,
             maxExtraCapacity: 2,
+            classroomId: 'class-1',
+            classroomCode: 'A101',
+            classroomName: 'A101',
+            classroomCapacity: 45,
+            capacitySource: 'AULA',
           },
         ];
       }
@@ -276,6 +316,11 @@ describe('SectionsService', () => {
             modality: 'PRESENCIAL',
             initialCapacity: 45,
             maxExtraCapacity: 2,
+            classroomId: 'class-1',
+            classroomCode: 'A101',
+            classroomName: 'A101',
+            classroomCapacity: 45,
+            capacitySource: 'AULA',
           },
         ];
       }
@@ -295,6 +340,11 @@ describe('SectionsService', () => {
             modality: 'PRESENCIAL',
             initialCapacity: 45,
             maxExtraCapacity: 2,
+            classroomId: 'class-1',
+            classroomCode: 'A101',
+            classroomName: 'A101',
+            classroomCapacity: 45,
+            capacitySource: 'AULA',
           },
         ];
       }
@@ -327,5 +377,55 @@ describe('SectionsService', () => {
     expect(out.ok).toBe(true);
     expect(out.overCapacity).toBe(true);
     expect(sectionsRepo.manager.transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('assertTeacherScheduleAvailabilityForBlock should skip conflicts for welcome sections', async () => {
+    const { service, sectionsRepo } = createService();
+
+    sectionsRepo.manager.query.mockImplementation(async (sql: string) => {
+      const normalized = sql.replace(/\s+/g, ' ').trim().toUpperCase();
+      if (
+        normalized.includes('FROM SECTION_COURSES SC') &&
+        normalized.includes('WHERE SC.ID = ?') &&
+        normalized.includes('AND SC.PERIODID = ?')
+      ) {
+        return [
+          {
+            sectionCourseId: 'sc-1',
+            sectionId: 'sec-1',
+            courseId: 'course-1',
+            courseName: 'BIENVENIDA UAI',
+            facultyGroup: 'GENERAL',
+            campusName: 'VIRTUAL',
+            modality: 'VIRTUAL',
+            initialCapacity: 45,
+            maxExtraCapacity: 0,
+            classroomId: null,
+            classroomCode: null,
+            classroomName: null,
+            classroomCapacity: null,
+            capacitySource: 'VIRTUAL',
+          },
+        ];
+      }
+      return [];
+    });
+
+    const findTeacherConflictingBlocks = jest.spyOn(
+      service as any,
+      'findTeacherConflictingBlocks'
+    );
+
+    await expect(
+      service.assertTeacherScheduleAvailabilityForBlock({
+        teacherId: 'teacher-1',
+        sectionCourseId: 'sc-1',
+        dayOfWeek: 1,
+        startTime: '08:00',
+        endTime: '10:00',
+      })
+    ).resolves.toBeUndefined();
+
+    expect(findTeacherConflictingBlocks).not.toHaveBeenCalled();
   });
 });

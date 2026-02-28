@@ -3180,6 +3180,15 @@ export class LevelingService {
     >();
 
     for (const unit of params.groupUnits) {
+      if (
+        this.isWelcomeReportingScope({
+          facultyGroup: unit.facultyGroup,
+          campusName: unit.campusName,
+          modality: unit.modality,
+        })
+      ) {
+        continue;
+      }
       if (unit.modality === 'VIRTUAL') {
         if (!virtualRows.has(unit.facultyGroup)) {
           virtualRows.set(unit.facultyGroup, {
@@ -3248,10 +3257,13 @@ export class LevelingService {
       const faculty = ensureFaculty(row.facultyGroup);
       const courseGroupSizes = this.initCourseGroupSizesMap(params.courseNames);
       const courseGroups = this.initCourseCountMap(params.courseNames);
+      const collapseVirtualGroups =
+        this.normalizeFacultyGroup(row.facultyGroup, 'FICA') !== 'GENERAL';
       for (const courseName of params.courseNames) {
-        courseGroupSizes[courseName] = (
-          row.sizesByCourse[courseName] ?? []
-        ).slice();
+        const sizes = (row.sizesByCourse[courseName] ?? []).slice();
+        courseGroupSizes[courseName] = collapseVirtualGroups
+          ? this.collapseVirtualCourseSizes(sizes)
+          : sizes;
         courseGroups[courseName] = courseGroupSizes[courseName].length;
       }
       const totalGroups = this.sumCourseCountMap(courseGroups, params.courseNames);
@@ -3300,6 +3312,12 @@ export class LevelingService {
       totalPay4Weeks,
       byFaculty,
     };
+  }
+
+  private collapseVirtualCourseSizes(sizes: number[]) {
+    if ((sizes?.length ?? 0) <= 1) return sizes.slice();
+    const total = sizes.reduce((acc, size) => acc + Number(size ?? 0), 0);
+    return [total];
   }
 
   private buildGroupPlan(
@@ -7515,6 +7533,18 @@ export class LevelingService {
     return 2;
   }
 
+  private isWelcomeReportingScope(params: {
+    facultyGroup: string | null | undefined;
+    campusName: string | null | undefined;
+    modality: string | null | undefined;
+  }) {
+    return (
+      this.normalizeFacultyGroup(params.facultyGroup, 'FICA') === 'GENERAL' &&
+      this.scopeKey(params.campusName) === 'VIRTUAL' &&
+      this.scopeKey(params.modality).includes('VIRTUAL')
+    );
+  }
+
   private alphaCode(idx: number) {
     let n = idx;
     let out = '';
@@ -7737,6 +7767,15 @@ export class LevelingService {
       const sourceModality = String(row.sourceModality ?? 'SIN DATO');
       const courseName = String(row.courseName ?? '');
       const studentCount = Number(row.studentCount ?? 0);
+      if (
+        this.isWelcomeReportingScope({
+          facultyGroup,
+          campusName,
+          modality: sourceModality,
+        })
+      ) {
+        continue;
+      }
       if (!courseName || studentCount <= 0) {
         continue;
       }
@@ -7758,14 +7797,23 @@ export class LevelingService {
       existing.totalNeeds += studentCount;
     }
 
+    const reportOptionRows = baseOptionsRows.filter(
+      (row) =>
+        !this.isWelcomeReportingScope({
+          facultyGroup: String(row.facultyGroup ?? 'SIN FACULTAD'),
+          campusName: String(row.campusName ?? 'SIN SEDE'),
+          modality: String(row.sourceModality ?? 'SIN DATO'),
+        })
+    );
+
     const facultyGroups = Array.from(
-      new Set(baseOptionsRows.map((x) => String(x.facultyGroup ?? 'SIN FACULTAD')))
+      new Set(reportOptionRows.map((x) => String(x.facultyGroup ?? 'SIN FACULTAD')))
     ).sort((a, b) => a.localeCompare(b));
     const campuses = Array.from(
-      new Set(baseOptionsRows.map((x) => String(x.campusName ?? 'SIN SEDE')))
+      new Set(reportOptionRows.map((x) => String(x.campusName ?? 'SIN SEDE')))
     ).sort((a, b) => a.localeCompare(b));
     const modalities = Array.from(
-      new Set(baseOptionsRows.map((x) => String(x.sourceModality ?? 'SIN DATO')))
+      new Set(reportOptionRows.map((x) => String(x.sourceModality ?? 'SIN DATO')))
     ).sort((a, b) => this.modalitySort(a) - this.modalitySort(b));
 
     return {
@@ -7881,6 +7929,15 @@ export class LevelingService {
     };
 
     for (const rec of scheduledSections) {
+      if (
+        this.isWelcomeReportingScope({
+          facultyGroup: String(rec.facultyGroup ?? 'SIN FACULTAD'),
+          campusName: String(rec.campusName ?? 'SIN SEDE'),
+          modality: String(rec.modality ?? 'SIN DATO'),
+        })
+      ) {
+        continue;
+      }
       addRecordToFaculty({
         facultyGroup: String(rec.facultyGroup ?? 'SIN FACULTAD'),
         campusName: String(rec.campusName ?? 'SIN SEDE'),

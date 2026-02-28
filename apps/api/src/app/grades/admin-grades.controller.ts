@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Put,
+  Query,
+  StreamableFile,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Role } from '@uai/shared';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -6,6 +16,7 @@ import type { JwtUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
+import { AdminStudentReportSearchDto } from './dto/reports.dto';
 import { GradesReportFilterDto, SaveSectionCourseGradesDto } from './dto/save-section-course-grades.dto';
 import { UpdateGradeSchemeDto } from './dto/update-grade-scheme.dto';
 import { GradesService } from './grades.service';
@@ -75,9 +86,67 @@ export class AdminGradesController {
     return this.gradesService.getAdminReportFilters();
   }
 
+  @Get('reports/student-search')
+  searchStudentsForReport(@Query() query: AdminStudentReportSearchDto) {
+    return this.gradesService.searchAdminStudentsForReport(query.q);
+  }
+
+  @Get('reports/student/:studentId')
+  getStudentReport(@Param('studentId') studentId: string) {
+    return this.gradesService.getAdminStudentReport(studentId);
+  }
+
+  @Get('reports/student/:studentId/export/excel')
+  async exportStudentReportExcel(
+    @Param('studentId') studentId: string
+  ): Promise<StreamableFile> {
+    const { fileBuffer, fileName } =
+      await this.gradesService.buildAdminStudentReportExcel(studentId);
+    return new StreamableFile(fileBuffer, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="${fileName}"`,
+    });
+  }
+
+  @Get('reports/student/:studentId/export/pdf')
+  async exportStudentReportPdf(
+    @Param('studentId') studentId: string
+  ): Promise<StreamableFile> {
+    const { fileBuffer, fileName } =
+      await this.gradesService.buildAdminStudentReportPdf(studentId);
+    return new StreamableFile(fileBuffer, {
+      type: 'application/pdf',
+      disposition: `attachment; filename="${fileName}"`,
+    });
+  }
+
   @Get('reports/students')
   getStudentsReport(@Query() query: GradesReportFilterDto) {
     return this.gradesService.getAdminStudentsReport(query);
+  }
+
+  @Get('reports/students/export/excel')
+  async exportStudentsReportExcel(
+    @Query() query: GradesReportFilterDto
+  ): Promise<StreamableFile> {
+    const { fileBuffer, fileName } =
+      await this.gradesService.buildAdminStudentsReportExcel(query);
+    return new StreamableFile(fileBuffer, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="${fileName}"`,
+    });
+  }
+
+  @Get('reports/students/export/pdf')
+  async exportStudentsReportPdf(
+    @Query() query: GradesReportFilterDto
+  ): Promise<StreamableFile> {
+    const { fileBuffer, fileName } =
+      await this.gradesService.buildAdminStudentsReportPdf(query);
+    return new StreamableFile(fileBuffer, {
+      type: 'application/pdf',
+      disposition: `attachment; filename="${fileName}"`,
+    });
   }
 
   @Get('reports/averages')
@@ -85,9 +154,56 @@ export class AdminGradesController {
     return this.gradesService.getAdminAveragesReport(query);
   }
 
+  @Get('reports/averages/export/excel')
+  async exportAveragesReportExcel(
+    @Query() query: GradesReportFilterDto
+  ): Promise<StreamableFile> {
+    const { fileBuffer, fileName } =
+      await this.gradesService.buildAdminAveragesReportExcel(query);
+    return new StreamableFile(fileBuffer, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="${fileName}"`,
+    });
+  }
+
+  @Get('reports/averages/export/pdf')
+  async exportAveragesReportPdf(
+    @Query() query: GradesReportFilterDto
+  ): Promise<StreamableFile> {
+    const { fileBuffer, fileName } =
+      await this.gradesService.buildAdminAveragesReportPdf(query);
+    return new StreamableFile(fileBuffer, {
+      type: 'application/pdf',
+      disposition: `attachment; filename="${fileName}"`,
+    });
+  }
+
   @Get('reports/attendance')
   getAttendanceReport(@Query() query: GradesReportFilterDto) {
     return this.gradesService.getAdminAttendanceReport(query);
   }
-}
 
+  @Get('reports/attendance/export/excel')
+  async exportAttendanceReportExcel(
+    @Query() query: GradesReportFilterDto
+  ): Promise<StreamableFile> {
+    const { fileBuffer, fileName } =
+      await this.gradesService.buildAdminAttendanceReportExcel(query);
+    return new StreamableFile(fileBuffer, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="${fileName}"`,
+    });
+  }
+
+  @Get('reports/attendance/export/pdf')
+  async exportAttendanceReportPdf(
+    @Query() query: GradesReportFilterDto
+  ): Promise<StreamableFile> {
+    const { fileBuffer, fileName } =
+      await this.gradesService.buildAdminAttendanceReportPdf(query);
+    return new StreamableFile(fileBuffer, {
+      type: 'application/pdf',
+      disposition: `attachment; filename="${fileName}"`,
+    });
+  }
+}

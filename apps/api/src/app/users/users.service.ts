@@ -37,6 +37,10 @@ export class UsersService {
     return this.usersRepo.findOne({ where: { dni, role: Role.ADMIN } });
   }
 
+  async findByDni(dni: string): Promise<UserEntity | null> {
+    return this.usersRepo.findOne({ where: { dni } });
+  }
+
   async findStaffByDni(dni: string): Promise<UserEntity | null> {
     return this.usersRepo.findOne({
       where: { dni, role: In([Role.ADMIN, Role.DOCENTE]) },

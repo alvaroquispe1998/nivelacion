@@ -50,6 +50,97 @@ export interface StudentAttendanceItem {
   status: AttendanceStatus;
 }
 
+export interface StudentGradesReportComponentScore {
+  componentId: Uuid;
+  code: string;
+  name: string;
+  weight: number;
+  score: number | null;
+}
+
+export interface StudentGradesReportRow {
+  sectionCourseId: Uuid;
+  courseName: string;
+  sectionCode?: string | null;
+  sectionName: string;
+  facultyGroup?: string | null;
+  facultyName?: string | null;
+  campusName?: string | null;
+  modality?: string | null;
+  components: StudentGradesReportComponentScore[];
+  isComplete: boolean;
+  finalAverage: number;
+  approved: boolean;
+}
+
+export interface StudentGradesReportResponse {
+  periodId: Uuid;
+  components: Array<{
+    id: Uuid;
+    code: string;
+    name: string;
+    weight: number;
+  }>;
+  rows: StudentGradesReportRow[];
+}
+
+export interface AdminStudentReportSearchItem {
+  studentId: Uuid;
+  dni: string;
+  codigoAlumno: string | null;
+  fullName: string;
+  careerName: string | null;
+}
+
+export interface AdminStudentReportStudentProfile {
+  studentId: Uuid;
+  dni: string;
+  codigoAlumno: string | null;
+  fullName: string;
+  names: string | null;
+  paternalLastName: string | null;
+  maternalLastName: string | null;
+  careerName: string | null;
+  sex: string | null;
+  email: string | null;
+  examDate: string | null;
+}
+
+export interface AdminStudentEnrollmentItem {
+  sectionCourseId: Uuid;
+  courseName: string;
+  sectionCode: string | null;
+  sectionName: string;
+  facultyGroup: string | null;
+  facultyName: string | null;
+  campusName: string | null;
+  modality: string | null;
+  teacherName: string | null;
+  classroomCode: string | null;
+  classroomName: string | null;
+  classroomLabel: string | null;
+}
+
+export interface AdminStudentAttendanceSummaryItem {
+  courseName: string;
+  totalSessions: number;
+  attendedCount: number;
+  absentCount: number;
+  attendanceRate: number;
+}
+
+export interface AdminStudentReportResponse {
+  periodId: Uuid;
+  student: AdminStudentReportStudentProfile;
+  schedule: StudentScheduleItem[];
+  enrollment: AdminStudentEnrollmentItem[];
+  grades: StudentGradesReportResponse;
+  attendance: {
+    summaryByCourse: AdminStudentAttendanceSummaryItem[];
+    sessions: StudentAttendanceItem[];
+  };
+}
+
 export interface AdminSection {
   id: Uuid;
   name: string;
@@ -272,6 +363,7 @@ export interface SectionCourseGradesStudentRow {
   fullName: string;
   careerName?: string | null;
   scores: Record<string, number | null>;
+  isComplete: boolean;
   finalAverage: number;
   approved: boolean;
 }

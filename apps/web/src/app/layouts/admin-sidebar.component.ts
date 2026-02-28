@@ -184,6 +184,12 @@ export const ADMIN_SIDEBAR_GROUPS: SidebarGroup[] = [
         tooltip: 'Panorámica por Facultades',
       },
       {
+        label: 'Reporte por alumno',
+        route: '/admin/grades/reports/student',
+        icon: ICON.users,
+        tooltip: 'Reporte por alumno',
+      },
+      {
         label: 'Reportes por carrera',
         route: '/admin/grades/reports',
         icon: ICON.chart,
@@ -353,6 +359,7 @@ const BADGE_CLASSES: Record<BadgeTone, string> = {
               [routerLink]="item.route"
               [queryParams]="item.queryParams"
               routerLinkActive="is-active"
+              [routerLinkActiveOptions]="{ exact: true }"
               #rla="routerLinkActive"
               [title]="collapsed ? item.tooltip : ''"
               class="

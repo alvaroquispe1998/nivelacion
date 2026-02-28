@@ -12,6 +12,65 @@ import { SectionEntity } from '../sections/section.entity';
 import { UserEntity } from '../users/user.entity';
 
 describe('LevelingService', () => {
+  it('buildCourseGroupSummary should collapse non-welcome virtual groups and exclude welcome from totals', () => {
+    const service = new LevelingService({} as DataSource, {} as any);
+
+    const summary = (service as any).buildCourseGroupSummary({
+      groupUnits: [
+        {
+          id: 'FICA|CHINCHA|MATEMATICA|1',
+          facultyGroup: 'FICA',
+          campusName: 'CHINCHA',
+          courseName: 'MATEMATICA',
+          size: 48,
+          modality: 'PRESENCIAL',
+        },
+        {
+          id: 'FICA|ICA|MATEMATICA|1',
+          facultyGroup: 'FICA',
+          campusName: 'ICA',
+          courseName: 'MATEMATICA',
+          size: 13,
+          modality: 'VIRTUAL',
+        },
+        {
+          id: 'FICA|HUAURA|MATEMATICA|1',
+          facultyGroup: 'FICA',
+          campusName: 'HUAURA',
+          courseName: 'MATEMATICA',
+          size: 16,
+          modality: 'VIRTUAL',
+        },
+        {
+          id: 'GENERAL|VIRTUAL|BIENVENIDA UAI|WELCOME|1',
+          facultyGroup: 'GENERAL',
+          campusName: 'VIRTUAL',
+          courseName: 'BIENVENIDA UAI',
+          size: 20,
+          modality: 'VIRTUAL',
+        },
+        {
+          id: 'GENERAL|VIRTUAL|BIENVENIDA UAI|WELCOME|2',
+          facultyGroup: 'GENERAL',
+          campusName: 'VIRTUAL',
+          courseName: 'BIENVENIDA UAI',
+          size: 25,
+          modality: 'VIRTUAL',
+        },
+      ],
+      courseNames: ['MATEMATICA', 'BIENVENIDA UAI'],
+    });
+
+    const ficaVirtual = summary.byFaculty
+      .find((faculty: any) => faculty.facultyGroup === 'FICA')
+      ?.rows.find((row: any) => row.label === 'VIRTUAL');
+    expect(ficaVirtual?.courseGroups['MATEMATICA']).toBe(1);
+    expect(ficaVirtual?.courseGroupSizes['MATEMATICA']).toEqual([29]);
+    expect(ficaVirtual?.totalGroups).toBe(1);
+    expect(summary.byFaculty.some((faculty: any) => faculty.facultyGroup === 'GENERAL')).toBe(false);
+    expect(summary.totalPay4Weeks).toBe(928);
+  });
+
   it('applyPlan should be idempotent and should not run mass deletes', async () => {
     const usersByDni = new Map<string, any>();
     const sectionsByCode = new Map<string, any>();
@@ -187,7 +246,9 @@ describe('LevelingService', () => {
       transaction: async (cb: any) => cb(manager),
     } as DataSource;
 
-    const service = new LevelingService(dataSource);
+    const service = new LevelingService(dataSource, {
+      getOperationalPeriodIdOrThrow: jest.fn(async () => 'period-1'),
+    } as any);
 
     const student = {
       dni: '11111111',
@@ -273,7 +334,9 @@ describe('LevelingService', () => {
       transaction: jest.fn(),
     } as unknown as DataSource;
 
-    const service = new LevelingService(dataSource);
+    const service = new LevelingService(dataSource, {
+      getOperationalPeriodIdOrThrow: jest.fn(async () => 'period-1'),
+    } as any);
 
     const rows = [
       [
