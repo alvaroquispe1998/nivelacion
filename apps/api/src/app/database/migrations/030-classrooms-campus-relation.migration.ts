@@ -16,9 +16,17 @@ export class ClassroomsCampusRelation030Migration1773600000000
     if (!campusesIdMeta) {
       throw new Error('No se encontro metadata de campuses.id');
     }
-    const compareCollation = this.resolveCompareCollation(
-      campusesNameMeta?.collationName,
-      classroomsCampusNameMeta?.collationName
+    const compareCharset = this.resolveCompareCharset(
+      campusesNameMeta?.charsetName,
+      classroomsCampusNameMeta?.charsetName
+    );
+    const campusComparableExpr = this.toComparableExpression(
+      'cp.name',
+      compareCharset
+    );
+    const classroomComparableExpr = this.toComparableExpression(
+      'cl.campusName',
+      compareCharset
     );
 
     await this.addColumnIfMissing(
@@ -34,8 +42,8 @@ export class ClassroomsCampusRelation030Migration1773600000000
     await queryRunner.query(`
       UPDATE classrooms cl
       LEFT JOIN campuses cp
-        ON UPPER(TRIM(cp.name)) COLLATE ${compareCollation}
-         = UPPER(TRIM(cl.campusName)) COLLATE ${compareCollation}
+        ON ${campusComparableExpr}
+         = ${classroomComparableExpr}
       SET cl.campusId = cp.id
       WHERE cl.campusId IS NULL
     `);
@@ -119,20 +127,18 @@ export class ClassroomsCampusRelation030Migration1773600000000
   }
 
   private charsetCollationSql(
-    charsetName: string | null,
-    collationName: string | null
+    _charsetName: string | null,
+    _collationName: string | null
   ) {
-    if (!charsetName || !collationName) return '';
-    return ` CHARACTER SET ${charsetName} COLLATE ${collationName}`;
+    return '';
   }
 
-  private resolveCompareCollation(...candidates: Array<string | null | undefined>) {
-    for (const raw of candidates) {
-      const c = String(raw ?? '').trim();
-      if (!c) continue;
-      if (/^[a-zA-Z0-9_]+$/.test(c)) return c;
-    }
-    return 'utf8mb4_unicode_ci';
+  private resolveCompareCharset(..._candidates: Array<string | null | undefined>) {
+    return 'utf8mb4';
+  }
+
+  private toComparableExpression(column: string, charset: string) {
+    return `CONVERT(UPPER(TRIM(${column})) USING ${charset})`;
   }
 
   private async addColumnIfMissing(

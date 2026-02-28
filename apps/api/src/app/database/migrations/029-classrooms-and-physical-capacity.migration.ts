@@ -17,15 +17,24 @@ export class ClassroomsAndPhysicalCapacity029Migration1773500000000
       );
     }
 
+    const userIdMeta = await this.getColumnMeta(queryRunner, 'users', 'id');
+    if (!userIdMeta) {
+      throw new Error('No se encontro metadata de users.id para auditoria de reasignaciones');
+    }
+
+    const sectionCourseIdSql = this.columnDefinition(sectionCourseIdMeta);
+    const userIdSql = this.columnDefinition(userIdMeta);
+
     const hasClassrooms = await this.tableExists(queryRunner, 'classrooms');
     if (!hasClassrooms) {
       const tableCollation = await this.getTableCollation(
         queryRunner,
         'section_courses'
       );
+      const tableDefaults = this.tableDefaultsSql(tableCollation);
       await queryRunner.query(`
         CREATE TABLE classrooms (
-          id ${sectionCourseIdMeta.columnType} NOT NULL PRIMARY KEY,
+          id ${sectionCourseIdSql} NOT NULL PRIMARY KEY,
           campusName VARCHAR(120) NOT NULL,
           code VARCHAR(60) NOT NULL,
           name VARCHAR(160) NOT NULL,
@@ -38,7 +47,7 @@ export class ClassroomsAndPhysicalCapacity029Migration1773500000000
           UNIQUE KEY uq_classrooms_campus_code (campusName, code),
           KEY idx_classrooms_campus (campusName),
           KEY idx_classrooms_status (status)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4${tableCollation ? ` COLLATE=${tableCollation}` : ''};
+        ) ENGINE=InnoDB${tableDefaults};
       `);
     }
 
@@ -87,14 +96,15 @@ export class ClassroomsAndPhysicalCapacity029Migration1773500000000
         queryRunner,
         'section_courses'
       );
+      const tableDefaults = this.tableDefaultsSql(tableCollation);
       await queryRunner.query(`
         CREATE TABLE section_course_reassignments (
-          id ${sectionCourseIdMeta.columnType} NOT NULL PRIMARY KEY,
-          studentId ${sectionCourseIdMeta.columnType} NOT NULL,
-          fromSectionCourseId ${sectionCourseIdMeta.columnType} NOT NULL,
-          toSectionCourseId ${sectionCourseIdMeta.columnType} NOT NULL,
+          id ${sectionCourseIdSql} NOT NULL PRIMARY KEY,
+          studentId ${userIdSql} NOT NULL,
+          fromSectionCourseId ${sectionCourseIdSql} NOT NULL,
+          toSectionCourseId ${sectionCourseIdSql} NOT NULL,
           reason VARCHAR(500) NULL,
-          changedBy ${sectionCourseIdMeta.columnType} NULL,
+          changedBy ${userIdSql} NULL,
           changedAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
           createdAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
           KEY idx_scr_student (studentId),
@@ -105,7 +115,7 @@ export class ClassroomsAndPhysicalCapacity029Migration1773500000000
           CONSTRAINT fk_scr_from_sc FOREIGN KEY (fromSectionCourseId) REFERENCES section_courses(id) ON DELETE CASCADE ON UPDATE CASCADE,
           CONSTRAINT fk_scr_to_sc FOREIGN KEY (toSectionCourseId) REFERENCES section_courses(id) ON DELETE CASCADE ON UPDATE CASCADE,
           CONSTRAINT fk_scr_changed_by FOREIGN KEY (changedBy) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4${tableCollation ? ` COLLATE=${tableCollation}` : ''};
+        ) ENGINE=InnoDB${tableDefaults};
       `);
     }
   }
@@ -188,11 +198,24 @@ export class ClassroomsAndPhysicalCapacity029Migration1773500000000
   }
 
   private charsetCollationSql(
-    charsetName: string | null,
-    collationName: string | null
+    _charsetName: string | null,
+    _collationName: string | null
   ) {
-    if (!charsetName || !collationName) return '';
-    return ` CHARACTER SET ${charsetName} COLLATE ${collationName}`;
+    return '';
+  }
+
+  private columnDefinition(meta: {
+    columnType: string;
+    charsetName: string | null;
+    collationName: string | null;
+  }) {
+    return meta.columnType;
+  }
+
+  private tableDefaultsSql(collationName: string | null) {
+    if (!collationName) return '';
+    const charset = collationName.split('_')[0];
+    return ` DEFAULT CHARSET=${charset} COLLATE=${collationName}`;
   }
 
   private async alignClassroomsPrimaryKeyToSectionCoursesId(

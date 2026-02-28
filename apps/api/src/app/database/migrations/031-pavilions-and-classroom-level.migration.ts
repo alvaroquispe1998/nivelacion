@@ -32,7 +32,7 @@ export class PavilionsAndClassroomLevel031Migration1773700000000
           CONSTRAINT fk_pavilions_campus
             FOREIGN KEY (campusId) REFERENCES campuses(id)
             ON DELETE RESTRICT ON UPDATE CASCADE
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4${tableCollation ? ` COLLATE=${tableCollation}` : ''};
+        ) ENGINE=InnoDB${this.tableDefaultsSql(tableCollation)};
       `);
     }
 
@@ -193,11 +193,16 @@ export class PavilionsAndClassroomLevel031Migration1773700000000
   }
 
   private charsetCollationSql(
-    charsetName: string | null,
-    collationName: string | null
+    _charsetName: string | null,
+    _collationName: string | null
   ) {
-    if (!charsetName || !collationName) return '';
-    return ` CHARACTER SET ${charsetName} COLLATE ${collationName}`;
+    return '';
+  }
+
+  private tableDefaultsSql(collationName: string | null) {
+    if (!collationName) return '';
+    const charset = collationName.split('_')[0];
+    return ` DEFAULT CHARSET=${charset} COLLATE=${collationName}`;
   }
 
   private async alignPavilionsPrimaryKeyToClassroomsId(

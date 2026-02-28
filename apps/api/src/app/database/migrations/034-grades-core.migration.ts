@@ -34,7 +34,7 @@ export class GradesCore034Migration1774000000000 implements MigrationInterface {
           CONSTRAINT fk_grade_schemes_period
             FOREIGN KEY (periodId) REFERENCES periods(id)
             ON DELETE CASCADE ON UPDATE CASCADE
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4${tableCollation ? ` COLLATE=${tableCollation}` : ''};
+        ) ENGINE=InnoDB${this.tableDefaultsSql(tableCollation)};
       `);
     }
 
@@ -60,7 +60,7 @@ export class GradesCore034Migration1774000000000 implements MigrationInterface {
           CONSTRAINT fk_grade_scheme_components_scheme
             FOREIGN KEY (schemeId) REFERENCES grade_schemes(id)
             ON DELETE CASCADE ON UPDATE CASCADE
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4${tableCollation ? ` COLLATE=${tableCollation}` : ''};
+        ) ENGINE=InnoDB${this.tableDefaultsSql(tableCollation)};
       `);
     }
 
@@ -104,7 +104,7 @@ export class GradesCore034Migration1774000000000 implements MigrationInterface {
           CONSTRAINT fk_section_course_grades_updated_by
             FOREIGN KEY (updatedBy) REFERENCES users(id)
             ON DELETE SET NULL ON UPDATE CASCADE
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4${tableCollation ? ` COLLATE=${tableCollation}` : ''};
+        ) ENGINE=InnoDB${this.tableDefaultsSql(tableCollation)};
       `);
     }
 
@@ -141,7 +141,7 @@ export class GradesCore034Migration1774000000000 implements MigrationInterface {
           CONSTRAINT fk_section_course_grade_publications_published_by
             FOREIGN KEY (publishedBy) REFERENCES users(id)
             ON DELETE SET NULL ON UPDATE CASCADE
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4${tableCollation ? ` COLLATE=${tableCollation}` : ''};
+        ) ENGINE=InnoDB${this.tableDefaultsSql(tableCollation)};
       `);
     }
   }
@@ -154,11 +154,16 @@ export class GradesCore034Migration1774000000000 implements MigrationInterface {
   }
 
   private charsetCollationSql(
-    charsetName: string | null,
-    collationName: string | null
+    _charsetName: string | null,
+    _collationName: string | null
   ) {
-    if (!charsetName || !collationName) return '';
-    return ` CHARACTER SET ${charsetName} COLLATE ${collationName}`;
+    return '';
+  }
+
+  private tableDefaultsSql(collationName: string | null) {
+    if (!collationName) return '';
+    const charset = collationName.split('_')[0];
+    return ` DEFAULT CHARSET=${charset} COLLATE=${collationName}`;
   }
 
   private async getTableCollation(queryRunner: QueryRunner, tableName: string) {
