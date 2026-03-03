@@ -1,57 +1,65 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { Role } from '@uai/shared';
+import { isAdminBackofficeRole, Role } from '@uai/shared';
+import { hashInternalPassword, verifyStoredPassword } from '../users/passwords.util';
 import { UsersService } from '../users/users.service';
 import { UserEntity } from '../users/user.entity';
 
 const ADMIN_LOGIN = 'administrador';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? 'Admin@UAI19';
+const LOGIN_TIMEOUT_MS = 3_000;
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService
-  ) {}
+  ) { }
 
   async login(body: { usuario: string; password: string }) {
     const usuario = String(body.usuario ?? '').trim();
     const password = String(body.password ?? '');
-    const usuarioLower = usuario.toLowerCase();
 
     if (!usuario || !password) {
       throw new BadRequestException('usuario and password are required');
     }
 
-    if (usuarioLower === ADMIN_LOGIN) {
-      if (password !== ADMIN_PASSWORD) {
-        throw new UnauthorizedException('Invalid credentials');
-      }
-
-      const admin = await this.usersService.findAdminByDni(ADMIN_LOGIN);
-      if (!admin) throw new UnauthorizedException('Invalid credentials');
-      return this.buildAuthResponse(admin);
-    }
-
-    const user = await this.findUserForLogin(usuario, usuarioLower);
-
-    if (!user) throw new UnauthorizedException('Invalid credentials');
-
-    if (user.role === Role.ALUMNO || user.role === Role.DOCENTE) {
-      if (password !== user.dni) {
-        throw new UnauthorizedException('Invalid credentials');
-      }
-      return this.buildAuthResponse(user);
-    }
-
-    throw new UnauthorizedException('Invalid credentials');
+    return this.withTimeout(
+      () => this.performLogin(usuario, password),
+      LOGIN_TIMEOUT_MS,
+    );
   }
 
-  private findUserForLogin(usuario: string, usuarioLower: string) {
+  private async performLogin(usuario: string, password: string) {
+    const usuarioLower = usuario.toLowerCase();
+
+    const user = await this.findUserForLogin(usuario);
+
+    if (!user) throw new UnauthorizedException('Invalid credentials');
+    if (!user.isActive) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    const isValid = await this.validateLoginCredentials({
+      user,
+      password,
+      usuarioLower,
+    });
+    if (!isValid) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    return this.buildAuthResponse(user);
+  }
+
+  private findUserForLogin(usuario: string) {
     if (/^[a-zA-Z]\d{5,20}$/.test(usuario)) {
       return this.usersService.findAlumnoByCodigoAlumno(usuario.toUpperCase());
     }
@@ -62,6 +70,67 @@ export class AuthService {
   async me(userId: string) {
     const user = await this.usersService.getByIdOrThrow(userId);
     return { user: this.toAuthUser(user) };
+  }
+
+  async changePassword(
+    userId: string,
+    body: { currentPassword: string; newPassword: string }
+  ) {
+    const currentPassword = String(body.currentPassword ?? '');
+    const newPassword = String(body.newPassword ?? '');
+
+    if (!currentPassword || !newPassword) {
+      throw new BadRequestException('currentPassword and newPassword are required');
+    }
+
+    const user = await this.usersService.getByIdOrThrow(userId);
+    if (!isAdminBackofficeRole(user.role)) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+    if (!user.isActive) {
+      throw new UnauthorizedException('User is inactive');
+    }
+
+    const matchesStoredPassword = await verifyStoredPassword(
+      user.passwordHash,
+      currentPassword
+    );
+    const matchesLegacyAdminEnv =
+      user.dni.toLowerCase() === ADMIN_LOGIN &&
+      user.role === Role.ADMIN &&
+      currentPassword === ADMIN_PASSWORD;
+
+    if (!matchesStoredPassword && !matchesLegacyAdminEnv) {
+      throw new UnauthorizedException('Current password is invalid');
+    }
+
+    user.passwordHash = await hashInternalPassword(newPassword);
+    await this.usersService.save(user);
+    return { ok: true };
+  }
+
+  private async validateLoginCredentials(params: {
+    user: UserEntity;
+    password: string;
+    usuarioLower: string;
+  }) {
+    const { user, password, usuarioLower } = params;
+
+    if (isAdminBackofficeRole(user.role)) {
+      const matchesStoredPassword = await verifyStoredPassword(user.passwordHash, password);
+      const matchesLegacyAdminEnv =
+        usuarioLower === ADMIN_LOGIN &&
+        user.role === Role.ADMIN &&
+        password === ADMIN_PASSWORD;
+
+      return matchesStoredPassword || matchesLegacyAdminEnv;
+    }
+
+    if (user.role === Role.ALUMNO || user.role === Role.DOCENTE) {
+      return password === user.dni;
+    }
+
+    return false;
   }
 
   private async buildAuthResponse(user: UserEntity) {
@@ -89,5 +158,26 @@ export class AuthService {
       paternalLastName: user.paternalLastName ?? null,
       maternalLastName: user.maternalLastName ?? null,
     };
+  }
+
+  private async withTimeout<T>(
+    fn: () => Promise<T>,
+    ms: number,
+  ): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.logger.warn(`Login timed out after ${ms}ms`);
+        reject(
+          new UnauthorizedException(
+            'Login timed out, please try again',
+          ),
+        );
+      }, ms);
+
+      fn()
+        .then(resolve)
+        .catch(reject)
+        .finally(() => clearTimeout(timer));
+    });
   }
 }

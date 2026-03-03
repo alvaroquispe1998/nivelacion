@@ -1,6 +1,6 @@
 import { Component, inject } from '@angular/core';
 import { Router } from '@angular/router';
-import { Role } from '@uai/shared';
+import { isAdminBackofficeRole, Role } from '@uai/shared';
 import { AuthService } from '../core/auth/auth.service';
 
 @Component({
@@ -16,7 +16,7 @@ export class HomeRedirectPage {
       await this.auth.loadMe();
     }
     const role = this.auth.user?.role;
-    if (role === Role.ADMIN) {
+    if (isAdminBackofficeRole(role)) {
       this.router.navigateByUrl('/admin/dashboard');
       return;
     }

@@ -206,6 +206,8 @@ interface StudentDemandItem {
   studentId: string;
   studentCode: string | null;
   studentName: string;
+  careerName: string | null;
+  demandModality: string | null;
   courseId: string;
   courseName: string;
   facultyGroup: string | null;
@@ -1118,14 +1120,16 @@ export class LevelingService {
   async matriculateRun(
     runId: string,
     facultyGroup?: string,
-    strategy?: 'FULL_REBUILD' | 'INCREMENTAL'
+    strategy?: 'FULL_REBUILD' | 'INCREMENTAL',
+    actorUserId?: string | null
   ) {
-    return this.dataSource.transaction(async (manager) => {
-      const run = await this.getRunOrThrow(runId, manager);
-      if (run.status === 'ARCHIVED') {
-        throw new BadRequestException('No se puede matricular una corrida archivada');
-      }
-      const assignStrategy = String(strategy ?? 'INCREMENTAL')
+    try {
+      return await this.dataSource.transaction(async (manager) => {
+        const run = await this.getRunOrThrow(runId, manager);
+        if (run.status === 'ARCHIVED') {
+          throw new BadRequestException('No se puede matricular una corrida archivada');
+        }
+        const assignStrategy = String(strategy ?? 'INCREMENTAL')
         .trim()
         .toUpperCase() as 'FULL_REBUILD' | 'INCREMENTAL';
 
@@ -1263,6 +1267,8 @@ export class LevelingService {
           d.studentId AS studentId,
           u.codigoAlumno AS studentCode,
           u.fullName AS studentName,
+          u.careerName AS careerName,
+          d.sourceModality AS demandModality,
           d.courseId AS courseId,
           c.name AS courseName,
           d.facultyGroup AS facultyGroup,
@@ -1434,12 +1440,22 @@ export class LevelingService {
           this.isVirtualModality(candidate.modality)
         );
 
-        // Keep same-scope candidates first, but always allow virtual sections in the
-        // same faculty as fallback (virtual has no hard cap by design).
-        const prioritized =
-          sameScope.length > 0
-            ? [...sameScope, ...virtualFacultyFallback]
-            : allCourseCandidates;
+        const demandMod = this.scopeKey(demand.demandModality);
+        const wantsVirtual = demandMod.includes('VIRTUAL');
+        const wantsPresencial =
+          demandMod.includes('PRESENCIAL') || demandMod === '' || demandMod === 'SIN_DATO';
+
+        let prioritized: Candidate[];
+        if (wantsVirtual && !wantsPresencial) {
+          // Demanda virtual explícita: solo virtual (misma facultad)
+          prioritized = virtualFacultyFallback;
+        } else {
+          // Presencial o sin dato: primero sede del alumno en presencial, luego virtual de la facultad
+          prioritized =
+            sameScope.length > 0
+              ? [...sameScope, ...virtualFacultyFallback]
+              : virtualFacultyFallback;
+        }
         const dedup = new Map<string, Candidate>();
         for (const candidate of prioritized) {
           dedup.set(candidate.sectionCourseId, candidate);
@@ -1455,12 +1471,15 @@ export class LevelingService {
         if (a.candidates.length !== b.candidates.length) {
           return a.candidates.length - b.candidates.length;
         }
-        const sa = this.scopeKey(a.facultyGroup) + this.scopeKey(a.campusName);
-        const sb = this.scopeKey(b.facultyGroup) + this.scopeKey(b.campusName);
-        if (sa !== sb) return sa.localeCompare(sb);
-        const na = this.scopeKey(a.studentName);
-        const nb = this.scopeKey(b.studentName);
-        if (na !== nb) return na.localeCompare(nb);
+        const scopeA = this.scopeKey(a.facultyGroup) + this.scopeKey(a.campusName);
+        const scopeB = this.scopeKey(b.facultyGroup) + this.scopeKey(b.campusName);
+        if (scopeA !== scopeB) return scopeA.localeCompare(scopeB);
+        const careerA = this.scopeKey(a.careerName);
+        const careerB = this.scopeKey(b.careerName);
+        if (careerA !== careerB) return careerA.localeCompare(careerB);
+        const nameA = this.scopeKey(a.studentName);
+        const nameB = this.scopeKey(b.studentName);
+        if (nameA !== nameB) return nameA.localeCompare(nameB);
         return this.scopeKey(a.courseName).localeCompare(this.scopeKey(b.courseName));
       });
 
@@ -1609,6 +1628,12 @@ export class LevelingService {
       }
 
       await this.bulkInsertSectionStudentCoursesIgnore(manager, rowsToInsert);
+      await this.insertMatriculationAudit(manager, {
+        runId: run.id,
+        periodId: run.periodId,
+        rowsToInsert,
+        actorUserId: actorUserId ?? null,
+      });
 
       const conflictsRows: Array<{ c: number }> = await manager.query(
         `
@@ -1655,46 +1680,96 @@ export class LevelingService {
         [nextStatus, run.id]
       );
 
-      return {
-        runId: run.id,
-        status: nextStatus,
-        assignedCount: rowsToInsert.length,
-        unassigned,
-        summaryBySectionCourse: sectionCourseRows.map((row) => {
-          const candidate = (candidatesByCourse.get(String(row.courseId)) ?? []).find(
-            (x) => x.sectionCourseId === String(row.sectionCourseId)
-          );
-          return {
-            sectionCourseId: String(row.sectionCourseId),
-            sectionId: String(row.sectionId),
-            sectionCode: row.sectionCode ? String(row.sectionCode) : null,
-            sectionName: String(row.sectionName ?? ''),
-            courseId: String(row.courseId),
-            courseName: String(row.courseName ?? ''),
-            assignedCount: Number(candidate?.assignedCount ?? 0),
-            initialCapacity: Number(row.initialCapacity ?? 45),
-            maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
-            classroomId: row.classroomId ? String(row.classroomId) : null,
-            classroomCode: row.classroomCode ? String(row.classroomCode) : null,
-            classroomName: row.classroomName ? String(row.classroomName) : null,
-            classroomCapacity:
-              row.classroomCapacity !== null && row.classroomCapacity !== undefined
-                ? Number(row.classroomCapacity)
+        return {
+          runId: run.id,
+          status: nextStatus,
+          assignedCount: rowsToInsert.length,
+          unassigned,
+          summaryBySectionCourse: sectionCourseRows.map((row) => {
+            const candidate = (candidatesByCourse.get(String(row.courseId)) ?? []).find(
+              (x) => x.sectionCourseId === String(row.sectionCourseId)
+            );
+            return {
+              sectionCourseId: String(row.sectionCourseId),
+              sectionId: String(row.sectionId),
+              sectionCode: row.sectionCode ? String(row.sectionCode) : null,
+              sectionName: String(row.sectionName ?? ''),
+              courseId: String(row.courseId),
+              courseName: String(row.courseName ?? ''),
+              assignedCount: Number(candidate?.assignedCount ?? 0),
+              initialCapacity: Number(row.initialCapacity ?? 45),
+              maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
+              classroomId: row.classroomId ? String(row.classroomId) : null,
+              classroomCode: row.classroomCode ? String(row.classroomCode) : null,
+              classroomName: row.classroomName ? String(row.classroomName) : null,
+              classroomCapacity:
+                row.classroomCapacity !== null && row.classroomCapacity !== undefined
+                  ? Number(row.classroomCapacity)
+                  : null,
+              classroomPavilionCode: row.classroomPavilionCode
+                ? String(row.classroomPavilionCode)
                 : null,
-            classroomPavilionCode: row.classroomPavilionCode
-              ? String(row.classroomPavilionCode)
-              : null,
-            classroomPavilionName: row.classroomPavilionName
-              ? String(row.classroomPavilionName)
-              : null,
-            classroomLevelName: row.classroomLevelName
-              ? String(row.classroomLevelName)
-              : null,
-            capacitySource: this.asCapacitySource(row.capacitySource),
-          };
-        }),
-        conflictsFoundAfterAssign,
-      };
+              classroomPavilionName: row.classroomPavilionName
+                ? String(row.classroomPavilionName)
+                : null,
+              classroomLevelName: row.classroomLevelName
+                ? String(row.classroomLevelName)
+                : null,
+              capacitySource: this.asCapacitySource(row.capacitySource),
+            };
+          }),
+          conflictsFoundAfterAssign,
+        };
+      });
+    } catch (error: any) {
+      // eslint-disable-next-line no-console
+      console.error('[matriculateRun] Error:', error?.message, error?.stack ?? '');
+      throw error;
+    }
+  }
+
+  async clearMatriculationForFaculty(
+    runId: string,
+    facultyGroup: string,
+    actorUserId?: string | null
+  ) {
+    return this.dataSource.transaction(async (manager) => {
+      const run = await this.getRunOrThrow(runId, manager);
+      const targetFaculty = String(facultyGroup).trim();
+      if (!targetFaculty) {
+        throw new BadRequestException('facultyGroup es requerido');
+      }
+      const sectionCourseRows: Array<{ sectionCourseId: string }> = await manager.query(
+        `
+        SELECT sc.id AS sectionCourseId
+        FROM section_courses sc
+        INNER JOIN sections s ON s.id = sc.sectionId
+        WHERE s.levelingRunId = ?
+          AND s.facultyGroup = ?
+        `,
+        [run.id, targetFaculty]
+      );
+      const ids = sectionCourseRows.map((row) => String(row.sectionCourseId));
+      if (ids.length === 0) {
+        return { ok: true, deleted: 0, message: 'No hay matriculas para esa facultad.' };
+      }
+      const placeholders = ids.map(() => '?').join(', ');
+      const deleteResult = await manager.query(
+        `
+        DELETE FROM section_student_courses
+        WHERE sectionCourseId IN (${placeholders})
+        `,
+        ids
+      );
+      const deleted = Number((deleteResult?.affectedRows ?? deleteResult?.[0]?.affectedRows) ?? 0);
+
+      // Auditoría básica opcional
+      // eslint-disable-next-line no-console
+      console.log(
+        `[clearMatriculation] run=${run.id} faculty=${targetFaculty} deleted=${deleted} by=${actorUserId || '-'}`
+      );
+
+      return { ok: true, deleted };
     });
   }
 
@@ -3109,14 +3184,19 @@ export class LevelingService {
         groupsByCareer.get(item.careerKey)!.push(item);
       }
 
-      const orderedGroups = Array.from(groupsByCareer.entries()).sort((a, b) => {
-        if (b[1].length !== a[1].length) return b[1].length - a[1].length;
-        return a[0].localeCompare(b[0]);
-      });
+      // Ordenar por carrera ascendente (como la previsualización) para asignar en bloques por carrera
+      const orderedGroups = Array.from(groupsByCareer.entries()).sort((a, b) =>
+        a[0].localeCompare(b[0])
+      );
 
       const orderedItemsForCourse: RowItem[] = [];
       for (const [, group] of orderedGroups) {
-        group.sort((a, b) => a.student.dni.localeCompare(b.student.dni));
+        // Dentro de cada carrera, ordenar por nombre completo (fallback DNI) ascendente
+        group.sort((a, b) => {
+          const nameCmp = a.student.fullName.localeCompare(b.student.fullName);
+          if (nameCmp !== 0) return nameCmp;
+          return a.student.dni.localeCompare(b.student.dni);
+        });
         orderedItemsForCourse.push(...group);
       }
 
@@ -3153,6 +3233,14 @@ export class LevelingService {
     }
 
     for (let i = 0; i < params.sections.length; i++) {
+      // Orden final consistente con la previsualización: por carrera, luego nombre, luego DNI
+      sectionStudents[i].sort((a, b) => {
+        const careerCmp = a.careerName.localeCompare(b.careerName);
+        if (careerCmp !== 0) return careerCmp;
+        const nameCmp = a.fullName.localeCompare(b.fullName);
+        if (nameCmp !== 0) return nameCmp;
+        return a.dni.localeCompare(b.dni);
+      });
       params.sections[i].students = sectionStudents[i];
       params.sections[i].studentCoursesByDni = sectionStudentCourses[i];
     }
@@ -5656,6 +5744,155 @@ export class LevelingService {
     }
   }
 
+  private async insertMatriculationAudit(
+    manager: EntityManager,
+    params: {
+      runId: string;
+      periodId: string;
+      rowsToInsert: Array<{
+        id: string;
+        sectionCourseId: string;
+        sectionId: string;
+        courseId: string;
+        studentId: string;
+      }>;
+      actorUserId: string | null;
+    }
+  ) {
+    if (params.rowsToInsert.length === 0) return;
+    const tuplePlaceholders = params.rowsToInsert.map(() => '(?, ?)').join(', ');
+    const tupleParams: string[] = [];
+    for (const row of params.rowsToInsert) {
+      tupleParams.push(String(row.sectionCourseId), String(row.studentId));
+    }
+    const rows: Array<{
+      assignmentId: string;
+      studentId: string;
+      studentCode: string | null;
+      studentName: string;
+      demandFacultyGroup: string | null;
+      demandCampusName: string | null;
+      sectionId: string;
+      sectionCourseId: string;
+      sectionCode: string | null;
+      sectionName: string;
+      assignedCampusName: string | null;
+      assignedModality: string | null;
+      courseId: string;
+      courseName: string;
+    }> = await manager.query(
+      `
+      SELECT
+        ssc.id AS assignmentId,
+        ssc.studentId AS studentId,
+        u.codigoAlumno AS studentCode,
+        u.fullName AS studentName,
+        d.facultyGroup AS demandFacultyGroup,
+        d.campusName AS demandCampusName,
+        sc.sectionId AS sectionId,
+        sc.id AS sectionCourseId,
+        s.code AS sectionCode,
+        s.name AS sectionName,
+        s.campusName AS assignedCampusName,
+        s.modality AS assignedModality,
+        sc.courseId AS courseId,
+        c.name AS courseName
+      FROM section_student_courses ssc
+      INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
+      INNER JOIN sections s ON s.id = sc.sectionId
+      INNER JOIN courses c ON c.id = sc.courseId
+      INNER JOIN users u ON u.id = ssc.studentId
+      LEFT JOIN leveling_run_student_course_demands d
+        ON d.runId = ? AND d.studentId = ssc.studentId AND d.courseId = sc.courseId
+      WHERE (ssc.sectionCourseId, ssc.studentId) IN (${tuplePlaceholders})
+      `,
+      [params.runId, ...tupleParams]
+    );
+
+    if (rows.length === 0) return;
+
+    const values = rows
+      .map(
+        () => `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(6))`
+      )
+      .join(', ');
+
+    const auditParams: Array<string | null> = [];
+    for (const row of rows) {
+      auditParams.push(
+        randomUUID(),
+        params.runId,
+        params.periodId,
+        row.studentId,
+        row.studentCode ?? null,
+        row.studentName,
+        row.courseId,
+        row.courseName,
+        row.demandFacultyGroup ?? null,
+        row.demandCampusName ?? null,
+        row.sectionId,
+        row.sectionCode ?? null,
+        row.sectionName,
+        row.sectionCourseId,
+        row.assignedCampusName ?? null,
+        row.assignedModality ?? null,
+        params.actorUserId
+      );
+    }
+
+    const auditTableRows: Array<{ c: number }> = await manager.query(
+      `
+      SELECT COUNT(*) AS c
+      FROM information_schema.tables
+      WHERE table_schema = DATABASE()
+        AND table_name = 'matriculation_audit'
+      `
+    );
+    const auditTableExists = Number(auditTableRows[0]?.c ?? 0) > 0;
+    if (!auditTableExists) {
+      // Si la tabla de auditoría no existe (por ejemplo, migracion no aplicada),
+      // no bloquear la matrícula: simplemente omitir el registro.
+      return;
+    }
+
+    try {
+      await manager.query(
+        `
+        INSERT INTO matriculation_audit (
+          id,
+          runId,
+          periodId,
+          studentId,
+          studentCode,
+          studentName,
+          courseId,
+          courseName,
+          demandFacultyGroup,
+          demandCampusName,
+          assignedSectionId,
+          assignedSectionCode,
+          assignedSectionName,
+          assignedSectionCourseId,
+          assignedCampusName,
+          assignedModality,
+          actorUserId,
+          createdAt
+        )
+        VALUES ${values}
+        `,
+        auditParams
+      );
+    } catch (error: any) {
+      // Si falla la auditoria no bloqueamos la matricula; solo log.
+      // eslint-disable-next-line no-console
+      console.error(
+        '[insertMatriculationAudit] Error al insertar auditoria:',
+        error?.message,
+        error?.stack ?? ''
+      );
+    }
+  }
+
   private async deleteSectionStudentCoursesBySectionCourseIds(
     manager: EntityManager,
     sectionCourseIds: string[]
@@ -6423,17 +6660,19 @@ export class LevelingService {
     }>;
     blocksBySectionCourse: Map<string, ScheduleBlockWindow[]>;
   }) {
-    const demands: StudentDemandItem[] = await this.dataSource.query(
-      `
-      SELECT
-        d.studentId AS studentId,
-        u.codigoAlumno AS studentCode,
-        u.fullName AS studentName,
-        d.courseId AS courseId,
-        c.name AS courseName,
-        d.facultyGroup AS facultyGroup,
-        d.campusName AS campusName
-      FROM leveling_run_student_course_demands d
+      const demands: StudentDemandItem[] = await this.dataSource.query(
+        `
+        SELECT
+          d.studentId AS studentId,
+          u.codigoAlumno AS studentCode,
+          u.fullName AS studentName,
+          u.careerName AS careerName,
+          d.sourceModality AS demandModality,
+          d.courseId AS courseId,
+          c.name AS courseName,
+          d.facultyGroup AS facultyGroup,
+          d.campusName AS campusName
+        FROM leveling_run_student_course_demands d
       INNER JOIN users u ON u.id = d.studentId
       INNER JOIN courses c ON c.id = d.courseId
       WHERE d.runId = ?
@@ -6558,12 +6797,21 @@ export class LevelingService {
         this.isVirtualModality(candidate.modality)
       );
 
-      // Keep same-scope candidates first, but always allow virtual sections in the
-      // same faculty as fallback (virtual has no hard cap by design).
-      const prioritized =
-        sameScope.length > 0
-          ? [...sameScope, ...virtualFacultyFallback]
-          : allCourseCandidates;
+      const demandMod = this.scopeKey(demand.demandModality);
+      const wantsVirtual = demandMod.includes('VIRTUAL');
+      const wantsPresencial = demandMod.includes('PRESENCIAL') || demandMod === '' || demandMod === 'SIN_DATO';
+
+      let prioritized: Candidate[];
+      if (wantsVirtual && !wantsPresencial) {
+        // Demanda virtual explícita: solo virtual (misma facultad)
+        prioritized = virtualFacultyFallback;
+      } else {
+        // Presencial o sin dato: primero sede del alumno en presencial, luego virtual de la facultad
+        prioritized =
+          sameScope.length > 0
+            ? [...sameScope, ...virtualFacultyFallback]
+            : virtualFacultyFallback;
+      }
       const dedup = new Map<string, Candidate>();
       for (const candidate of prioritized) {
         dedup.set(candidate.sectionCourseId, candidate);
@@ -6579,12 +6827,15 @@ export class LevelingService {
       if (a.candidates.length !== b.candidates.length) {
         return a.candidates.length - b.candidates.length;
       }
-      const sa = this.scopeKey(a.facultyGroup) + this.scopeKey(a.campusName);
-      const sb = this.scopeKey(b.facultyGroup) + this.scopeKey(b.campusName);
-      if (sa !== sb) return sa.localeCompare(sb);
-      const na = this.scopeKey(a.studentName);
-      const nb = this.scopeKey(b.studentName);
-      if (na !== nb) return na.localeCompare(nb);
+      const scopeA = this.scopeKey(a.facultyGroup) + this.scopeKey(a.campusName);
+      const scopeB = this.scopeKey(b.facultyGroup) + this.scopeKey(b.campusName);
+      if (scopeA !== scopeB) return scopeA.localeCompare(scopeB);
+      const careerA = this.scopeKey(a.careerName);
+      const careerB = this.scopeKey(b.careerName);
+      if (careerA !== careerB) return careerA.localeCompare(careerB);
+      const nameA = this.scopeKey(a.studentName);
+      const nameB = this.scopeKey(b.studentName);
+      if (nameA !== nameB) return nameA.localeCompare(nameB);
       return this.scopeKey(a.courseName).localeCompare(this.scopeKey(b.courseName));
     });
 
@@ -6652,11 +6903,25 @@ export class LevelingService {
 
     const studentDirectory = new Map<
       string,
-      { studentId: string; studentCode: string | null; studentName: string }
+      {
+        studentId: string;
+        studentCode: string | null;
+        studentName: string;
+        careerName: string | null;
+        demandModality: string | null;
+        campusName: string | null;
+      }
     >();
     const studentsBySectionCourse = new Map<
       string,
-      Array<{ studentId: string; studentCode: string | null; studentName: string }>
+      Array<{
+        studentId: string;
+        studentCode: string | null;
+        studentName: string;
+        careerName: string | null;
+        demandModality: string | null;
+        campusName: string | null;
+      }>
     >();
 
     if (
@@ -6669,15 +6934,21 @@ export class LevelingService {
         studentId: string;
         studentCode: string | null;
         studentName: string;
+        careerName: string | null;
+        campusName: string | null;
       }> = await this.dataSource.query(
         `
         SELECT
           ssc.sectionCourseId AS sectionCourseId,
           u.id AS studentId,
           u.codigoAlumno AS studentCode,
-          u.fullName AS studentName
+          u.fullName AS studentName,
+          u.careerName AS careerName,
+          s.campusName AS campusName
         FROM section_student_courses ssc
         INNER JOIN users u ON u.id = ssc.studentId
+        INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
+        INNER JOIN sections s ON s.id = sc.sectionId
         WHERE ssc.sectionCourseId IN (${sectionPlaceholders})
         `,
         sectionCourseIds
@@ -6687,8 +6958,17 @@ export class LevelingService {
         const studentId = String(row.studentId);
         const studentCode = row.studentCode ? String(row.studentCode) : null;
         const studentName = String(row.studentName ?? '');
+        const careerName = row.careerName ? String(row.careerName) : null;
+        const campusName = row.campusName ? String(row.campusName) : null;
         if (!studentDirectory.has(studentId)) {
-          studentDirectory.set(studentId, { studentId, studentCode, studentName });
+          studentDirectory.set(studentId, {
+            studentId,
+            studentCode,
+            studentName,
+            careerName,
+            demandModality: null,
+            campusName,
+          });
         }
         if (!studentsBySectionCourse.has(sectionCourseId)) {
           studentsBySectionCourse.set(sectionCourseId, []);
@@ -6697,6 +6977,9 @@ export class LevelingService {
           studentId,
           studentCode,
           studentName,
+          careerName,
+          demandModality: null,
+          campusName,
         });
       }
     }
@@ -6715,6 +6998,11 @@ export class LevelingService {
           studentId,
           studentCode: demand.studentCode ? String(demand.studentCode) : null,
           studentName: String(demand.studentName ?? ''),
+          careerName: demand.careerName ? String(demand.careerName) : null,
+          demandModality: demand.demandModality
+            ? String(demand.demandModality)
+            : null,
+          campusName: demand.campusName ? String(demand.campusName) : null,
         });
       }
 
@@ -6798,15 +7086,26 @@ export class LevelingService {
           studentId,
           studentCode: demand.studentCode ? String(demand.studentCode) : null,
           studentName: String(demand.studentName ?? ''),
+          careerName: demand.careerName ? String(demand.careerName) : null,
+          demandModality: demand.demandModality
+            ? String(demand.demandModality)
+            : null,
+          campusName: demand.campusName ? String(demand.campusName) : null,
         });
       }
     }
 
     for (const rows of studentsBySectionCourse.values()) {
       rows.sort((a, b) => {
-        const nameCmp = this.scopeKey(a.studentName).localeCompare(
-          this.scopeKey(b.studentName)
+        const campusCmp = this.scopeKey(a.campusName).localeCompare(
+          this.scopeKey(b.campusName)
         );
+        if (campusCmp !== 0) return campusCmp;
+        const careerCmp = this.scopeKey(a.careerName).localeCompare(
+          this.scopeKey(b.careerName)
+        );
+        if (careerCmp !== 0) return careerCmp;
+        const nameCmp = this.scopeKey(a.studentName).localeCompare(this.scopeKey(b.studentName));
         if (nameCmp !== 0) return nameCmp;
         return this.scopeKey(a.studentCode).localeCompare(this.scopeKey(b.studentCode));
       });

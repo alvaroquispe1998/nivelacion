@@ -28,6 +28,15 @@ export interface AuthMeResponse {
   user: AuthUser;
 }
 
+export interface AuthChangePasswordRequest {
+  currentPassword: string;
+  newPassword: string;
+}
+
+export interface AuthChangePasswordResponse {
+  ok: true;
+}
+
 export interface StudentScheduleItem {
   dayOfWeek: number; // 1=Lunes ... 7=Domingo
   startTime: string; // HH:mm
@@ -38,7 +47,8 @@ export interface StudentScheduleItem {
   modality?: string | null;
   classroomCode?: string | null;
   classroomName?: string | null;
-  zoomUrl?: string | null;
+  joinUrl?: string | null;
+  startUrl?: string | null;
   location?: string | null;
   referenceModality?: string | null;
   referenceClassroom?: string | null;
@@ -228,6 +238,37 @@ export interface AdminTeacher {
   fullName: string;
 }
 
+export interface AdminInternalUser {
+  id: Uuid;
+  dni: string;
+  fullName: string;
+  role: Role;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface CreateAdminInternalUserRequest {
+  dni: string;
+  fullName: string;
+  role: Role.ADMIN | Role.ADMINISTRATIVO;
+  password: string;
+}
+
+export interface UpdateAdminInternalUserRequest {
+  dni?: string;
+  fullName?: string;
+  role?: Role.ADMIN | Role.ADMINISTRATIVO;
+}
+
+export interface UpdateAdminInternalUserStatusRequest {
+  isActive: boolean;
+}
+
+export interface ResetAdminInternalUserPasswordRequest {
+  newPassword: string;
+}
+
 export interface AdminScheduleConflictBlock {
   blockId: Uuid;
   sectionCourseId: Uuid;
@@ -296,7 +337,8 @@ export interface AdminScheduleBlock {
   endTime: string;
   startDate?: string | null;
   endDate?: string | null;
-  zoomUrl?: string | null;
+  joinUrl?: string | null;
+  startUrl?: string | null;
   location?: string | null;
   referenceModality?: string | null;
   referenceClassroom?: string | null;
@@ -651,6 +693,9 @@ export interface LevelingMatriculationPreviewStudent {
   studentId: Uuid;
   studentCode?: string | null;
   studentName: string;
+  careerName?: string | null;
+  demandModality?: string | null;
+  campusName?: string | null;
 }
 
 export interface LevelingMatriculationPreviewSectionCourse {

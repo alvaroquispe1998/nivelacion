@@ -10,7 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { Role } from '@uai/shared';
+import { ADMIN_BACKOFFICE_ROLES } from '@uai/shared';
 import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -21,7 +21,7 @@ import { ScheduleBlocksService } from './schedule-blocks.service';
 @ApiTags('admin')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.ADMIN)
+@Roles(...ADMIN_BACKOFFICE_ROLES)
 @Controller('admin/schedule-blocks')
 export class ScheduleBlocksController {
   constructor(private readonly blocksService: ScheduleBlocksService) {}
@@ -43,7 +43,8 @@ export class ScheduleBlocksController {
       endTime: b.endTime,
       startDate: b.startDate,
       endDate: b.endDate,
-      zoomUrl: b.zoomUrl,
+      joinUrl: b.joinUrl,
+      startUrl: b.startUrl,
       location: b.location,
       referenceModality: b.referenceModality,
       referenceClassroom: b.referenceClassroom,
@@ -61,7 +62,8 @@ export class ScheduleBlocksController {
       endTime: dto.endTime,
       startDate: dto.startDate ?? null,
       endDate: dto.endDate ?? null,
-      zoomUrl: dto.zoomUrl ?? null,
+      joinUrl: dto.joinUrl ?? null,
+      startUrl: dto.startUrl ?? null,
       location: dto.location ?? null,
       referenceModality: dto.referenceModality ?? null,
       referenceClassroom: dto.referenceClassroom ?? null,
@@ -81,7 +83,8 @@ export class ScheduleBlocksController {
       endTime: block.endTime,
       startDate: block.startDate,
       endDate: block.endDate,
-      zoomUrl: block.zoomUrl,
+      joinUrl: block.joinUrl,
+      startUrl: block.startUrl,
       location: block.location,
       referenceModality: block.referenceModality,
       referenceClassroom: block.referenceClassroom,
@@ -97,7 +100,8 @@ export class ScheduleBlocksController {
       endTime: dto.endTime,
       startDate: dto.startDate ?? null,
       endDate: dto.endDate ?? null,
-      zoomUrl: dto.zoomUrl ?? null,
+      joinUrl: dto.joinUrl ?? null,
+      startUrl: dto.startUrl ?? null,
       location: dto.location ?? null,
       referenceModality: dto.referenceModality ?? null,
       referenceClassroom: dto.referenceClassroom ?? null,
@@ -117,7 +121,8 @@ export class ScheduleBlocksController {
       endTime: block.endTime,
       startDate: block.startDate,
       endDate: block.endDate,
-      zoomUrl: block.zoomUrl,
+      joinUrl: block.joinUrl,
+      startUrl: block.startUrl,
       location: block.location,
       referenceModality: block.referenceModality,
       referenceClassroom: block.referenceClassroom,

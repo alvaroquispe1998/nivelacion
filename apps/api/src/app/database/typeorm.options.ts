@@ -49,6 +49,9 @@ import { RenameFicaFacultyName032Migration1773800000000 } from './migrations/032
 import { ScheduleBlockReferenceFields033Migration1773900000000 } from './migrations/033-schedule-block-reference-fields.migration';
 import { GradesCore034Migration1774000000000 } from './migrations/034-grades-core.migration';
 import { UsersCodigoAlumnoRoleIndex035Migration1774100000000 } from './migrations/035-users-codigo-alumno-role-index.migration';
+import { InternalAdminUsers036Migration1774200000000 } from './migrations/036-internal-admin-users.migration';
+import { MatriculationAudit037Migration1763600000000 } from './migrations/037-matriculation-audit.migration';
+import { ScheduleBlockJoinStartUrls038Migration1763700000000 } from './migrations/038-schedule-block-join-start-urls.migration';
 
 export const TYPEORM_ENTITIES = [
   UserEntity,
@@ -101,6 +104,9 @@ export const TYPEORM_MIGRATIONS = [
   ScheduleBlockReferenceFields033Migration1773900000000,
   GradesCore034Migration1774000000000,
   UsersCodigoAlumnoRoleIndex035Migration1774100000000,
+  InternalAdminUsers036Migration1774200000000,
+  MatriculationAudit037Migration1763600000000,
+  ScheduleBlockJoinStartUrls038Migration1763700000000,
 ];
 
 export function createDataSourceOptionsFromEnv(): DataSourceOptions {

@@ -82,6 +82,14 @@ interface ActiveRunSummary {
         </button>
 
         <button
+          class="rounded-xl border border-rose-300 bg-white px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-60"
+          [disabled]="clearing || !selectedFaculty"
+          (click)="clearMatriculation()"
+        >
+          {{ clearing ? 'Borrando...' : 'Eliminar matrícula actual' }}
+        </button>
+
+        <button
           class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
           [disabled]="!canGenerate || generating"
           (click)="openGenerateConfirm()"
@@ -220,6 +228,58 @@ interface ActiveRunSummary {
     </div>
 
     <div
+      *ngIf="confirmClearOpen"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+    >
+      <div class="w-full max-w-md rounded-2xl border border-slate-200 bg-white shadow-2xl">
+        <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+          <div class="flex items-start gap-3">
+            <span
+              class="mt-0.5 inline-flex h-8 w-8 items-center justify-center rounded-full bg-rose-100 text-sm font-bold text-rose-700"
+            >
+              !
+            </span>
+            <div>
+              <div class="text-base font-semibold text-slate-900">Eliminar matrícula</div>
+              <div class="text-xs text-slate-500">Facultad: {{ selectedFaculty || '-' }}</div>
+            </div>
+          </div>
+          <button
+            type="button"
+            class="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            [disabled]="clearing"
+            (click)="closeConfirmClear()"
+          >
+            Cerrar
+          </button>
+        </div>
+
+        <div class="px-5 py-4 text-sm text-slate-700">
+          Se eliminará la matrícula actual de la facultad seleccionada. Esta acción no crea oferta nueva y permite regenerar
+          la matrícula desde cero.
+        </div>
+
+        <div class="flex items-center justify-end gap-2 px-5 pb-5">
+          <button
+            type="button"
+            class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            [disabled]="clearing"
+            (click)="closeConfirmClear()"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            class="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+            [disabled]="clearing"
+            (click)="clearMatriculation({ silent: true })"
+          >
+            {{ clearing ? 'Eliminando...' : 'Eliminar matrícula' }}
+          </button>
+        </div>
+      </div>
+    </div>
+    <div
       *ngIf="generateConfirmOpen"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
     >
@@ -247,8 +307,14 @@ interface ActiveRunSummary {
         </div>
 
         <div class="px-5 py-4 text-sm text-slate-700">
-          Se ejecutara la matricula automatica para <b>{{ selectedFaculty }}</b>.
-          Esta accion agregara solo asignaciones pendientes, sin borrar matriculas previas ni crear oferta nueva.
+          <ng-container *ngIf="showOverwriteWarning; else normalMsg">
+            Se eliminará la matrícula existente para <b>{{ selectedFaculty }}</b> y se volverá a generar solo con las
+            asignaciones pendientes. No se creará oferta nueva.
+          </ng-container>
+          <ng-template #normalMsg>
+            Se ejecutará la matrícula automática para <b>{{ selectedFaculty }}</b>. Esta acción agregará solo
+            asignaciones pendientes, sin borrar matrículas previas ni crear oferta nueva.
+          </ng-template>
         </div>
 
         <div class="flex items-center justify-end gap-2 px-5 pb-5">
@@ -264,7 +330,7 @@ interface ActiveRunSummary {
             type="button"
             class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
             [disabled]="generating"
-            (click)="confirmGenerateMatriculation()"
+            (click)="confirmGenerateMatriculationV2()"
           >
             {{ generating ? 'Generando...' : 'Confirmar y generar' }}
           </button>
@@ -273,7 +339,7 @@ interface ActiveRunSummary {
     </div>
 
     <div *ngIf="studentsModalOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div class="w-full max-w-2xl rounded-2xl bg-white p-4 shadow-xl">
+      <div class="w-full max-w-5xl rounded-2xl bg-white p-4 shadow-xl">
         <div class="flex items-center justify-between gap-3">
           <div>
             <div class="text-sm font-semibold">{{ studentsModalTitle }}</div>
@@ -290,15 +356,21 @@ interface ActiveRunSummary {
               <tr>
                 <th class="px-4 py-3">Codigo</th>
                 <th class="px-4 py-3">Alumno</th>
+                <th class="px-4 py-3">Sede</th>
+                <th class="px-4 py-3">Carrera</th>
+                <th class="px-4 py-3">Modalidad</th>
               </tr>
             </thead>
             <tbody>
               <tr *ngFor="let student of studentsModalRows; trackBy: trackStudent" class="border-t border-slate-100">
                 <td class="px-4 py-3 font-semibold">{{ studentCode(student.studentCode) }}</td>
                 <td class="px-4 py-3">{{ student.studentName }}</td>
+                <td class="px-4 py-3">{{ student.campusName || '-' }}</td>
+                <td class="px-4 py-3">{{ student.careerName || '-' }}</td>
+                <td class="px-4 py-3">{{ student.demandModality || '-' }}</td>
               </tr>
               <tr *ngIf="studentsModalRows.length === 0" class="border-t border-slate-100">
-                <td class="px-4 py-4 text-sm text-slate-500" colspan="2">Sin alumnos en este curso-seccion.</td>
+                <td class="px-4 py-4 text-sm text-slate-500" colspan="5">Sin alumnos en este curso-seccion.</td>
               </tr>
             </tbody>
           </table>
@@ -319,6 +391,9 @@ export class AdminMatriculaPage {
   loading = false;
   previewLoading = false;
   generating = false;
+  clearing = false;
+  confirmClearOpen = false;
+  showOverwriteWarning = false;
   error: string | null = null;
   success: string | null = null;
 
@@ -335,12 +410,14 @@ export class AdminMatriculaPage {
     studentId: string;
     studentCode?: string | null;
     studentName: string;
+    careerName?: string | null;
+    demandModality?: string | null;
+    campusName?: string | null;
   }> = [];
 
   get matriculableFaculties() {
-    return (this.preview?.faculties ?? []).filter(
-      (f) => f.ready && Math.max(0, Number(f.pendingDemands ?? 0)) > 0
-    );
+    // Mostrar todas las facultades conocidas, aunque no haya pendientes, para permitir limpiar matrícula existente.
+    return (this.preview?.faculties ?? []).slice();
   }
 
   get noMatriculableFacultiesMessage() {
@@ -356,11 +433,14 @@ export class AdminMatriculaPage {
     return (
       Boolean(this.runId) &&
       Boolean(this.selectedFaculty) &&
-      Boolean(this.preview?.selectedFacultyGroup) &&
-      this.preview?.selectedFacultyGroup === this.selectedFaculty &&
-      Boolean(this.preview?.canMatriculateSelectedFaculty) &&
-      !this.generating
+      !this.generating &&
+      (this.preview?.canMatriculateSelectedFaculty ?? true)
     );
+  }
+
+  get hasAssignedMatricula() {
+    const summary = this.preview?.summaryBySectionCourse ?? [];
+    return summary.some((row) => Number(row.assignedCount ?? 0) > 0);
   }
 
   get previewSectionCourseRows() {
@@ -384,6 +464,8 @@ export class AdminMatriculaPage {
         studentId: string;
         studentCode?: string | null;
         studentName: string;
+        careerName?: string | null;
+        demandModality?: string | null;
       }>;
     }> = [];
 
@@ -583,7 +665,7 @@ export class AdminMatriculaPage {
     this.preview = await firstValueFrom(
       this.http.get<LevelingMatriculationPreviewResponse>(
         `/api/admin/leveling/runs/${encodeURIComponent(this.runId)}/matriculate-preview`,
-        { params: new HttpParams().set('strategy', 'INCREMENTAL') }
+        { params: new HttpParams().set('strategy', 'FULL_REBUILD') }
       )
     );
 
@@ -615,7 +697,7 @@ export class AdminMatriculaPage {
     try {
       const params = new HttpParams()
         .set('facultyGroup', this.selectedFaculty)
-        .set('strategy', 'INCREMENTAL');
+        .set('strategy', 'FULL_REBUILD');
       this.preview = await firstValueFrom(
         this.http.get<LevelingMatriculationPreviewResponse>(
           `/api/admin/leveling/runs/${encodeURIComponent(this.runId)}/matriculate-preview`,
@@ -640,7 +722,7 @@ export class AdminMatriculaPage {
       const result = await firstValueFrom(
         this.http.post<LevelingMatriculationResult>(
           `/api/admin/leveling/runs/${encodeURIComponent(this.runId)}/matriculate`,
-          { facultyGroup: this.selectedFaculty, strategy: 'INCREMENTAL' }
+          { facultyGroup: this.selectedFaculty, strategy: 'FULL_REBUILD' }
         )
       );
       this.runStatus = result.status;
@@ -660,6 +742,7 @@ export class AdminMatriculaPage {
 
   openGenerateConfirm() {
     if (!this.canGenerate || !this.selectedFaculty) return;
+    this.showOverwriteWarning = this.hasAssignedMatricula;
     this.generateConfirmOpen = true;
   }
 
@@ -671,17 +754,79 @@ export class AdminMatriculaPage {
   async confirmGenerateMatriculation() {
     if (!this.generateConfirmOpen) return;
     this.generateConfirmOpen = false;
+    // FULL_REBUILD limpia y regenera en una sola transacción
     await this.generateMatriculation();
+  }
+
+  async confirmGenerateMatriculationV2() {
+    if (!this.generateConfirmOpen) return;
+    this.generateConfirmOpen = false;
+    // FULL_REBUILD limpia y regenera en una sola transacción atómica,
+    // garantizando que el resultado sea idéntico a la previsualización.
+    await this.generateMatriculation();
+  }
+
+  async clearMatriculation(opts: { silent?: boolean } = {}) {
+    if (!this.selectedFaculty || this.clearing) return;
+    if (!opts.silent) {
+      this.confirmClearOpen = true;
+      return;
+    }
+    this.error = null;
+    this.success = null;
+    this.clearing = true;
+    try {
+      const resp = await firstValueFrom(
+        this.http.post<{ ok: boolean; deleted?: number }>(
+          `/api/admin/leveling/runs/${encodeURIComponent(this.runId ?? '')}/matriculate/clear`,
+          { facultyGroup: this.selectedFaculty }
+        )
+      );
+      const deleted = Number(resp?.deleted ?? 0);
+      this.success =
+        deleted > 0
+          ? `Matrícula eliminada (${deleted} registros) para la facultad seleccionada.`
+          : 'No se encontraron matrículas para eliminar en esta facultad.';
+      await this.loadPreviewBase();
+    } catch (e: any) {
+      this.error = e?.error?.message ?? 'No se pudo eliminar la matrícula';
+    } finally {
+      this.clearing = false;
+      this.confirmClearOpen = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  closeConfirmClear() {
+    if (this.clearing) return;
+    this.confirmClearOpen = false;
   }
 
   openStudentsModal(
     sectionLabel: string,
     courseName: string,
-    students: Array<{ studentId: string; studentCode?: string | null; studentName: string }>
+    students: Array<{
+      studentId: string;
+      studentCode?: string | null;
+      studentName: string;
+      careerName?: string | null;
+      demandModality?: string | null;
+      campusName?: string | null;
+    }>
   ) {
     this.studentsModalOpen = true;
     this.studentsModalTitle = `${sectionLabel} - ${courseName}`;
-    this.studentsModalRows = students.slice();
+    this.studentsModalRows = students
+      .slice()
+      .sort((a, b) => {
+        const campusCmp = this.valueKey(a.campusName).localeCompare(this.valueKey(b.campusName));
+        if (campusCmp !== 0) return campusCmp;
+        const careerCmp = this.valueKey(a.careerName).localeCompare(this.valueKey(b.careerName));
+        if (careerCmp !== 0) return careerCmp;
+        const nameCmp = this.valueKey(a.studentName).localeCompare(this.valueKey(b.studentName));
+        if (nameCmp !== 0) return nameCmp;
+        return this.valueKey(a.studentCode).localeCompare(this.valueKey(b.studentCode));
+      });
   }
 
   closeStudentsModal() {
@@ -690,5 +835,8 @@ export class AdminMatriculaPage {
     this.studentsModalRows = [];
   }
 
+  private valueKey(value: string | null | undefined) {
+    return String(value ?? '').trim().toUpperCase();
+  }
 
 }

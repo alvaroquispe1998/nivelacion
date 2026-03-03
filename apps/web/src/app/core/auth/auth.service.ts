@@ -1,10 +1,11 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { BehaviorSubject, firstValueFrom } from 'rxjs';
+import { BehaviorSubject, firstValueFrom, throwError, timeout } from 'rxjs';
 import type { AuthLoginRequest, AuthLoginResponse, AuthMeResponse, AuthUser, Role } from '@uai/shared';
 
 const TOKEN_KEY = 'uai_token';
 const USER_KEY = 'uai_user';
+export const LOGIN_REQUEST_TIMEOUT_MS = 5_000;
 
 @Injectable({ providedIn: 'root' })
 export class AuthService {
@@ -14,7 +15,7 @@ export class AuthService {
 
   readonly user$ = this.userSubject.asObservable();
 
-  constructor(private readonly http: HttpClient) {}
+  constructor(private readonly http: HttpClient) { }
 
   get token(): string | null {
     return localStorage.getItem(TOKEN_KEY);
@@ -30,7 +31,19 @@ export class AuthService {
 
   async login(body: AuthLoginRequest): Promise<AuthLoginResponse> {
     const res = await firstValueFrom(
-      this.http.post<AuthLoginResponse>('/api/auth/login', body)
+      this.http
+        .post<AuthLoginResponse>('/api/auth/login', body)
+        .pipe(
+          timeout({
+            first: LOGIN_REQUEST_TIMEOUT_MS,
+            with: () =>
+              throwError(() => ({
+                status: 408,
+                name: 'TimeoutError',
+                message: 'Request timeout',
+              })),
+          })
+        )
     );
     localStorage.setItem(TOKEN_KEY, res.accessToken);
     localStorage.setItem(USER_KEY, JSON.stringify(res.user));

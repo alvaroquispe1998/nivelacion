@@ -1,6 +1,6 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { Role } from '@uai/shared';
+import { ADMIN_BACKOFFICE_ROLES } from '@uai/shared';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -9,7 +9,7 @@ import { AkademicService } from './akademic.service';
 @ApiTags('integrations')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.ADMIN)
+@Roles(...ADMIN_BACKOFFICE_ROLES)
 @Controller('integrations/akademic')
 export class AkademicController {
   constructor(private readonly akademicService: AkademicService) {}
@@ -19,4 +19,3 @@ export class AkademicController {
     return this.akademicService.getSecciones(courseId);
   }
 }
-

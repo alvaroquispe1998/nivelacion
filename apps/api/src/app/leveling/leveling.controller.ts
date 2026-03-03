@@ -1,5 +1,6 @@
 import {
   Body,
+  BadRequestException,
   Controller,
   Delete,
   Get,
@@ -15,7 +16,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
-import { Role } from '@uai/shared';
+import { ADMIN_BACKOFFICE_ROLES } from '@uai/shared';
 import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -23,11 +24,13 @@ import { LevelingPlanDto } from './dto/leveling-plan.dto';
 import { CreateLevelingManualSectionCourseDto } from './dto/create-leveling-manual-section-course.dto';
 import { UpdateLevelingConfigDto } from './dto/update-leveling-config.dto';
 import { LevelingService } from './leveling.service';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import type { JwtUser } from '../common/decorators/current-user.decorator';
 
 @ApiTags('admin')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.ADMIN)
+@Roles(...ADMIN_BACKOFFICE_ROLES)
 @Controller('admin/leveling')
 export class LevelingController {
   constructor(private readonly levelingService: LevelingService) { }
@@ -135,12 +138,37 @@ export class LevelingController {
   @Post('runs/:runId/matriculate')
   matriculateRun(
     @Param('runId') runId: string,
-    @Body() body: { facultyGroup?: string; strategy?: 'FULL_REBUILD' | 'INCREMENTAL' }
+    @Body() body: { facultyGroup?: string; strategy?: 'FULL_REBUILD' | 'INCREMENTAL' },
+    @CurrentUser() user: JwtUser
   ) {
-    return this.levelingService.matriculateRun(
+    try {
+      return this.levelingService.matriculateRun(
+        runId,
+        body?.facultyGroup,
+        body?.strategy,
+        String(user?.sub ?? '').trim() || null
+      );
+    } catch (error: any) {
+      // eslint-disable-next-line no-console
+      console.error('[matriculate endpoint] Error:', error?.message, error?.stack ?? '');
+      throw error;
+    }
+  }
+
+  @Post('runs/:runId/matriculate/clear')
+  clearMatriculation(
+    @Param('runId') runId: string,
+    @Body() body: { facultyGroup: string },
+    @CurrentUser() user: JwtUser
+  ) {
+    const facultyGroup = String(body?.facultyGroup ?? '').trim();
+    if (!facultyGroup) {
+      throw new BadRequestException('facultyGroup es requerido');
+    }
+    return this.levelingService.clearMatriculationForFaculty(
       runId,
-      body?.facultyGroup,
-      body?.strategy
+      facultyGroup,
+      String(user?.sub ?? '').trim() || null
     );
   }
 

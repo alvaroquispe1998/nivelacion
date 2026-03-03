@@ -48,7 +48,11 @@ export class CreateScheduleBlockDto {
 
   @IsOptional()
   @IsString()
-  zoomUrl?: string;
+  joinUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  startUrl?: string;
 
   @IsOptional()
   @IsString()

@@ -49,7 +49,8 @@ describe('StudentService', () => {
         endTime: '10:00',
         courseName: 'COMUNICACION',
         section: { id: 'sec-1', name: 'SEC-1' },
-        zoomUrl: null,
+        joinUrl: null,
+        startUrl: null,
         location: null,
       },
       {
@@ -60,7 +61,8 @@ describe('StudentService', () => {
         endTime: '12:00',
         courseName: 'MATEMATICA',
         section: { id: 'sec-1', name: 'SEC-1' },
-        zoomUrl: null,
+        joinUrl: null,
+        startUrl: null,
         location: null,
       },
       {
@@ -71,7 +73,8 @@ describe('StudentService', () => {
         endTime: '09:00',
         courseName: 'COMUNICACION',
         section: { id: 'sec-2', name: 'SEC-2' },
-        zoomUrl: null,
+        joinUrl: null,
+        startUrl: null,
         location: null,
       },
     ];

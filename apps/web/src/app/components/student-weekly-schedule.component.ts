@@ -104,15 +104,25 @@ import { DAYS, minutesFromHHmm } from '../shared/days';
           <div *ngIf="isVirtualItem(selectedItem)"><b>Modalidad:</b> Virtual</div>
           <div *ngIf="!isVirtualItem(selectedItem)"><b>Aula:</b> {{ classroomLabel(selectedItem) }}</div>
         </div>
-        <a
-          *ngIf="selectedItem.zoomUrl"
-          class="mt-4 inline-block rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
-          [href]="selectedItem.zoomUrl"
-          target="_blank"
-          rel="noreferrer"
-        >
-          Abrir enlace de clase
-        </a>
+        <div class="mt-4 flex flex-wrap items-center gap-2">
+          <a
+            *ngIf="selectedItem.joinUrl"
+            class="inline-block rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
+            [href]="selectedItem.joinUrl"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Abrir enlace de clase
+          </a>
+          <button
+            *ngIf="selectedItem.startUrl"
+            type="button"
+            class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
+            (click)="copyStartUrl(selectedItem.startUrl)"
+          >
+            Copiar invitacion
+          </button>
+        </div>
       </div>
     </div>
 
@@ -179,6 +189,16 @@ export class StudentWeeklyScheduleComponent {
 
   closeDetail() {
     this.selectedItem = null;
+  }
+
+  async copyStartUrl(url?: string | null) {
+    const value = String(url ?? '').trim();
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      // ignore
+    }
   }
 
   dayLabel(dayOfWeek: number) {

@@ -110,7 +110,8 @@ export class ScheduleBlocksService {
     endTime: string;
     startDate?: string | null;
     endDate?: string | null;
-    zoomUrl?: string | null;
+    joinUrl?: string | null;
+    startUrl?: string | null;
     location?: string | null;
     referenceModality?: string | null;
     referenceClassroom?: string | null;
@@ -215,7 +216,8 @@ export class ScheduleBlocksService {
       endTime: body.endTime,
       startDate: body.startDate ?? null,
       endDate: body.endDate ?? null,
-      zoomUrl: body.zoomUrl ?? null,
+      joinUrl: body.joinUrl ?? null,
+      startUrl: body.startUrl ?? null,
       location: body.location ?? null,
       referenceModality,
       referenceClassroom,
@@ -232,7 +234,8 @@ export class ScheduleBlocksService {
       endTime: string;
       startDate: string | null;
       endDate: string | null;
-      zoomUrl: string | null;
+      joinUrl: string | null;
+      startUrl: string | null;
       location: string | null;
       referenceModality: string | null;
       referenceClassroom: string | null;
@@ -256,7 +259,8 @@ export class ScheduleBlocksService {
       endTime: body.endTime ?? block.endTime,
       startDate: body.startDate !== undefined ? body.startDate : block.startDate,
       endDate: body.endDate !== undefined ? body.endDate : block.endDate,
-      zoomUrl: body.zoomUrl ?? block.zoomUrl,
+      joinUrl: body.joinUrl ?? block.joinUrl,
+      startUrl: body.startUrl ?? block.startUrl,
       location: body.location ?? block.location,
     };
 
@@ -348,7 +352,8 @@ export class ScheduleBlocksService {
     block.endTime = next.endTime;
     block.startDate = next.startDate ?? null;
     block.endDate = next.endDate ?? null;
-    block.zoomUrl = next.zoomUrl;
+    block.joinUrl = next.joinUrl;
+    block.startUrl = next.startUrl;
     block.location = next.location;
     block.referenceModality = referenceModality;
     block.referenceClassroom = referenceClassroom;

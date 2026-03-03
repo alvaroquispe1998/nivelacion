@@ -50,6 +50,9 @@ export class UserEntity {
   @Column({ type: 'enum', enum: Role })
   role!: Role;
 
+  @Column({ type: 'boolean', default: true })
+  isActive!: boolean;
+
   @Column({ type: 'varchar', length: 255, nullable: true })
   passwordHash!: string | null;
 

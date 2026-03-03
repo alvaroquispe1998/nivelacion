@@ -73,6 +73,7 @@ const COURSE_CONTEXT_STORAGE_KEY = 'admin.sections.selectedCourseName';
               <th class="px-4 py-3">Modalidad</th>
               <th class="px-4 py-3">Aula</th>
               <th class="px-4 py-3">Vigencia</th>
+              <th class="px-4 py-3">Reunion</th>
               <th class="px-4 py-3">Accion</th>
             </tr>
           </thead>
@@ -85,6 +86,30 @@ const COURSE_CONTEXT_STORAGE_KEY = 'admin.sections.selectedCourseName';
               <td class="px-4 py-3 text-slate-700">{{ blockReferenceClassroomLabel(b) }}</td>
               <td class="px-4 py-3 text-slate-700">
                 {{ formatDateRange(b.startDate, b.endDate) }}
+              </td>
+              <td class="px-4 py-3">
+                <div class="flex flex-wrap items-center gap-2">
+                  <a
+                    *ngIf="b.startUrl; else noStartUrl"
+                    class="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                    [href]="b.startUrl"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Entrar
+                  </a>
+                  <ng-template #noStartUrl>
+                    <span class="text-xs text-slate-400">-</span>
+                  </ng-template>
+                  <button
+                    class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                    type="button"
+                    (click)="copyLink(b.joinUrl)"
+                    [disabled]="!b.joinUrl"
+                  >
+                    Copiar invitacion
+                  </button>
+                </div>
               </td>
               <td class="px-4 py-3">
                 <div class="flex items-center gap-2">
@@ -104,7 +129,7 @@ const COURSE_CONTEXT_STORAGE_KEY = 'admin.sections.selectedCourseName';
               </td>
             </tr>
             <tr *ngIf="visibleBlocks.length===0" class="border-t border-slate-100">
-              <td class="px-4 py-6 text-slate-600" colspan="7">Sin bloques</td>
+              <td class="px-4 py-6 text-slate-600" colspan="8">Sin bloques</td>
             </tr>
           </tbody>
         </table>
@@ -173,6 +198,29 @@ const COURSE_CONTEXT_STORAGE_KEY = 'admin.sections.selectedCourseName';
                 formControlName="referenceClassroom"
                 placeholder="Sin aula"
               />
+            </div>
+          </div>
+          <div class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <div class="text-xs font-semibold text-slate-700">Enlaces de clase</div>
+            <div class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div>
+                <div class="mb-1 text-xs text-slate-500">Enlace de inicio de clase (Docente)</div>
+                <input
+                  class="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+                  formControlName="startUrl"
+                  placeholder="https://..."
+                />
+              </div>
+              <div>
+                <div class="mb-1 text-xs text-slate-500">
+                  Enlace de acceso a clase (Estudiantes)
+                </div>
+                <input
+                  class="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+                  formControlName="joinUrl"
+                  placeholder="https://..."
+                />
+              </div>
             </div>
           </div>
           <label
@@ -273,6 +321,8 @@ export class AdminSectionSchedulePage {
     endDate: [''],
     referenceModality: ['PRESENCIAL', [Validators.required]],
     referenceClassroom: ['Sin aula'],
+    joinUrl: [''],
+    startUrl: [''],
     applyToWholeCourse: [false],
     applyTeacherToWholeCourse: [false],
   });
@@ -349,6 +399,16 @@ export class AdminSectionSchedulePage {
     return 'Sin rango';
   }
 
+  async copyLink(url?: string | null) {
+    const value = String(url ?? '').trim();
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      // ignore clipboard errors
+    }
+  }
+
   blockReferenceModalityLabel(block: AdminScheduleBlock) {
     const modality = String(block.referenceModality ?? '').trim().toUpperCase();
     if (!modality) return '-';
@@ -392,6 +452,8 @@ export class AdminSectionSchedulePage {
         endDate: this.form.get('endDate')?.value || this.period?.endsAt || '',
         referenceModality: this.referenceDefaults.referenceModality,
         referenceClassroom: this.referenceDefaults.referenceClassroom,
+        joinUrl: '',
+        startUrl: '',
         applyToWholeCourse: false,
         applyTeacherToWholeCourse: false,
       });
@@ -460,6 +522,8 @@ export class AdminSectionSchedulePage {
         String(block.referenceModality ?? '').trim().toUpperCase() || 'PRESENCIAL',
       referenceClassroom:
         String(block.referenceClassroom ?? '').trim() || 'Sin aula',
+      joinUrl: String(block.joinUrl ?? '').trim(),
+      startUrl: String(block.startUrl ?? '').trim(),
       applyToWholeCourse: false,
       applyTeacherToWholeCourse: false,
     });
@@ -477,6 +541,8 @@ export class AdminSectionSchedulePage {
       endDate: this.period?.endsAt || '',
       referenceModality: this.referenceDefaults.referenceModality,
       referenceClassroom: this.referenceDefaults.referenceClassroom,
+      joinUrl: '',
+      startUrl: '',
       applyToWholeCourse: false,
       applyTeacherToWholeCourse: false,
     });
@@ -503,6 +569,8 @@ export class AdminSectionSchedulePage {
           referenceModality:
             String(v.referenceModality ?? '').trim().toUpperCase() || null,
           referenceClassroom: String(v.referenceClassroom ?? '').trim() || null,
+          joinUrl: String(v.joinUrl ?? '').trim() || undefined,
+          startUrl: String(v.startUrl ?? '').trim() || undefined,
           applyToWholeCourse: Boolean(v.applyToWholeCourse),
           applyTeacherToWholeCourse: Boolean(v.applyTeacherToWholeCourse),
           scopeFacultyGroup: this.scopeFacultyGroup || null,
@@ -539,6 +607,8 @@ export class AdminSectionSchedulePage {
           referenceModality:
             String(v.referenceModality ?? '').trim().toUpperCase() || null,
           referenceClassroom: String(v.referenceClassroom ?? '').trim() || null,
+          joinUrl: String(v.joinUrl ?? '').trim() || undefined,
+          startUrl: String(v.startUrl ?? '').trim() || undefined,
           applyToWholeCourse: Boolean(v.applyToWholeCourse),
           applyTeacherToWholeCourse: Boolean(v.applyTeacherToWholeCourse),
           scopeFacultyGroup: this.scopeFacultyGroup || null,

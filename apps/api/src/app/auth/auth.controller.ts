@@ -1,10 +1,13 @@
 import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { ADMIN_BACKOFFICE_ROLES } from '@uai/shared';
 import { AuthService } from './auth.service';
-import { LoginDto } from './auth.dto';
+import { ChangePasswordDto, LoginDto } from './auth.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtUser } from '../common/decorators/current-user.decorator';
+import { Roles } from '../common/decorators/roles.decorator';
+import { RolesGuard } from '../common/guards/roles.guard';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -21,5 +24,13 @@ export class AuthController {
   @ApiBearerAuth()
   me(@CurrentUser() user: JwtUser) {
     return this.authService.me(user.sub);
+  }
+
+  @Post('change-password')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...ADMIN_BACKOFFICE_ROLES)
+  @ApiBearerAuth()
+  changePassword(@CurrentUser() user: JwtUser, @Body() dto: ChangePasswordDto) {
+    return this.authService.changePassword(user.sub, dto);
   }
 }

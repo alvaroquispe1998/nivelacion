@@ -51,7 +51,8 @@ interface StudentScheduleReportItem {
   modality: string | null;
   classroomCode: string | null;
   classroomName: string | null;
-  zoomUrl: string | null;
+  joinUrl: string | null;
+  startUrl: string | null;
   location: string | null;
   referenceModality: string | null;
   referenceClassroom: string | null;
@@ -1570,7 +1571,8 @@ export class GradesService {
         s.modality AS modality,
         cl.code AS classroomCode,
         cl.name AS classroomName,
-        sb.zoomUrl AS zoomUrl,
+        sb.joinUrl AS joinUrl,
+        sb.startUrl AS startUrl,
         sb.location AS location,
         sb.referenceModality AS referenceModality,
         sb.referenceClassroom AS referenceClassroom
@@ -1594,7 +1596,8 @@ export class GradesService {
         s.modality,
         cl.code,
         cl.name,
-        sb.zoomUrl,
+        sb.joinUrl,
+        sb.startUrl,
         sb.location,
         sb.referenceModality,
         sb.referenceClassroom
@@ -1613,7 +1616,8 @@ export class GradesService {
       modality: row.modality ? String(row.modality) : null,
       classroomCode: row.classroomCode ? String(row.classroomCode) : null,
       classroomName: row.classroomName ? String(row.classroomName) : null,
-      zoomUrl: row.zoomUrl ? String(row.zoomUrl) : null,
+      joinUrl: row.joinUrl ? String(row.joinUrl) : null,
+      startUrl: row.startUrl ? String(row.startUrl) : null,
       location: row.location ? String(row.location) : null,
       referenceModality: row.referenceModality ? String(row.referenceModality) : null,
       referenceClassroom: row.referenceClassroom ? String(row.referenceClassroom) : null,

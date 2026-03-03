@@ -5,9 +5,12 @@ import { FormsModule } from '@angular/forms';
 import type {
   AdminStudentReportResponse,
   AdminStudentReportSearchItem,
+  AdminReassignmentOption,
+  AdminReassignmentResult,
   StudentGradesReportRow,
 } from '@uai/shared';
 import { Subscription, firstValueFrom, skip } from 'rxjs';
+import { HttpParams } from '@angular/common/http';
 import { StudentWeeklyScheduleComponent } from '../components/student-weekly-schedule.component';
 import { AdminPeriodContextService } from '../core/workflow/admin-period-context.service';
 
@@ -245,6 +248,7 @@ type StudentDetailSection =
                       <th class="px-4 py-3">Modalidad</th>
                       <th class="px-4 py-3">Docente</th>
                       <th class="px-4 py-3">Aula</th>
+                      <th class="px-4 py-3 text-right">Accion</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -258,9 +262,18 @@ type StudentDetailSection =
                       <td class="px-4 py-3">{{ row.modality || '-' }}</td>
                       <td class="px-4 py-3">{{ row.teacherName || 'Sin docente asignado' }}</td>
                       <td class="px-4 py-3">{{ row.classroomLabel || 'Sin aula asignada' }}</td>
+                      <td class="px-4 py-3 text-right">
+                        <button
+                          class="rounded-lg border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                          (click)="openReassignFromStudent(row)"
+                          [disabled]="reassigning || reportLoading"
+                        >
+                          Reubicar curso
+                        </button>
+                      </td>
                     </tr>
                     <tr *ngIf="studentReport.enrollment.length === 0" class="border-t border-slate-100">
-                      <td class="px-4 py-6 text-slate-500" colspan="6">
+                      <td class="px-4 py-6 text-slate-500" colspan="7">
                         No hay matricula registrada.
                       </td>
                     </tr>
@@ -417,6 +430,96 @@ type StudentDetailSection =
         </div>
       </div>
     </div>
+
+    <!-- Modal reubicacion desde ficha alumno -->
+    <div
+      *ngIf="reassignModalOpen"
+      class="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 p-4"
+      (click)="closeReassignFromStudent()"
+    >
+      <div
+        class="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white shadow-2xl"
+        (click)="$event.stopPropagation()"
+      >
+        <div class="border-b border-slate-200 px-5 py-4">
+          <div class="text-base font-semibold text-slate-900">Reubicar curso</div>
+          <div class="mt-1 text-xs text-slate-600">
+            {{ reassignEnrollmentRow?.courseName || '-' }} |
+            {{ reassignEnrollmentRow?.sectionCode || reassignEnrollmentRow?.sectionName || '-' }}
+          </div>
+        </div>
+
+        <div class="p-5 space-y-3">
+          <div class="text-xs text-slate-600">
+            Selecciona la seccion destino para este alumno. Se respetan las validaciones de cruce y aforo.
+          </div>
+
+          <label class="block text-sm text-slate-700">
+            Destino
+            <select
+              class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+              [(ngModel)]="selectedReassignTargetSectionCourseId"
+              [ngModelOptions]="{ standalone: true }"
+              [disabled]="reassigning"
+            >
+              <option value="" disabled>Selecciona destino</option>
+              <option
+                *ngFor="let option of reassignOptions; trackBy: trackReassignOption"
+                [value]="option.sectionCourseId"
+              >
+                {{ reassignOptionLabel(option) }}
+              </option>
+            </select>
+          </label>
+
+          <label class="block text-sm text-slate-700">
+            Motivo (opcional)
+            <textarea
+              class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              rows="2"
+              [(ngModel)]="reassignReason"
+              [ngModelOptions]="{ standalone: true }"
+              [disabled]="reassigning"
+            ></textarea>
+          </label>
+
+          <div *ngIf="reassignWarning" class="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            {{ reassignWarning }}
+          </div>
+          <div *ngIf="reassignError" class="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+            {{ reassignError }}
+          </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-2 border-t border-slate-200 px-5 py-4">
+          <button
+            type="button"
+            class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50 disabled:opacity-60"
+            (click)="closeReassignFromStudent()"
+            [disabled]="reassigning"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+            [disabled]="reassigning || !selectedReassignTargetSectionCourseId"
+            (click)="submitReassignFromStudent(false)"
+          >
+            {{ reassigning ? 'Guardando...' : 'Guardar cambio' }}
+          </button>
+          <button
+            *ngIf="reassignNeedsOverCapacityConfirm"
+            type="button"
+            class="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+            [disabled]="reassigning || !selectedReassignTargetSectionCourseId"
+            (click)="submitReassignFromStudent(true)"
+          >
+            Confirmar sobreaforo
+          </button>
+        </div>
+      </div>
+    </div>
   `,
 })
 export class AdminStudentReportPage implements OnDestroy {
@@ -434,6 +537,17 @@ export class AdminStudentReportPage implements OnDestroy {
     { id: 'grades', label: 'Notas' },
     { id: 'attendance', label: 'Asistencia' },
   ];
+
+  // Reubicacion desde ficha alumno
+  reassignModalOpen = false;
+  reassigning = false;
+  reassignOptions: AdminReassignmentOption[] = [];
+  selectedReassignTargetSectionCourseId = '';
+  reassignNeedsOverCapacityConfirm = false;
+  reassignWarning: string | null = null;
+  reassignError: string | null = null;
+  reassignReason = '';
+  reassignEnrollmentRow: AdminStudentReportResponse['enrollment'][number] | null = null;
 
   studentQuery = '';
   studentMatches: AdminStudentReportSearchItem[] = [];
@@ -544,6 +658,34 @@ export class AdminStudentReportPage implements OnDestroy {
 
   trackAttendanceSession(_: number, item: { courseName: string; sessionDate: string }) {
     return `${item.courseName}::${item.sessionDate}`;
+  }
+
+  trackReassignOption(_: number, item: AdminReassignmentOption) {
+    return item.sectionCourseId;
+  }
+
+  private get selectedReassignTarget() {
+    return this.reassignOptions.find(
+      (option) => option.sectionCourseId === this.selectedReassignTargetSectionCourseId
+    );
+  }
+
+  reassignOptionLabel(option: AdminReassignmentOption) {
+    const sectionLabel = option.sectionCode || option.sectionName || 'Seccion';
+    const modality = String(option.modality ?? '').trim() || '-';
+    let capacityLabel = '';
+    if (String(modality).toUpperCase().includes('VIRTUAL')) {
+      capacityLabel = 'Virtual';
+    } else if (Number(option.classroomCapacity ?? 0) > 0) {
+      capacityLabel = `Aforo ${Number(option.classroomCapacity)}`;
+    } else {
+      capacityLabel = 'Sin aula';
+    }
+    const marks: string[] = [];
+    if (option.createsConflict) marks.push('Con cruce');
+    if (option.overCapacity) marks.push('Sobreaforo');
+    const suffix = marks.length > 0 ? ` | ${marks.join(' | ')}` : '';
+    return `${sectionLabel} | ${modality} | ${capacityLabel} | ${option.currentStudents}->${option.projectedStudents}${suffix}`;
   }
 
   isGradeComplete(row: StudentGradesReportRow) {
@@ -683,6 +825,109 @@ export class AdminStudentReportPage implements OnDestroy {
       this.error = e?.error?.message ?? 'No se pudo descargar el PDF.';
     } finally {
       this.exportingPdf = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  async openReassignFromStudent(row: AdminStudentReportResponse['enrollment'][number]) {
+    if (!row?.sectionCourseId || !this.studentReport?.student.studentId) return;
+    this.reassignModalOpen = true;
+    this.reassignEnrollmentRow = row;
+    this.reassignOptions = [];
+    this.selectedReassignTargetSectionCourseId = '';
+    this.reassignReason = '';
+    this.reassigning = false;
+    this.reassignNeedsOverCapacityConfirm = false;
+    this.reassignError = null;
+    this.reassignWarning = null;
+    try {
+      const params = new HttpParams()
+        .set('studentId', this.studentReport.student.studentId)
+        .set('fromSectionCourseId', String(row.sectionCourseId));
+      const options = await firstValueFrom(
+        this.http.get<AdminReassignmentOption[]>(
+          '/api/admin/sections/schedule-conflicts/reassignment-options',
+          { params }
+        )
+      );
+      this.reassignOptions = options;
+      const firstValid = options.find((option) => !option.createsConflict);
+      this.selectedReassignTargetSectionCourseId = firstValid?.sectionCourseId ?? '';
+      if (!firstValid) {
+        this.reassignWarning = 'No hay destinos disponibles sin cruce para este alumno.';
+      }
+    } catch (e: any) {
+      this.reassignError = e?.error?.message ?? 'No se pudo cargar destinos de reubicacion';
+    } finally {
+      this.cdr.detectChanges();
+    }
+  }
+
+  closeReassignFromStudent() {
+    this.reassignModalOpen = false;
+    this.reassignEnrollmentRow = null;
+    this.reassignOptions = [];
+    this.selectedReassignTargetSectionCourseId = '';
+    this.reassignReason = '';
+    this.reassigning = false;
+    this.reassignNeedsOverCapacityConfirm = false;
+    this.reassignError = null;
+    this.reassignWarning = null;
+  }
+
+  async submitReassignFromStudent(forceOverCapacityConfirm: boolean) {
+    if (
+      !this.reassignEnrollmentRow ||
+      !this.reassignEnrollmentRow.sectionCourseId ||
+      !this.selectedReassignTargetSectionCourseId ||
+      this.reassigning ||
+      !this.studentReport?.student.studentId
+    ) {
+      return;
+    }
+
+    const target = this.selectedReassignTarget;
+    if (!target) {
+      this.reassignError = 'Selecciona un destino valido.';
+      this.cdr.detectChanges();
+      return;
+    }
+    if (target.createsConflict) {
+      this.reassignError = 'El destino seleccionado genera cruce de horario.';
+      this.cdr.detectChanges();
+      return;
+    }
+    if (target.overCapacity && !forceOverCapacityConfirm) {
+      this.reassignNeedsOverCapacityConfirm = true;
+      this.reassignWarning =
+        'El destino seleccionado excede su capacidad fisica. Confirma para continuar con sobreaforo.';
+      this.cdr.detectChanges();
+      return;
+    }
+
+    this.reassigning = true;
+    this.reassignError = null;
+    this.reassignWarning = null;
+    try {
+      await firstValueFrom(
+        this.http.post<AdminReassignmentResult>('/api/admin/sections/schedule-conflicts/reassign', {
+          studentId: this.studentReport.student.studentId,
+          fromSectionCourseId: this.reassignEnrollmentRow.sectionCourseId,
+          toSectionCourseId: this.selectedReassignTargetSectionCourseId,
+          confirmOverCapacity: forceOverCapacityConfirm || target.overCapacity,
+          reason: String(this.reassignReason ?? '').trim() || null,
+        })
+      );
+      await this.loadSelectedStudent();
+      this.closeReassignFromStudent();
+    } catch (e: any) {
+      const message = String(e?.error?.message ?? 'No se pudo reubicar alumno');
+      this.reassignError = message;
+      if (message.toUpperCase().includes('SOBREAFORO')) {
+        this.reassignNeedsOverCapacityConfirm = true;
+      }
+    } finally {
+      this.reassigning = false;
       this.cdr.detectChanges();
     }
   }

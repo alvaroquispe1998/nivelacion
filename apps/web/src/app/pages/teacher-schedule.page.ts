@@ -16,7 +16,8 @@ interface TeacherScheduleItem {
   endTime: string;
   startDate?: string | null;
   endDate?: string | null;
-  zoomUrl?: string | null;
+  joinUrl?: string | null;
+  startUrl?: string | null;
   location?: string | null;
 }
 
@@ -53,6 +54,7 @@ interface TeacherScheduleItem {
             <th class="px-4 py-3">Dia</th>
             <th class="px-4 py-3">Hora</th>
             <th class="px-4 py-3">Vigencia</th>
+            <th class="px-4 py-3">Reunion</th>
           </tr>
         </thead>
         <tbody>
@@ -62,9 +64,33 @@ interface TeacherScheduleItem {
             <td class="px-4 py-3">{{ dayLabel(item.dayOfWeek) }}</td>
             <td class="px-4 py-3">{{ item.startTime }}-{{ item.endTime }}</td>
             <td class="px-4 py-3">{{ formatDateRange(item.startDate, item.endDate) }}</td>
+            <td class="px-4 py-3">
+              <div class="flex flex-wrap items-center gap-2">
+                <a
+                  *ngIf="item.startUrl; else noStart"
+                  class="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                  [href]="item.startUrl"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Entrar
+                </a>
+                <ng-template #noStart>
+                  <span class="text-xs text-slate-400">-</span>
+                </ng-template>
+                <button
+                  class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  type="button"
+                  (click)="copyLink(item.joinUrl)"
+                  [disabled]="!item.joinUrl"
+                >
+                  Copiar invitacion
+                </button>
+              </div>
+            </td>
           </tr>
           <tr *ngIf="items.length === 0" class="border-t border-slate-100">
-            <td class="px-4 py-6 text-slate-600" colspan="5">Sin horarios asignados.</td>
+            <td class="px-4 py-6 text-slate-600" colspan="6">Sin horarios asignados.</td>
           </tr>
         </tbody>
       </table>
@@ -108,6 +134,16 @@ export class TeacherSchedulePage {
       this.error = e?.error?.message ?? 'No se pudo cargar horario de docente';
     } finally {
       this.cdr.detectChanges();
+    }
+  }
+
+  async copyLink(url?: string | null) {
+    const value = String(url ?? '').trim();
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      // ignore clipboard errors silently
     }
   }
 }

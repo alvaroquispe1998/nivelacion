@@ -51,7 +51,8 @@ export class TeacherController {
       endTime: string;
       startDate: string | null;
       endDate: string | null;
-      zoomUrl: string | null;
+      joinUrl: string | null;
+      startUrl: string | null;
       location: string | null;
       sectionName: string;
       sectionCode: string | null;
@@ -67,7 +68,8 @@ export class TeacherController {
         b.endTime AS endTime,
         b.startDate AS startDate,
         b.endDate AS endDate,
-        b.zoomUrl AS zoomUrl,
+        b.joinUrl AS joinUrl,
+        b.startUrl AS startUrl,
         b.location AS location,
         s.name AS sectionName,
         s.code AS sectionCode
@@ -98,7 +100,8 @@ export class TeacherController {
       endTime: String(row.endTime ?? ''),
       startDate: this.toIsoDateOnly(row.startDate),
       endDate: this.toIsoDateOnly(row.endDate),
-      zoomUrl: row.zoomUrl ? String(row.zoomUrl) : null,
+      joinUrl: row.joinUrl ? String(row.joinUrl) : null,
+      startUrl: row.startUrl ? String(row.startUrl) : null,
       location: row.location ? String(row.location) : null,
       sectionName: String(row.sectionName ?? ''),
       sectionCode: row.sectionCode ? String(row.sectionCode) : null,
@@ -154,7 +157,8 @@ export class TeacherController {
       endTime: string;
       startDate: string | null;
       endDate: string | null;
-      zoomUrl: string | null;
+      joinUrl: string | null;
+      startUrl: string | null;
       location: string | null;
     }> = await this.dataSource.query(
       `
@@ -168,7 +172,8 @@ export class TeacherController {
         endTime,
         startDate,
         endDate,
-        zoomUrl,
+        joinUrl,
+        startUrl,
         location
       FROM schedule_blocks
       WHERE sectionCourseId = ?
@@ -186,7 +191,8 @@ export class TeacherController {
       endTime: String(row.endTime ?? ''),
       startDate: this.toIsoDateOnly(row.startDate),
       endDate: this.toIsoDateOnly(row.endDate),
-      zoomUrl: row.zoomUrl ? String(row.zoomUrl) : null,
+      joinUrl: row.joinUrl ? String(row.joinUrl) : null,
+      startUrl: row.startUrl ? String(row.startUrl) : null,
       location: row.location ? String(row.location) : null,
     }));
   }

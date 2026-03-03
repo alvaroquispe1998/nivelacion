@@ -10,7 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { Role } from '@uai/shared';
+import { ADMIN_BACKOFFICE_ROLES } from '@uai/shared';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -24,7 +24,7 @@ import { GradesService } from './grades.service';
 @ApiTags('admin')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.ADMIN)
+@Roles(...ADMIN_BACKOFFICE_ROLES)
 @Controller('admin/grades')
 export class AdminGradesController {
   constructor(private readonly gradesService: GradesService) {}

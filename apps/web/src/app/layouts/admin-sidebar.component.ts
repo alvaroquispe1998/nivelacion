@@ -10,6 +10,7 @@ import {
 } from '@angular/core';
 import { NgClass, NgFor, NgIf } from '@angular/common';
 import { RouterLink, RouterLinkActive } from '@angular/router';
+import { Role } from '@uai/shared';
 import { firstValueFrom, skip, Subscription } from 'rxjs';
 import { AdminPeriodContextService } from '../core/workflow/admin-period-context.service';
 import { WorkflowStateService } from '../core/workflow/workflow-state.service';
@@ -27,6 +28,7 @@ export interface SidebarItem {
   badgeTone?: BadgeTone;
   queryParams?: Record<string, any>;
   disabled?: boolean;
+  roles?: Role[];
 }
 
 export interface SidebarGroup {
@@ -78,6 +80,8 @@ const ICON = {
           0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25
           0 2.625 2.625 0 015.25 0z`,
 
+  key: `M15.75 5.25a3 3 0 11-4.243 4.243L9 12l-1.5 1.5v2.25h2.25V18H12v-2.25l2.561-2.561a5.25 5.25 0 10-7.424-7.424L4.5 8.402`,
+
   arrowUp: `M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0
             0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5`,
 
@@ -96,6 +100,19 @@ export const ADMIN_SIDEBAR_GROUPS: SidebarGroup[] = [
         route: '/admin/dashboard',
         icon: ICON.home,
         tooltip: 'Dashboard',
+      },
+      {
+        label: 'Usuarios internos',
+        route: '/admin/users',
+        icon: ICON.users,
+        tooltip: 'Gestion de usuarios internos',
+        roles: [Role.ADMIN],
+      },
+      {
+        label: 'Cambiar contrasena',
+        route: '/admin/account/password',
+        icon: ICON.key,
+        tooltip: 'Cambiar contrasena',
       },
     ],
   },
@@ -450,7 +467,7 @@ const BADGE_CLASSES: Record<BadgeTone, string> = {
             <div class="truncate text-xs font-semibold text-slate-800">
               {{ userName || 'Usuario' }}
             </div>
-            <div class="text-[11px] text-slate-400">Administrador</div>
+            <div class="text-[11px] text-slate-400">{{ userRoleLabel }}</div>
           </div>
         </div>
 
@@ -508,6 +525,7 @@ const BADGE_CLASSES: Record<BadgeTone, string> = {
 export class AdminSidebarComponent implements OnInit, OnDestroy {
   /** User full name shown in the bottom card */
   @Input() userName = '';
+  @Input() userRole: Role | null = null;
 
   /** Emits the collapsed state on every change so parent can adjust layout */
   @Output() collapsedChange = new EventEmitter<boolean>();
@@ -518,13 +536,15 @@ export class AdminSidebarComponent implements OnInit, OnDestroy {
   private workflowSub?: Subscription;
   private periodSub?: Subscription;
   private refreshRequestId = 0;
+  private refreshInFlight = false;
+  private refreshQueued = false;
   private readonly resizeHandler = () => this.checkMobile();
 
   readonly chevronLeft = ICON.chevronLeft;
   readonly chevronRight = ICON.chevronRight;
 
   // Clone groups to make them mutable
-  groups: SidebarGroup[] = JSON.parse(JSON.stringify(ADMIN_SIDEBAR_GROUPS));
+  groups: SidebarGroup[] = [];
 
   collapsed = false;
   isMobile = false;
@@ -540,6 +560,11 @@ export class AdminSidebarComponent implements OnInit, OnDestroy {
       .toUpperCase() || '?';
   }
 
+  get userRoleLabel(): string {
+    if (this.userRole === Role.ADMINISTRATIVO) return 'Administrativo';
+    return 'Administrador';
+  }
+
   badgeClass(tone: BadgeTone = 'slate'): string {
     return BADGE_CLASSES[tone] ?? BADGE_CLASSES['slate'];
   }
@@ -548,6 +573,9 @@ export class AdminSidebarComponent implements OnInit, OnDestroy {
 
   
   ngOnInit() {
+    this.groups = this.filterGroupsForRole(
+      JSON.parse(JSON.stringify(ADMIN_SIDEBAR_GROUPS))
+    );
     this.collapsed = localStorage.getItem(STORAGE_KEY) === 'true';
     this.checkMobile();
     window.addEventListener('resize', this.resizeHandler);
@@ -561,7 +589,9 @@ export class AdminSidebarComponent implements OnInit, OnDestroy {
         void this.refreshStatusWithRetry();
       });
 
-    void this.refreshStatusWithRetry();
+    if (this.adminPeriodContext.getSelectedPeriod()) {
+      void this.refreshStatusWithRetry();
+    }
   }
 
   ngOnDestroy() {
@@ -573,26 +603,40 @@ export class AdminSidebarComponent implements OnInit, OnDestroy {
   // ── Workflow Status ──────────────────────────────────────────────────────
 
   private async refreshStatusWithRetry() {
+    if (this.refreshInFlight) {
+      this.refreshQueued = true;
+      return;
+    }
+
+    this.refreshInFlight = true;
     const requestId = ++this.refreshRequestId;
     const retryDelays = [0, 200, 400];
-    for (const delay of retryDelays) {
-      if (delay > 0) {
-        await this.sleep(delay);
+    try {
+      for (const delay of retryDelays) {
+        if (delay > 0) {
+          await this.sleep(delay);
+        }
+        if (requestId !== this.refreshRequestId) return;
+        try {
+          const summary = await firstValueFrom(
+            this.http.get<any>(`/api/admin/leveling/active-run-summary?t=${Date.now()}`)
+          );
+          if (requestId !== this.refreshRequestId) return;
+          this.updateMenu(summary);
+          return;
+        } catch {
+          // continue retries
+        }
       }
       if (requestId !== this.refreshRequestId) return;
-      try {
-        const summary = await firstValueFrom(
-          this.http.get<any>(`/api/admin/leveling/active-run-summary?t=${Date.now()}`)
-        );
-        if (requestId !== this.refreshRequestId) return;
-        this.updateMenu(summary);
-        return;
-      } catch {
-        // continue retries
+      console.warn('Could not fetch workflow status for sidebar');
+    } finally {
+      this.refreshInFlight = false;
+      if (this.refreshQueued) {
+        this.refreshQueued = false;
+        void this.refreshStatusWithRetry();
       }
     }
-    if (requestId !== this.refreshRequestId) return;
-    console.warn('Could not fetch workflow status for sidebar');
   }
 
   updateMenu(s: any) {
@@ -629,7 +673,7 @@ export class AdminSidebarComponent implements OnInit, OnDestroy {
       disable('/admin/sections', { view: 'schedule' });
     }
 
-    if (!hasActivePeriod || !hasRun || assigned <= 0) {
+    if (!hasActivePeriod || !hasRun) {
       disable('/admin/sections', { view: 'students' });
     }
 
@@ -646,7 +690,7 @@ export class AdminSidebarComponent implements OnInit, OnDestroy {
       disable('/admin/matricula');
     }
 
-    this.groups = nextGroups;
+    this.groups = this.filterGroupsForRole(nextGroups);
   }
 
   // ── Actions ───────────────────────────────────────────────────────────────
@@ -681,6 +725,17 @@ export class AdminSidebarComponent implements OnInit, OnDestroy {
 
   private sleep(ms: number) {
     return new Promise<void>((resolve) => setTimeout(resolve, ms));
+  }
+
+  private filterGroupsForRole(groups: SidebarGroup[]) {
+    return groups
+      .map((group) => ({
+        ...group,
+        items: group.items.filter(
+          (item) => !item.roles || !this.userRole || item.roles.includes(this.userRole)
+        ),
+      }))
+      .filter((group) => group.items.length > 0);
   }
 }
 

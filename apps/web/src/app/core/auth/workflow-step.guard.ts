@@ -7,7 +7,7 @@ import {
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { AuthService } from './auth.service';
-import { Role } from '@uai/shared';
+import { isAdminBackofficeRole } from '@uai/shared';
 
 interface RunSummary {
   activePeriod: { id: string; code: string; name: string } | null;
@@ -113,7 +113,7 @@ export const workflowStepGuard: CanActivateFn = async (
   const router = inject(Router);
   const http = inject(HttpClient);
 
-  if (auth.user?.role !== Role.ADMIN) return true;
+  if (!isAdminBackofficeRole(auth.user?.role ?? null)) return true;
 
   const step = route.data['workflowStep'] as StepKey | undefined;
   if (!step || !(step in STEP_REQUIREMENTS)) return true;

@@ -43,7 +43,10 @@ export class ScheduleBlockEntity {
   endDate!: string | null; // YYYY-MM-DD
 
   @Column({ type: 'varchar', length: 500, nullable: true })
-  zoomUrl!: string | null;
+  joinUrl!: string | null;
+
+  @Column({ type: 'varchar', length: 500, nullable: true })
+  startUrl!: string | null;
 
   @Column({ type: 'varchar', length: 200, nullable: true })
   location!: string | null;

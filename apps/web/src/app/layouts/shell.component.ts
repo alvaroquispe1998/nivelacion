@@ -9,7 +9,7 @@ import {
 import { HttpClient } from '@angular/common/http';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
-import { Role } from '@uai/shared';
+import { isAdminBackofficeRole, Role } from '@uai/shared';
 import type { AuthUser } from '@uai/shared';
 import { firstValueFrom, Subscription } from 'rxjs';
 
@@ -69,12 +69,13 @@ interface StudentPlatformItem {
       <!-- ══════════════════════════════════════════════════════════════════════
            ADMIN LAYOUT — sidebar + minimalista header
       ══════════════════════════════════════════════════════════════════════════ -->
-      <ng-container *ngIf="u.role === Role.ADMIN">
+      <ng-container *ngIf="isAdminBackofficeRole(u.role)">
         <div class="flex h-screen overflow-hidden bg-slate-50">
 
           <!-- Sidebar -->
           <app-admin-sidebar
             [userName]="u.fullName"
+            [userRole]="u.role"
             (collapsedChange)="sidebarCollapsed = $event"
           ></app-admin-sidebar>
 
@@ -157,7 +158,7 @@ interface StudentPlatformItem {
                   </div>
                   <div class="leading-tight">
                     <div class="text-xs font-semibold text-slate-800">{{ u.fullName }}</div>
-                    <div class="text-[11px] text-slate-500">Administrador</div>
+                    <div class="text-[11px] text-slate-500">{{ roleLabel(u.role) }}</div>
                   </div>
                 </div>
 
@@ -192,7 +193,7 @@ interface StudentPlatformItem {
       <!-- ══════════════════════════════════════════════════════════════════════
            NON-ADMIN LAYOUT — classic top nav (ALUMNO / DOCENTE unchanged)
       ══════════════════════════════════════════════════════════════════════════ -->
-      <ng-container *ngIf="u.role !== Role.ADMIN">
+      <ng-container *ngIf="!isAdminBackofficeRole(u.role)">
         <div class="min-h-dvh bg-slate-50 text-slate-900">
 
           <!-- Top header -->
@@ -641,6 +642,7 @@ interface StudentPlatformItem {
 })
 export class ShellComponent implements OnInit, OnDestroy {
   readonly auth = inject(AuthService);
+  readonly isAdminBackofficeRole = isAdminBackofficeRole;
   readonly Role = Role;
   private readonly http = inject(HttpClient);
   private readonly router = inject(Router);
@@ -698,7 +700,7 @@ export class ShellComponent implements OnInit, OnDestroy {
 
   async onPeriodSelected(nextPeriodId: string) {
     const user = this.auth.user;
-    if (!user || user.role !== Role.ADMIN) return;
+    if (!user || !isAdminBackofficeRole(user.role)) return;
     const nextId = String(nextPeriodId || '').trim();
     // Guard against same period or concurrent switch.
     // NOTE: do NOT compare against this.selectedPeriodId here — with one-way
@@ -882,6 +884,7 @@ export class ShellComponent implements OnInit, OnDestroy {
   roleLabel(role: string): string {
     const labels: Record<string, string> = {
       ADMIN: 'Administrador',
+      ADMINISTRATIVO: 'Administrativo',
       ALUMNO: 'Alumno',
       DOCENTE: 'Docente',
     };
@@ -929,7 +932,7 @@ export class ShellComponent implements OnInit, OnDestroy {
   private async loadPeriodContext() {
     if (!this.auth.user) return;
     try {
-      if (this.auth.user!.role === Role.ADMIN) {
+      if (isAdminBackofficeRole(this.auth.user!.role)) {
         const rows = await firstValueFrom(
           this.http.get<PeriodView[]>('/api/admin/periods')
         );
@@ -940,7 +943,6 @@ export class ShellComponent implements OnInit, OnDestroy {
           : null;
         this.activePeriod = selectedRow;
         this.selectedPeriodId = selected?.id ?? '';
-        this.workflowState.notifyWorkflowChanged();
       } else {
         this.activePeriod = await firstValueFrom(
           this.http.get<PeriodView>('/api/periods/active')

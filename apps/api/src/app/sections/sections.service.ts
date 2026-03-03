@@ -1510,7 +1510,8 @@ export class SectionsService {
       endTime: string;
       startDate: string | null;
       endDate: string | null;
-      zoomUrl: string | null;
+      joinUrl: string | null;
+      startUrl: string | null;
       location: string | null;
       referenceModality: string | null;
       referenceClassroom: string | null;
@@ -1522,7 +1523,8 @@ export class SectionsService {
         endTime,
         startDate,
         endDate,
-        zoomUrl,
+        joinUrl,
+        startUrl,
         location,
         referenceModality,
         referenceClassroom
@@ -1634,7 +1636,8 @@ export class SectionsService {
               endTime,
               startDate,
               endDate,
-              zoomUrl,
+              joinUrl,
+              startUrl,
               location,
               referenceModality,
               referenceClassroom,
@@ -1652,7 +1655,8 @@ export class SectionsService {
               String(block.endTime ?? ''),
               this.toIsoDateOnly(block.startDate),
               this.toIsoDateOnly(block.endDate),
-              block.zoomUrl ?? null,
+              block.joinUrl ?? null,
+              block.startUrl ?? null,
               block.location ?? null,
               block.referenceModality ?? null,
               block.referenceClassroom ?? null,
@@ -2660,6 +2664,7 @@ export class SectionsService {
       INNER JOIN users u ON u.id = ssc.studentId
       WHERE ssc.sectionCourseId = ?
       ORDER BY
+        COALESCE(u.careerName, '') ASC,
         COALESCE(u.paternalLastName, '') ASC,
         COALESCE(u.maternalLastName, '') ASC,
         COALESCE(u.names, u.fullName, '') ASC,

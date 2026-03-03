@@ -1215,7 +1215,15 @@ export class AdminSectionsPage {
         this.http.get<SectionStudentRow[]>(`/api/admin/sections/${section.id}/students`, { params })
       );
       this.studentsModalSection = section;
-      this.studentsModalRows = rows;
+      this.studentsModalRows = rows
+        .slice()
+        .sort((a, b) => {
+          const careerCmp = this.norm(a.careerName).localeCompare(this.norm(b.careerName));
+          if (careerCmp !== 0) return careerCmp;
+          const nameCmp = this.norm(a.fullName).localeCompare(this.norm(b.fullName));
+          if (nameCmp !== 0) return nameCmp;
+          return this.norm(a.codigoAlumno).localeCompare(this.norm(b.codigoAlumno));
+        });
       this.modalCourseName = this.courseFilter;
       this.studentsExportMenuOpen = false;
     } catch (e: any) {
@@ -1270,6 +1278,10 @@ export class AdminSectionsPage {
       this.exportingStudentsModal = false;
       this.cdr.detectChanges();
     }
+  }
+
+  private norm(value: string | null | undefined) {
+    return String(value ?? '').trim().toUpperCase();
   }
 
   async openReassignModal(student: SectionStudentRow) {

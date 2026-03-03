@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { AttendanceStatus, Role } from '@uai/shared';
+import { AttendanceStatus, isAdminBackofficeRole, Role } from '@uai/shared';
 import { Repository } from 'typeorm';
 import { PeriodsService } from '../periods/periods.service';
 import { ScheduleBlockEntity } from '../schedule-blocks/schedule-block.entity';
@@ -37,8 +37,8 @@ export class AttendanceService {
     if (!block) throw new NotFoundException('Schedule block not found');
 
     const actor = await this.usersService.getByIdOrThrow(params.actorUserId);
-    if (![Role.ADMIN, Role.DOCENTE].includes(actor.role)) {
-      throw new BadRequestException('createdBy must be ADMIN or DOCENTE');
+    if (!(isAdminBackofficeRole(actor.role) || actor.role === Role.DOCENTE)) {
+      throw new BadRequestException('createdBy must be ADMIN, ADMINISTRATIVO or DOCENTE');
     }
     const sectionCourseId = await this.resolveSectionCourseIdForBlockOrThrow(block);
     if (actor.role === Role.DOCENTE) {
@@ -151,8 +151,8 @@ export class AttendanceService {
       session.scheduleBlock
     );
     const actor = await this.usersService.getByIdOrThrow(actorUserId);
-    if (![Role.ADMIN, Role.DOCENTE].includes(actor.role)) {
-      throw new BadRequestException('actor must be ADMIN or DOCENTE');
+    if (!(isAdminBackofficeRole(actor.role) || actor.role === Role.DOCENTE)) {
+      throw new BadRequestException('actor must be ADMIN, ADMINISTRATIVO or DOCENTE');
     }
     if (actor.role === Role.DOCENTE) {
       await this.assertTeacherAssignedToSectionCourseOrThrow({

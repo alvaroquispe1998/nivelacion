@@ -1,5 +1,5 @@
 import { Route } from '@angular/router';
-import { Role } from '@uai/shared';
+import { ADMIN_BACKOFFICE_ROLES, Role } from '@uai/shared';
 import { authGuard } from './core/auth/auth.guard';
 import { roleGuard } from './core/auth/role.guard';
 import { workflowStepGuard } from './core/auth/workflow-step.guard';
@@ -96,17 +96,24 @@ export const appRoutes: Route[] = [
       {
         path: 'admin/dashboard',
         canActivate: [roleGuard],
-        data: { roles: [Role.ADMIN] },
+        data: { roles: ADMIN_BACKOFFICE_ROLES },
         loadComponent: () =>
           import('./pages/admin-dashboard.page').then(
             (m) => m.AdminDashboardPage
           ),
       },
       {
+        path: 'admin/users',
+        canActivate: [roleGuard],
+        data: { roles: [Role.ADMIN] },
+        loadComponent: () =>
+          import('./pages/admin-users.page').then((m) => m.AdminUsersPage),
+      },
+      {
         // Step 1a - no extra requirement beyond being admin
         path: 'admin/periods',
         canActivate: [roleGuard],
-        data: { roles: [Role.ADMIN] },
+        data: { roles: ADMIN_BACKOFFICE_ROLES },
         loadComponent: () =>
           import('./pages/admin-periods.page').then(
             (m) => m.AdminPeriodsPage
@@ -116,7 +123,7 @@ export const appRoutes: Route[] = [
         // Step 1b - requires active period
         path: 'admin/leveling',
         canActivate: [roleGuard, workflowStepGuard],
-        data: { roles: [Role.ADMIN], workflowStep: 'leveling' },
+        data: { roles: ADMIN_BACKOFFICE_ROLES, workflowStep: 'leveling' },
         loadComponent: () =>
           import('./pages/admin-leveling.page').then(
             (m) => m.AdminLevelingPage
@@ -126,7 +133,7 @@ export const appRoutes: Route[] = [
         // Step 2 - requires leveling run to exist (applied)
         path: 'admin/sections',
         canActivate: [roleGuard, workflowStepGuard],
-        data: { roles: [Role.ADMIN], workflowStep: 'sections' },
+        data: { roles: ADMIN_BACKOFFICE_ROLES, workflowStep: 'sections' },
         loadComponent: () =>
           import('./pages/admin-sections.page').then(
             (m) => m.AdminSectionsPage
@@ -135,7 +142,7 @@ export const appRoutes: Route[] = [
       {
         path: 'admin/teachers',
         canActivate: [roleGuard],
-        data: { roles: [Role.ADMIN] },
+        data: { roles: ADMIN_BACKOFFICE_ROLES },
         loadComponent: () =>
           import('./pages/admin-teachers.page').then(
             (m) => m.AdminTeachersPage
@@ -144,7 +151,7 @@ export const appRoutes: Route[] = [
       {
         path: 'admin/classrooms',
         canActivate: [roleGuard],
-        data: { roles: [Role.ADMIN] },
+        data: { roles: ADMIN_BACKOFFICE_ROLES },
         loadComponent: () =>
           import('./pages/admin-classrooms.page').then(
             (m) => m.AdminClassroomsPage
@@ -154,7 +161,7 @@ export const appRoutes: Route[] = [
         // Step 3 - preview/execute matricula by faculty
         path: 'admin/matricula',
         canActivate: [roleGuard, workflowStepGuard],
-        data: { roles: [Role.ADMIN], workflowStep: 'matricula' },
+        data: { roles: ADMIN_BACKOFFICE_ROLES, workflowStep: 'matricula' },
         loadComponent: () =>
           import('./pages/admin-matricula.page').then(
             (m) => m.AdminMatriculaPage
@@ -164,7 +171,7 @@ export const appRoutes: Route[] = [
         // Step 4a - requires assigned students > 0
         path: 'admin/export',
         canActivate: [roleGuard, workflowStepGuard],
-        data: { roles: [Role.ADMIN], workflowStep: 'export' },
+        data: { roles: ADMIN_BACKOFFICE_ROLES, workflowStep: 'export' },
         loadComponent: () =>
           import('./pages/admin-export-assigned.page').then(
             (m) => m.AdminExportAssignedPage
@@ -173,7 +180,7 @@ export const appRoutes: Route[] = [
       {
         path: 'admin/sections/:id/schedule',
         canActivate: [roleGuard],
-        data: { roles: [Role.ADMIN] },
+        data: { roles: ADMIN_BACKOFFICE_ROLES },
         loadComponent: () =>
           import('./pages/admin-section-schedule.page').then(
             (m) => m.AdminSectionSchedulePage
@@ -182,7 +189,7 @@ export const appRoutes: Route[] = [
       {
         path: 'admin/reports/program',
         canActivate: [roleGuard, workflowStepGuard],
-        data: { roles: [Role.ADMIN], workflowStep: 'reports-program' },
+        data: { roles: ADMIN_BACKOFFICE_ROLES, workflowStep: 'reports-program' },
         loadComponent: () =>
           import('./pages/admin-reports-program.page').then(
             (m) => m.AdminReportsProgramPage
@@ -191,7 +198,7 @@ export const appRoutes: Route[] = [
       {
         path: 'admin/reports/summary',
         canActivate: [roleGuard, workflowStepGuard],
-        data: { roles: [Role.ADMIN], workflowStep: 'reports-summary' },
+        data: { roles: ADMIN_BACKOFFICE_ROLES, workflowStep: 'reports-summary' },
         loadComponent: () =>
           import('./pages/admin-reports-summary.page').then(
             (m) => m.AdminReportsSummaryPage
@@ -200,7 +207,7 @@ export const appRoutes: Route[] = [
       {
         path: 'admin/grades/config',
         canActivate: [roleGuard],
-        data: { roles: [Role.ADMIN] },
+        data: { roles: ADMIN_BACKOFFICE_ROLES },
         loadComponent: () =>
           import('./pages/admin-grade-config.page').then(
             (m) => m.AdminGradeConfigPage
@@ -209,7 +216,7 @@ export const appRoutes: Route[] = [
       {
         path: 'admin/grades/reports/student',
         canActivate: [roleGuard],
-        data: { roles: [Role.ADMIN] },
+        data: { roles: ADMIN_BACKOFFICE_ROLES },
         loadComponent: () =>
           import('./pages/admin-student-report.page').then(
             (m) => m.AdminStudentReportPage
@@ -218,7 +225,7 @@ export const appRoutes: Route[] = [
       {
         path: 'admin/grades/reports',
         canActivate: [roleGuard],
-        data: { roles: [Role.ADMIN] },
+        data: { roles: ADMIN_BACKOFFICE_ROLES },
         loadComponent: () =>
           import('./pages/admin-grades-reports.page').then(
             (m) => m.AdminGradesReportsPage
@@ -227,7 +234,7 @@ export const appRoutes: Route[] = [
       {
         path: 'admin/grades',
         canActivate: [roleGuard],
-        data: { roles: [Role.ADMIN] },
+        data: { roles: ADMIN_BACKOFFICE_ROLES },
         loadComponent: () =>
           import('./pages/admin-grades.page').then(
             (m) => m.AdminGradesPage
@@ -236,10 +243,19 @@ export const appRoutes: Route[] = [
       {
         path: 'admin/sections/:id/attendance',
         canActivate: [roleGuard],
-        data: { roles: [Role.ADMIN] },
+        data: { roles: ADMIN_BACKOFFICE_ROLES },
         loadComponent: () =>
           import('./pages/admin-section-attendance.page').then(
             (m) => m.AdminSectionAttendancePage
+          ),
+      },
+      {
+        path: 'admin/account/password',
+        canActivate: [roleGuard],
+        data: { roles: ADMIN_BACKOFFICE_ROLES },
+        loadComponent: () =>
+          import('./pages/admin-change-password.page').then(
+            (m) => m.AdminChangePasswordPage
           ),
       },
     ],

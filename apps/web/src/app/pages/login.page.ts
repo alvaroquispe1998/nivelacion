@@ -1,8 +1,9 @@
 import { CommonModule } from '@angular/common';
-import { Component, inject } from '@angular/core';
+import { ChangeDetectorRef, Component, inject } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Router } from '@angular/router';
-import { Role } from '@uai/shared';
+import { isAdminBackofficeRole, Role } from '@uai/shared';
+import { TimeoutError } from 'rxjs';
 import { AuthService } from '../core/auth/auth.service';
 
 @Component({
@@ -23,7 +24,8 @@ import { AuthService } from '../core/auth/auth.service';
               <input
                 class="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
                 formControlName="usuario"
-                placeholder="Codigo de alumno, DNI o administrador"
+                placeholder="Codigo de alumno, DNI o usuario interno"
+                [readOnly]="loading"
               />
             </label>
 
@@ -34,6 +36,7 @@ import { AuthService } from '../core/auth/auth.service';
                 class="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
                 formControlName="password"
                 placeholder="********"
+                [readOnly]="loading"
               />
             </label>
 
@@ -42,10 +45,18 @@ import { AuthService } from '../core/auth/auth.service';
             </div>
 
             <button
+              type="submit"
               class="w-full rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
               [disabled]="form.invalid || loading"
             >
-              {{ loading ? 'Ingresando...' : 'Ingresar' }}
+              <span *ngIf="loading" class="inline-flex items-center gap-2">
+                <span
+                  class="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white"
+                  aria-hidden="true"
+                ></span>
+                <span>Ingresando...</span>
+              </span>
+              <span *ngIf="!loading">Ingresar</span>
             </button>
           </form>
         </div>
@@ -57,6 +68,7 @@ export class LoginPage {
   private readonly fb = inject(FormBuilder);
   private readonly auth = inject(AuthService);
   private readonly router = inject(Router);
+  private readonly cdr = inject(ChangeDetectorRef);
 
   loading = false;
   error: string | null = null;
@@ -67,6 +79,10 @@ export class LoginPage {
   });
 
   async submit() {
+    if (this.loading || this.form.invalid) {
+      return;
+    }
+
     const usuario = String(this.form.value.usuario ?? '').trim();
     const password = String(this.form.value.password ?? '');
 
@@ -74,23 +90,58 @@ export class LoginPage {
     this.error = null;
     try {
       const res = await this.auth.login({ usuario, password });
-      await this.router.navigateByUrl(
-        res.user.role === Role.ADMIN
-          ? '/admin/dashboard'
-          : res.user.role === Role.DOCENTE
-            ? '/teacher/schedule'
-          : '/student/schedule'
-      );
+      const targetUrl = isAdminBackofficeRole(res.user.role)
+        ? '/admin/dashboard'
+        : res.user.role === Role.DOCENTE
+          ? '/teacher/schedule'
+          : '/student/schedule';
+      void this.router.navigateByUrl(targetUrl);
     } catch (e: any) {
-      if (e?.status === 401) {
-        this.error = 'Credenciales no validas.';
-      } else if (e?.status === 0) {
-        this.error = 'No se pudo conectar con el servidor.';
-      } else {
-        this.error = e?.error?.message ?? 'No se pudo ingresar';
-      }
+      this.error = this.resolveLoginErrorMessage(e);
     } finally {
       this.loading = false;
+      this.cdr.markForCheck();
     }
+  }
+
+  private resolveLoginErrorMessage(error: unknown): string {
+    const apiMessage = this.extractApiMessage(error);
+
+    if (error instanceof TimeoutError || (error as { name?: string } | null)?.name === 'TimeoutError') {
+      return 'Tiempo de espera agotado.';
+    }
+
+    const status = (error as { status?: number } | null)?.status;
+    if (status === 408) {
+      return 'Tiempo de espera agotado.';
+    }
+    if (status === 401 || status === 403) {
+      return apiMessage ?? 'Credenciales no validas.';
+    }
+
+    if (status === 0) {
+      return 'No se pudo conectar con el servidor.';
+    }
+
+    if (typeof status === 'number' && status >= 500) {
+      return apiMessage ?? 'Error del servidor.';
+    }
+
+    return apiMessage ?? 'No se pudo ingresar.';
+  }
+
+  private extractApiMessage(error: unknown): string | null {
+    const candidate =
+      (error as { error?: { mensaje?: unknown; message?: unknown } } | null)?.error?.mensaje ??
+      (error as { error?: { mensaje?: unknown; message?: unknown } } | null)?.error?.message ??
+      (error as { mensaje?: unknown; message?: unknown } | null)?.mensaje ??
+      (error as { mensaje?: unknown; message?: unknown } | null)?.message;
+
+    if (typeof candidate !== 'string') {
+      return null;
+    }
+
+    const normalized = candidate.trim();
+    return normalized ? normalized : null;
   }
 }
