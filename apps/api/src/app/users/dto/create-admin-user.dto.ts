@@ -10,7 +10,7 @@ import {
 
 export class CreateAdminUserDto {
   @IsString()
-  @Matches(/^\d{8,15}$/)
+  @Matches(/^[a-zA-Z0-9]{3,30}$/)
   dni!: string;
 
   @IsString()

@@ -13,8 +13,8 @@ import { AuthService } from '../core/auth/auth.service';
     <div class="min-h-dvh bg-gradient-to-b from-slate-50 to-slate-100 flex items-center justify-center px-4">
       <div class="w-full max-w-md rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div class="p-6 border-b border-slate-200">
-          <div class="text-lg font-semibold">Ingreso</div>
-          <div class="text-sm text-slate-600">UAI | Horario y Asistencia</div>
+          <div class="text-lg font-semibold">Nivelación UAI</div>
+          <div class="text-sm text-slate-600">Sistema de Nivelación</div>
         </div>
 
         <div class="p-6 space-y-4">
@@ -24,7 +24,7 @@ import { AuthService } from '../core/auth/auth.service';
               <input
                 class="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
                 formControlName="usuario"
-                placeholder="Codigo de alumno, DNI o usuario interno"
+                placeholder="Usuario"
                 [readOnly]="loading"
               />
             </label>

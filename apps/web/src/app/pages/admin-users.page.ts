@@ -254,7 +254,7 @@ export class AdminUsersPage {
   resetPasswordValue = '';
 
   createForm = this.fb.group({
-    dni: ['', [Validators.required, Validators.pattern(/^\d{8,15}$/)]],
+    dni: ['', [Validators.required, Validators.pattern(/^[a-zA-Z0-9]{3,30}$/)]],
     fullName: ['', [Validators.required, Validators.maxLength(180)]],
     role: [Role.ADMINISTRATIVO, [Validators.required]],
     password: ['', [Validators.required, Validators.minLength(8), Validators.maxLength(120)]],

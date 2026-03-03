@@ -4,7 +4,7 @@ import { IsIn, IsOptional, IsString, Matches, MaxLength } from 'class-validator'
 export class UpdateAdminUserDto {
   @IsOptional()
   @IsString()
-  @Matches(/^\d{8,15}$/)
+  @Matches(/^[a-zA-Z0-9]{3,30}$/)
   dni?: string;
 
   @IsOptional()
