@@ -751,3 +751,70 @@ export interface LevelingMatriculationPreviewResponse {
   unassigned: LevelingMatriculationUnassignedItem[];
   conflicts: LevelingRunConflictItem[];
 }
+
+// ── Zoom Management ──────────────────────────────────────────────────────────
+
+export interface ZoomConfigView {
+  id: Uuid;
+  accountId: string;
+  clientId: string;
+  clientSecret: string; // masked in API response
+  maxConcurrent: number;
+  pageSize: number;
+  timezone: string;
+}
+
+export interface ZoomHostGroup {
+  id: Uuid;
+  name: string;
+  status: 'ACTIVO' | 'INACTIVO';
+  hosts?: ZoomHost[];
+  createdAt?: string;
+}
+
+export interface ZoomHost {
+  id: Uuid;
+  groupId: Uuid;
+  email: string;
+  status: 'ACTIVO' | 'INACTIVO';
+  createdAt?: string;
+}
+
+export interface ZoomMeetingView {
+  id: Uuid;
+  periodId: Uuid | null;
+  hostEmail: string;
+  zoomMeetingId: string;
+  topic: string;
+  agenda: string | null;
+  startTime: string;
+  endTime: string;
+  duration: number;
+  timezone: string;
+  joinUrl: string;
+  startUrl: string;
+  status: 'SCHEDULED' | 'LIVE' | 'ENDED' | 'DELETED';
+  createdAt: string;
+}
+
+export interface ZoomRecordingView {
+  id: number;
+  uuid: string;
+  topic: string;
+  start_time: string;
+  duration: number;
+  host_email: string;
+  total_size: number;
+  recording_count: number;
+  recording_files: ZoomRecordingFileView[];
+}
+
+export interface ZoomRecordingFileView {
+  id: string;
+  file_type: string;
+  file_size: number;
+  download_url: string;
+  play_url: string;
+  recording_start: string;
+  recording_end: string;
+}

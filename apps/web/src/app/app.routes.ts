@@ -250,6 +250,24 @@ export const appRoutes: Route[] = [
           ),
       },
       {
+        path: 'admin/zoom/config',
+        canActivate: [roleGuard],
+        data: { roles: [Role.ADMIN] },
+        loadComponent: () =>
+          import('./pages/admin-zoom-config.page').then(
+            (m) => m.AdminZoomConfigPage
+          ),
+      },
+      {
+        path: 'admin/zoom/meetings',
+        canActivate: [roleGuard],
+        data: { roles: [Role.ADMIN] },
+        loadComponent: () =>
+          import('./pages/admin-zoom-meetings.page').then(
+            (m) => m.AdminZoomMeetingsPage
+          ),
+      },
+      {
         path: 'admin/account/password',
         canActivate: [roleGuard],
         data: { roles: ADMIN_BACKOFFICE_ROLES },
