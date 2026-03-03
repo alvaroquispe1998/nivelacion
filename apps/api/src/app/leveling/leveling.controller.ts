@@ -193,4 +193,15 @@ export class LevelingController {
       campusName: String(campusName ?? '').trim(),
     });
   }
+
+  @Get('runs/:runId/matriculated-report')
+  getMatriculatedReport(
+    @Param('runId') runId: string,
+    @Query('facultyGroup') facultyGroup?: string
+  ) {
+    return this.levelingService.getMatriculatedStudentReport(
+      runId,
+      String(facultyGroup ?? '').trim() || null
+    );
+  }
 }

@@ -225,6 +225,140 @@ interface ActiveRunSummary {
           </table>
         </div>
       </div>
+
+      <div class="rounded-2xl border border-slate-200 bg-white p-4">
+        <div class="text-sm font-semibold">Detalle por alumno ({{ previewStudentDetailRows.length }} asignaciones)</div>
+        <div class="mt-1 text-xs text-slate-500">Verifica que cada alumno tenga sus cursos en la misma seccion.</div>
+        <div class="mt-3 max-h-[520px] overflow-auto rounded-xl border border-slate-200">
+          <table class="min-w-full text-xs">
+            <thead class="bg-slate-50 text-left text-slate-700 sticky top-0">
+              <tr>
+                <th class="px-3 py-2">Carrera</th>
+                <th class="px-3 py-2">Alumno</th>
+                <th class="px-3 py-2">Seccion</th>
+                <th class="px-3 py-2">Modalidad</th>
+                <th class="px-3 py-2">Curso</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                *ngFor="let row of previewStudentDetailRows; let i = index"
+                class="border-t border-slate-100"
+                [ngClass]="row.groupIndex % 2 === 0 ? 'bg-white' : 'bg-blue-100'"
+              >
+                <td class="px-3 py-1.5">{{ row.careerName || '-' }}</td>
+                <td class="px-3 py-1.5" [class.font-semibold]="row.isNewStudent">{{ studentCode(row.studentCode) }} - {{ row.studentName }}</td>
+                <td class="px-3 py-1.5 font-semibold">{{ row.sectionCode }}</td>
+                <td class="px-3 py-1.5">
+                  <span
+                    class="inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold"
+                    [ngClass]="row.modality === 'VIRTUAL' ? 'bg-violet-100 text-violet-700' : 'bg-emerald-100 text-emerald-700'"
+                  >{{ row.modality === 'VIRTUAL' ? 'Virtual' : 'Presencial' }}</span>
+                </td>
+                <td class="px-3 py-1.5">{{ row.courseName }}</td>
+              </tr>
+              <tr *ngIf="previewStudentDetailRows.length === 0" class="border-t border-slate-100">
+                <td class="px-3 py-3 text-slate-500" colspan="5">Sin asignaciones simuladas.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+        <div class="text-sm font-semibold text-amber-900">Alumnos en secciones presenciales distintas ({{ previewMultiSectionStudents.length }})</div>
+        <div class="mt-2 max-h-60 overflow-auto rounded-xl border border-amber-200 bg-white">
+          <table class="min-w-full text-xs">
+            <thead class="bg-amber-50 text-left text-amber-800">
+              <tr>
+                <th class="px-3 py-2">Alumno</th>
+                <th class="px-3 py-2">Carrera</th>
+                <th class="px-3 py-2">Secciones presenciales</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr *ngFor="let s of previewMultiSectionStudents" class="border-t border-amber-100">
+                <td class="px-3 py-1.5">{{ studentCode(s.studentCode) }} - {{ s.studentName }}</td>
+                <td class="px-3 py-1.5">{{ s.careerName || '-' }}</td>
+                <td class="px-3 py-1.5 font-semibold">{{ s.sections }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div *ngIf="runId && selectedFaculty" class="rounded-2xl border border-emerald-200 bg-white p-4 mt-4">
+      <div class="flex items-center justify-between">
+        <div>
+          <div class="text-sm font-semibold text-emerald-800">Validacion de matricula actual</div>
+          <div class="mt-0.5 text-xs text-slate-500">Muestra lo que ya esta guardado en base de datos.</div>
+        </div>
+        <button
+          class="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-emerald-700 disabled:opacity-50"
+          [disabled]="matriculatedReportLoading"
+          (click)="loadMatriculatedReport()"
+        >
+          {{ matriculatedReportLoading ? 'Cargando...' : 'Cargar reporte' }}
+        </button>
+      </div>
+      <div *ngIf="matriculatedReport" class="mt-3 max-h-[520px] overflow-auto rounded-xl border border-emerald-200">
+        <table class="min-w-full text-xs">
+          <thead class="bg-emerald-50 text-left text-emerald-800 sticky top-0">
+            <tr>
+              <th class="px-3 py-2">Carrera</th>
+              <th class="px-3 py-2">Alumno</th>
+              <th class="px-3 py-2">Seccion</th>
+              <th class="px-3 py-2">Modalidad</th>
+              <th class="px-3 py-2">Curso</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              *ngFor="let row of matriculatedReport"
+              class="border-t border-emerald-100"
+              [ngClass]="row.groupIndex % 2 === 0 ? 'bg-white' : 'bg-emerald-50'"
+            >
+              <td class="px-3 py-1.5">{{ row.careerName || '-' }}</td>
+              <td class="px-3 py-1.5">{{ studentCode(row.studentCode) }} - {{ row.studentName }}</td>
+              <td class="px-3 py-1.5 font-semibold">{{ row.sectionCode }}</td>
+              <td class="px-3 py-1.5">
+                <span
+                  class="inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold"
+                  [ngClass]="row.modality === 'VIRTUAL' ? 'bg-violet-100 text-violet-700' : 'bg-emerald-100 text-emerald-700'"
+                >{{ row.modality === 'VIRTUAL' ? 'Virtual' : 'Presencial' }}</span>
+              </td>
+              <td class="px-3 py-1.5">{{ row.courseName }}</td>
+            </tr>
+            <tr *ngIf="matriculatedReport.length === 0" class="border-t">
+              <td class="px-3 py-3 text-slate-500" colspan="5">No hay alumnos matriculados para esta facultad.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div *ngIf="matriculatedReport" class="mt-2 text-xs text-slate-500">Total: {{ matriculatedReport.length }} asignaciones</div>
+
+      <div *ngIf="matriculatedReport" class="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+        <div class="text-xs font-semibold text-amber-900">Alumnos en secciones presenciales distintas ({{ matriculatedMultiSectionStudents.length }})</div>
+        <div class="mt-2 max-h-60 overflow-auto rounded-lg border border-amber-200 bg-white">
+          <table class="min-w-full text-xs">
+            <thead class="bg-amber-50 text-left text-amber-800">
+              <tr>
+                <th class="px-3 py-2">Alumno</th>
+                <th class="px-3 py-2">Carrera</th>
+                <th class="px-3 py-2">Secciones presenciales</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr *ngFor="let s of matriculatedMultiSectionStudents" class="border-t border-amber-100">
+                <td class="px-3 py-1.5">{{ studentCode(s.studentCode) }} - {{ s.studentName }}</td>
+                <td class="px-3 py-1.5">{{ s.careerName || '-' }}</td>
+                <td class="px-3 py-1.5 font-semibold">{{ s.sections }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
 
     <div
@@ -415,6 +549,18 @@ export class AdminMatriculaPage {
     campusName?: string | null;
   }> = [];
 
+  matriculatedReport: Array<{
+    studentId: string;
+    studentCode: string | null;
+    studentName: string;
+    careerName: string | null;
+    sectionCode: string;
+    modality: string;
+    courseName: string;
+    groupIndex: number;
+  }> | null = null;
+  matriculatedReportLoading = false;
+
   get matriculableFaculties() {
     // Mostrar todas las facultades conocidas, aunque no haya pendientes, para permitir limpiar matrícula existente.
     return (this.preview?.faculties ?? []).slice();
@@ -509,6 +655,116 @@ export class AdminMatriculaPage {
     return Math.max(0, this.previewSectionCourseRows.length - this.previewAssignedSectionCourseRows.length);
   }
 
+  get previewStudentDetailRows(): Array<{
+    studentId: string;
+    studentCode: string | null;
+    studentName: string;
+    careerName: string | null;
+    sectionCode: string;
+    modality: string;
+    courseName: string;
+    isNewStudent: boolean;
+    groupIndex: number;
+  }> {
+    const rows: Array<{
+      studentId: string;
+      studentCode: string | null;
+      studentName: string;
+      careerName: string | null;
+      sectionCode: string;
+      modality: string;
+      courseName: string;
+      isNewStudent: boolean;
+      groupIndex: number;
+    }> = [];
+
+    for (const section of this.preview?.sections ?? []) {
+      for (const course of section.sectionCourses ?? []) {
+        for (const student of course.students ?? []) {
+          rows.push({
+            studentId: student.studentId,
+            studentCode: student.studentCode ?? null,
+            studentName: student.studentName ?? '',
+            careerName: student.careerName ?? null,
+            sectionCode: section.sectionCode ?? section.sectionName ?? course.sectionCode ?? course.sectionName ?? '-',
+            modality: String(section.modality ?? '').toUpperCase().includes('VIRTUAL') ? 'VIRTUAL' : 'PRESENCIAL',
+            courseName: course.courseName ?? '',
+            isNewStudent: false,
+            groupIndex: 0,
+          });
+        }
+      }
+    }
+
+    // Sort: career → student name → section → modality → course
+    rows.sort((a, b) => {
+      const careerCmp = (a.careerName ?? '').localeCompare(b.careerName ?? '');
+      if (careerCmp !== 0) return careerCmp;
+      const nameCmp = (a.studentName ?? '').localeCompare(b.studentName ?? '');
+      if (nameCmp !== 0) return nameCmp;
+      const codeCmp = (a.studentCode ?? '').localeCompare(b.studentCode ?? '');
+      if (codeCmp !== 0) return codeCmp;
+      const sectionCmp = a.sectionCode.localeCompare(b.sectionCode);
+      if (sectionCmp !== 0) return sectionCmp;
+      const modCmp = a.modality.localeCompare(b.modality);
+      if (modCmp !== 0) return modCmp;
+      return a.courseName.localeCompare(b.courseName);
+    });
+
+    // Mark first row of each student + assign alternating group index
+    let prevStudentId = '';
+    let groupIndex = 0;
+    for (const row of rows) {
+      if (row.studentId !== prevStudentId) {
+        row.isNewStudent = true;
+        if (prevStudentId !== '') groupIndex++;
+        prevStudentId = row.studentId;
+      }
+      row.groupIndex = groupIndex;
+    }
+
+    return rows;
+  }
+
+  private extractMultiSectionStudents(
+    rows: Array<{ studentId: string; studentCode: string | null; studentName: string; careerName: string | null; sectionCode: string; modality: string }>
+  ): Array<{ studentId: string; studentCode: string | null; studentName: string; careerName: string | null; sections: string }> {
+    const byStudent = new Map<string, {
+      studentCode: string | null; studentName: string; careerName: string | null; presencialSections: Set<string>;
+    }>();
+    for (const row of rows) {
+      if (row.modality === 'VIRTUAL') continue;
+      if (!byStudent.has(row.studentId)) {
+        byStudent.set(row.studentId, {
+          studentCode: row.studentCode, studentName: row.studentName,
+          careerName: row.careerName, presencialSections: new Set(),
+        });
+      }
+      byStudent.get(row.studentId)!.presencialSections.add(row.sectionCode);
+    }
+    const result: Array<{ studentId: string; studentCode: string | null; studentName: string; careerName: string | null; sections: string }> = [];
+    for (const [studentId, info] of byStudent.entries()) {
+      if (info.presencialSections.size > 1) {
+        result.push({
+          studentId,
+          studentCode: info.studentCode,
+          studentName: info.studentName,
+          careerName: info.careerName,
+          sections: [...info.presencialSections].sort().join(', '),
+        });
+      }
+    }
+    result.sort((a, b) => (a.careerName ?? '').localeCompare(b.careerName ?? '') || a.studentName.localeCompare(b.studentName));
+    return result;
+  }
+
+  get previewMultiSectionStudents() {
+    return this.extractMultiSectionStudents(this.previewStudentDetailRows);
+  }
+
+  get matriculatedMultiSectionStudents() {
+    return this.extractMultiSectionStudents(this.matriculatedReport ?? []);
+  }
 
 
   async ngOnInit() {
@@ -764,6 +1020,43 @@ export class AdminMatriculaPage {
     // FULL_REBUILD limpia y regenera en una sola transacción atómica,
     // garantizando que el resultado sea idéntico a la previsualización.
     await this.generateMatriculation();
+  }
+
+  async loadMatriculatedReport() {
+    if (!this.runId || !this.selectedFaculty) return;
+    this.matriculatedReportLoading = true;
+    try {
+      const resp = await firstValueFrom(
+        this.http.get<{
+          totalRows: number; rows: Array<{
+            studentId: string; studentCode: string | null; studentName: string;
+            careerName: string | null; sectionCode: string; modality: string; courseName: string;
+          }>
+        }>(
+          `/api/admin/leveling/runs/${encodeURIComponent(this.runId)}/matriculated-report`,
+          { params: new HttpParams().set('facultyGroup', this.selectedFaculty) }
+        )
+      );
+      const rows = (resp?.rows ?? []).map((r) => ({
+        ...r,
+        groupIndex: 0,
+      }));
+      let prevStudentId = '';
+      let groupIndex = 0;
+      for (const row of rows) {
+        if (row.studentId !== prevStudentId) {
+          if (prevStudentId !== '') groupIndex++;
+          prevStudentId = row.studentId;
+        }
+        row.groupIndex = groupIndex;
+      }
+      this.matriculatedReport = rows;
+    } catch (e: any) {
+      this.error = e?.error?.message ?? 'No se pudo cargar el reporte';
+    } finally {
+      this.matriculatedReportLoading = false;
+      this.cdr.detectChanges();
+    }
   }
 
   async clearMatriculation(opts: { silent?: boolean } = {}) {
