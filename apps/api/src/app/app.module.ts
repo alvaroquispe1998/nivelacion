@@ -21,6 +21,7 @@ import { StudentModule } from './student/student.module';
 import { TeachersModule } from './teachers/teachers.module';
 import { TeacherModule } from './teacher/teacher.module';
 import { UsersModule } from './users/users.module';
+import { ManagementZoomModule } from './management-zoom/management-zoom.module';
 import { AppController } from './app.controller';
 
 @Module({
@@ -41,6 +42,7 @@ import { AppController } from './app.controller';
     GradesModule,
     TeachersModule,
     TeacherModule,
+    ManagementZoomModule,
   ],
   controllers: [AppController],
   providers: [AdminPeriodContextMiddleware],

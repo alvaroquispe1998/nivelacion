@@ -52,6 +52,11 @@ import { UsersCodigoAlumnoRoleIndex035Migration1774100000000 } from './migration
 import { InternalAdminUsers036Migration1774200000000 } from './migrations/036-internal-admin-users.migration';
 import { MatriculationAudit037Migration1763600000000 } from './migrations/037-matriculation-audit.migration';
 import { ScheduleBlockJoinStartUrls038Migration1763700000000 } from './migrations/038-schedule-block-join-start-urls.migration';
+import { ZoomConfigEntity } from '../management-zoom/entities/zoom-config.entity';
+import { ZoomHostGroupEntity } from '../management-zoom/entities/zoom-host-group.entity';
+import { ZoomHostEntity } from '../management-zoom/entities/zoom-host.entity';
+import { ZoomMeetingEntity } from '../management-zoom/entities/zoom-meeting.entity';
+import { ZoomManagement039Migration1774300000000 } from './migrations/039-zoom-management.migration';
 
 export const TYPEORM_ENTITIES = [
   UserEntity,
@@ -66,6 +71,10 @@ export const TYPEORM_ENTITIES = [
   LevelingRunStudentCourseDemandEntity,
   AttendanceSessionEntity,
   AttendanceRecordEntity,
+  ZoomConfigEntity,
+  ZoomHostGroupEntity,
+  ZoomHostEntity,
+  ZoomMeetingEntity,
 ];
 
 export const TYPEORM_MIGRATIONS = [
@@ -107,6 +116,7 @@ export const TYPEORM_MIGRATIONS = [
   InternalAdminUsers036Migration1774200000000,
   MatriculationAudit037Migration1763600000000,
   ScheduleBlockJoinStartUrls038Migration1763700000000,
+  ZoomManagement039Migration1774300000000,
 ];
 
 export function createDataSourceOptionsFromEnv(): DataSourceOptions {
