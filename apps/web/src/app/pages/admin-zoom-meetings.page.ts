@@ -180,20 +180,56 @@ import { firstValueFrom } from 'rxjs';
                   </span>
                 </td>
                 <td class="px-3 py-2">
-                  <div class="flex gap-1">
+                  <div class="flex flex-wrap gap-1">
+                    <div class="flex gap-2">
+                        <a
+                        *ngIf="m.joinUrl"
+                        [href]="m.joinUrl"
+                        target="_blank"
+                        class="inline-flex items-center gap-1 rounded-lg border border-sky-300 bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-700 hover:bg-sky-100"
+                        title="Abrir Join URL"
+                      >
+                        <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"/></svg>
+                        Join
+                      </a>
+                      <button
+                        class="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+                        (click)="copyToClipboard(m.joinUrl)"
+                        title="Copiar Join URL"
+                      >
+                        <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9.334a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.416a2.25 2.25 0 01-2.25-2.25V6.846c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 011.927-.184"/></svg>
+                      </button>
+                    </div>
+                    <div class="flex gap-2">
+                      <a
+                        *ngIf="m.startUrl"
+                        [href]="m.startUrl"
+                        target="_blank"
+                        class="inline-flex items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100"
+                        title="Abrir Start URL (host)"
+                      >
+                        <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z"/></svg>
+                        Start
+                      </a>
+                      
+                      <button
+                        *ngIf="m.startUrl"
+                        class="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+                        (click)="copyToClipboard(m.startUrl)"
+                        title="Copiar Start URL"
+                      >
+                        <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9.334a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.416a2.25 2.25 0 01-2.25-2.25V6.846c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 011.927-.184"/></svg>
+                        
+                      </button>
+                    </div>
                     <button
-                      class="rounded-lg border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold hover:bg-slate-50"
-                      (click)="copyToClipboard(m.joinUrl)"
-                      title="Copiar Join URL"
-                    >
-                      📋 Join
-                    </button>
-                    <button
-                      class="rounded-lg border border-red-300 bg-white px-2 py-1 text-[11px] font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60"
+                      class="inline-flex items-center rounded-lg border border-red-300 bg-white px-2 py-1 text-[11px] font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60"
                       (click)="deleteMeeting(m.id)"
                       [disabled]="deletingId === m.id"
+                      title="Eliminar reunión"
                     >
-                      {{ deletingId === m.id ? '...' : 'Eliminar' }}
+                      <svg *ngIf="deletingId !== m.id" class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
+                      <span *ngIf="deletingId === m.id">...</span>
                     </button>
                   </div>
                 </td>

@@ -108,6 +108,40 @@ export class MeetingsService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // Timezone helpers
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Convert a local datetime string (e.g. "2026-03-03T09:30") in a given
+   * IANA timezone to an absolute UTC Date.
+   * Example: localToUtc("2026-03-03T09:30", "America/Lima") → 2026-03-03T14:30:00Z
+   */
+  private localToUtc(localDateStr: string, timezone: string): Date {
+    const clean = localDateStr.replace(/Z$/i, '');
+    // Treat the string as if it were UTC temporarily
+    const asUtc = new Date(clean + 'Z');
+    if (isNaN(asUtc.getTime())) return asUtc; // let caller handle NaN
+
+    // Measure the offset between UTC and the target timezone
+    const utcRepr = new Date(asUtc.toLocaleString('en-US', { timeZone: 'UTC' }));
+    const tzRepr  = new Date(asUtc.toLocaleString('en-US', { timeZone: timezone }));
+    const offsetMs = utcRepr.getTime() - tzRepr.getTime();
+
+    // local + offset = UTC
+    return new Date(asUtc.getTime() + offsetMs);
+  }
+
+  /**
+   * Ensure a datetime string has seconds so Zoom API parses it correctly.
+   * "2026-03-03T09:30" → "2026-03-03T09:30:00"
+   */
+  private formatLocalTime(dateStr: string): string {
+    const clean = dateStr.replace(/Z$/i, '').replace(/\.\d+$/, '');
+    if (/T\d{2}:\d{2}$/.test(clean)) return clean + ':00';
+    return clean;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // Auto Meeting Creation (Smart Host Selection)
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -124,9 +158,9 @@ export class MeetingsService {
     const tz = params.timezone ?? config.timezone ?? 'America/Lima';
     const maxConcurrent = config.maxConcurrent ?? 2;
 
-    // Parse times
-    const startUtc = new Date(params.startTime);
-    const endUtc = new Date(params.endTime);
+    // Convert local times (in the given timezone) → real UTC
+    const startUtc = this.localToUtc(params.startTime, tz);
+    const endUtc = this.localToUtc(params.endTime, tz);
     if (isNaN(startUtc.getTime()) || isNaN(endUtc.getTime())) {
       throw new ConflictException('Fechas inválidas');
     }
@@ -206,12 +240,15 @@ export class MeetingsService {
 
         if (overlaps < maxConcurrent) {
           // Host is available → create meeting
+          // Send local time WITH seconds and WITHOUT 'Z' so Zoom
+          // interprets it in the provided timezone parameter
+          const localStart = this.formatLocalTime(params.startTime);
           const zoomResponse = await this.zoomService.createMeeting(
             host.email,
             {
               topic: params.topic,
               agenda: params.agenda,
-              start_time: startUtc.toISOString(),
+              start_time: localStart,
               duration: durationMin,
               timezone: tz,
             },
