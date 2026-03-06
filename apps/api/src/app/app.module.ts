@@ -23,6 +23,7 @@ import { TeacherModule } from './teacher/teacher.module';
 import { UsersModule } from './users/users.module';
 import { ManagementZoomModule } from './management-zoom/management-zoom.module';
 import { AppController } from './app.controller';
+import { WorkshopsModule } from './workshops/workshops.module';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { AppController } from './app.controller';
     TeachersModule,
     TeacherModule,
     ManagementZoomModule,
+    WorkshopsModule,
   ],
   controllers: [AppController],
   providers: [AdminPeriodContextMiddleware],

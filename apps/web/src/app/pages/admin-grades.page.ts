@@ -22,12 +22,21 @@ import { firstValueFrom, Subscription } from 'rxjs';
               Guarda y publica notas por seccion-curso.
             </div>
           </div>
-          <button
-            class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50"
-            (click)="loadAll()"
-          >
-            Refrescar
-          </button>
+          <div class="flex flex-wrap gap-2">
+            <button
+              class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50 disabled:opacity-60"
+              [disabled]="!sectionGrades || exportingCsv"
+              (click)="exportGradesCsv()"
+            >
+              {{ exportingCsv ? 'Exportando...' : 'Exportar notas' }}
+            </button>
+            <button
+              class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50"
+              (click)="loadAll()"
+            >
+              Refrescar
+            </button>
+          </div>
         </div>
       </div>
 
@@ -46,6 +55,7 @@ import { firstValueFrom, Subscription } from 'rxjs';
               class="mt-1 w-full rounded-lg border border-slate-200 px-2 py-2 text-sm"
               [(ngModel)]="selectedFaculty"
               (ngModelChange)="applySectionCourseFilter()"
+              [disabled]="!!lockedSectionCourseId"
             >
               <option value="">Todas</option>
               <option *ngFor="let value of facultyOptions; trackBy: trackText" [value]="value">
@@ -59,6 +69,7 @@ import { firstValueFrom, Subscription } from 'rxjs';
               class="mt-1 w-full rounded-lg border border-slate-200 px-2 py-2 text-sm"
               [(ngModel)]="selectedCampus"
               (ngModelChange)="applySectionCourseFilter()"
+              [disabled]="!!lockedSectionCourseId"
             >
               <option value="">Todas</option>
               <option *ngFor="let value of campusOptions; trackBy: trackText" [value]="value">
@@ -72,6 +83,7 @@ import { firstValueFrom, Subscription } from 'rxjs';
               class="mt-1 w-full rounded-lg border border-slate-200 px-2 py-2 text-sm"
               [(ngModel)]="selectedCourse"
               (ngModelChange)="applySectionCourseFilter()"
+              [disabled]="!!lockedSectionCourseId"
             >
               <option value="">Todos</option>
               <option *ngFor="let value of courseOptions; trackBy: trackText" [value]="value">
@@ -85,6 +97,7 @@ import { firstValueFrom, Subscription } from 'rxjs';
               class="mt-1 w-full rounded-lg border border-slate-200 px-2 py-2 text-sm"
               [(ngModel)]="selectedSectionCourseId"
               (ngModelChange)="onSectionCourseChange()"
+              [disabled]="!!lockedSectionCourseId"
             >
               <option value="">Seleccionar</option>
               <option
@@ -202,6 +215,8 @@ export class AdminGradesPage implements OnDestroy {
   editableScores: Record<string, Record<string, string>> = {};
   savingGrades = false;
   publishingGrades = false;
+  exportingCsv = false;
+  lockedSectionCourseId: string | null = null;
 
   get activeSchemeComponents() {
     return (this.sectionGrades?.scheme.components ?? []).filter((x) => x.isActive);
@@ -216,7 +231,10 @@ export class AdminGradesPage implements OnDestroy {
       if (faculty) this.selectedFaculty = faculty;
       if (campus) this.selectedCampus = campus;
       if (course) this.selectedCourse = course;
-      if (sectionCourseId) this.selectedSectionCourseId = sectionCourseId;
+      if (sectionCourseId) {
+        this.selectedSectionCourseId = sectionCourseId;
+        this.lockedSectionCourseId = sectionCourseId;
+      }
       void this.loadAll();
     });
   }
@@ -241,6 +259,11 @@ export class AdminGradesPage implements OnDestroy {
     return item.studentId;
   }
 
+  studentCode(code: string | null | undefined) {
+    const value = String(code ?? '').trim();
+    return value || 'SIN CODIGO';
+  }
+
   isRowComplete(row: SectionCourseGradesResponse['students'][number]) {
     const scores = row.scores ? Object.values(row.scores) : [];
     if (scores.length > 0) {
@@ -250,6 +273,18 @@ export class AdminGradesPage implements OnDestroy {
   }
 
   applySectionCourseFilter() {
+    if (this.lockedSectionCourseId) {
+      const match = this.allSectionCourses.find(
+        (x) => x.sectionCourseId === this.lockedSectionCourseId
+      );
+      this.filteredSectionCourses = match ? [match] : [];
+      this.selectedSectionCourseId = match ? match.sectionCourseId : '';
+      if (!match) {
+        this.sectionGrades = null;
+        this.editableScores = {};
+      }
+      return;
+    }
     const faculty = this.norm(this.selectedFaculty);
     const campus = this.norm(this.selectedCampus);
     const course = this.norm(this.selectedCourse);
@@ -410,6 +445,42 @@ export class AdminGradesPage implements OnDestroy {
       }
     }
     return payload;
+  }
+
+  exportGradesCsv() {
+    if (!this.sectionGrades || !this.selectedSectionCourseId) return;
+    this.exportingCsv = true;
+    try {
+      const components = this.activeSchemeComponents;
+      const header = ['DNI', 'Codigo', 'Alumno', ...components.map((c) => c.code)];
+      const rows = this.sectionGrades.students.map((s) => [
+        s.dni,
+        this.studentCode(s.codigoAlumno),
+        s.fullName,
+        ...components.map((c) => this.editableScores[s.studentId]?.[c.id] ?? ''),
+      ]);
+      const csv = [header, ...rows]
+        .map((r) => r.map((v) => `"${String(v ?? '').replace(/\"/g, '\"\"')}"`).join(','))
+        .join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const opt = this.filteredSectionCourses.find(
+        (x) => x.sectionCourseId === this.selectedSectionCourseId
+      );
+      const name = opt
+        ? `${opt.sectionCode || opt.sectionName || 'seccion'}_${opt.courseName ?? ''}`
+        : 'notas_seccion';
+      a.href = url;
+      a.download = `${name.replace(/\\s+/g, '_')}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } finally {
+      this.exportingCsv = false;
+      this.cdr.detectChanges();
+    }
   }
 
   private extractError(error: any, fallback: string) {

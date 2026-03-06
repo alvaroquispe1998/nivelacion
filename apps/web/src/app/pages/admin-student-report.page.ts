@@ -176,7 +176,7 @@ type StudentDetailSection =
           </div>
         </div>
 
-        <div class="flex-1 overflow-y-auto p-5">
+        <div class="flex-1 overflow-y-auto p-5 select-text">
           <div
             *ngIf="reportLoading"
             class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-10 text-center text-slate-600"
@@ -779,7 +779,7 @@ export class AdminStudentReportPage implements OnDestroy {
   async selectStudent(studentId: string) {
     this.selectedStudentId = studentId;
     this.detailModalOpen = true;
-    this.activeSection = null;
+    this.activeSection = 'general';
     await this.loadSelectedStudent();
   }
 

@@ -183,6 +183,7 @@ export interface AdminSection {
   hasTeacherConflict?: boolean;
   availableSeats?: number | null;
   isMotherSection?: boolean;
+  enforceVirtualCapacity?: boolean;
 }
 
 export interface AdminCourseScopeProgress {
@@ -480,6 +481,9 @@ export interface LevelingAppendPreview {
   existingFreeSeatsDetected?: number;
   newRequiredSeats?: number;
   groupsConvertedToVirtual?: number;
+  existingFacultyGroups?: string[];
+  newFacultyGroups?: string[];
+  isAllNewFaculties?: boolean;
 }
 
 export interface LevelingSectionPreview {
@@ -504,6 +508,7 @@ export interface LevelingSectionPreview {
 
 export interface LevelingPlanResponse {
   configUsed: LevelingConfig;
+  isAllNewFaculties?: boolean;
   inputSummary: {
     rowsRead: number;
     eligibleStudents: number;
@@ -660,6 +665,7 @@ export interface LevelingMatriculationSectionSummaryItem {
   classroomPavilionName?: string | null;
   classroomLevelName?: string | null;
   capacitySource?: 'VIRTUAL' | 'AULA' | 'SIN_AULA' | 'AULA_INACTIVA' | null;
+  enforceVirtualCapacity?: boolean;
 }
 
 export interface LevelingMatriculationResult {
@@ -720,6 +726,7 @@ export interface LevelingMatriculationPreviewSectionCourse {
   hasSchedule: boolean;
   hasTeacher: boolean;
   assignedCount: number;
+  enforceVirtualCapacity?: boolean;
   students: LevelingMatriculationPreviewStudent[];
 }
 
@@ -733,6 +740,7 @@ export interface LevelingMatriculationPreviewSection {
   modality?: string | null;
   initialCapacity: number;
   maxExtraCapacity: number;
+  enforceVirtualCapacity?: boolean;
   teacherId?: Uuid | null;
   teacherName?: string | null;
   sectionCourses: LevelingMatriculationPreviewSectionCourse[];

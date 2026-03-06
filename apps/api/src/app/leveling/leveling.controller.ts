@@ -204,4 +204,17 @@ export class LevelingController {
       String(facultyGroup ?? '').trim() || null
     );
   }
+
+  @Get('runs/:runId/section-course-reassignments')
+  listSectionCourseReassignments(
+    @Param('runId') runId: string,
+    @Query('facultyGroup') facultyGroup?: string,
+    @Query('limit') limit?: string
+  ) {
+    return this.levelingService.listSectionCourseReassignments({
+      runId,
+      facultyGroup: String(facultyGroup ?? '').trim(),
+      limit: Number(limit ?? 200),
+    });
+  }
 }

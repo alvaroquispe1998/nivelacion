@@ -134,6 +134,7 @@ export class SectionsService {
       capacitySource: 'VIRTUAL' | 'AULA' | 'SIN_AULA' | 'AULA_INACTIVA';
       hasClassroomConflict: number;
       hasTeacherConflict: number;
+      enforceVirtualCapacity: number;
     }> = await this.sectionsRepo.manager.query(
       `
       SELECT
@@ -147,6 +148,7 @@ export class SectionsService {
         s.modality AS modality,
         COALESCE(scf.initialCapacity, s.initialCapacity) AS initialCapacity,
         COALESCE(scf.maxExtraCapacity, s.maxExtraCapacity) AS maxExtraCapacity,
+        COALESCE(scf.enforceVirtualCapacity, s.enforceVirtualCapacity, 0) AS enforceVirtualCapacity,
         s.isAutoLeveling AS isAutoLeveling,
         s.createdAt AS createdAt,
         s.updatedAt AS updatedAt,
@@ -323,6 +325,7 @@ export class SectionsService {
         initialCapacity: Number(row.initialCapacity ?? 45),
         maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
         isAutoLeveling: Boolean(row.isAutoLeveling),
+        enforceVirtualCapacity: Number(row.enforceVirtualCapacity ?? 0) > 0,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
         teacher: row.teacherId
@@ -358,6 +361,7 @@ export class SectionsService {
           ? String(row.classroomLevelName)
           : null,
         capacitySource: String(row.capacitySource ?? '').trim() || null,
+        enforceVirtualCapacity: Number(row.enforceVirtualCapacity ?? 0) > 0,
         ...this.buildPlanningStatusAndAvailability({
           modality: row.modality ? String(row.modality) : null,
           capacitySource: String(row.capacitySource ?? '').trim() || null,
@@ -368,6 +372,9 @@ export class SectionsService {
           studentCount: Number(row.studentCount || 0),
           hasClassroomConflict: Number(row.hasClassroomConflict ?? 0) > 0,
           hasTeacherConflict: Number(row.hasTeacherConflict ?? 0) > 0,
+          enforceVirtualCapacity: Number(row.enforceVirtualCapacity ?? 0) > 0,
+          initialCapacity: Number(row.initialCapacity ?? 0),
+          maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
         }),
         isMotherSection:
           motherSectionId !== null &&
@@ -1182,6 +1189,7 @@ export class SectionsService {
     maxExtraCapacity?: number | null;
     isAutoLeveling?: boolean | null;
     teacherId?: string | null;
+    enforceVirtualCapacity?: boolean | null;
   }): Promise<SectionEntity> {
     let teacher: UserEntity | null = null;
     if (body.teacherId) {
@@ -1203,9 +1211,217 @@ export class SectionsService {
       initialCapacity: body.initialCapacity ?? 45,
       maxExtraCapacity: body.maxExtraCapacity ?? 0,
       isAutoLeveling: body.isAutoLeveling ?? false,
+      enforceVirtualCapacity: Boolean(body.enforceVirtualCapacity ?? false),
       teacher,
     });
     return this.sectionsRepo.save(section);
+  }
+
+  async createSectionCourse(dto: {
+    facultyGroup: string;
+    campusName: string;
+    courseName: string;
+    modality: string;
+    initialCapacity?: number;
+    maxExtraCapacity?: number;
+    enforceVirtualCapacity?: boolean;
+    sectionId?: string | null;
+    createNewSection?: boolean;
+  }) {
+    const facultyGroup = String(dto.facultyGroup ?? '').trim();
+    let campusName = String(dto.campusName ?? '').trim();
+    const courseName = String(dto.courseName ?? '').trim();
+    const modalityRaw = String(dto.modality ?? '').trim();
+    if (!facultyGroup || !campusName || !courseName || !modalityRaw) {
+      throw new BadRequestException('facultyGroup, campusName, courseName y modality son requeridos');
+    }
+    const modality = this.isVirtualModality(modalityRaw) ? 'VIRTUAL' : 'PRESENCIAL';
+
+    if (modality === 'VIRTUAL' && this.isVirtualCampusFilter(campusName)) {
+      campusName = 'SEDE CHINCHA';
+    }
+    const initialCapacity = Math.max(0, Number(dto.initialCapacity ?? 0));
+    const maxExtraCapacity = Math.max(0, Number(dto.maxExtraCapacity ?? 0));
+    const enforceVirtualCapacity = Boolean(dto.enforceVirtualCapacity ?? false);
+
+    const activePeriodId = await this.periodsService.getOperationalPeriodIdOrThrow();
+    const course = await this.resolveCourseByName(courseName);
+    if (!course) throw new NotFoundException('Curso no encontrado');
+
+    type SectionRow = {
+      id: string;
+      code: string | null;
+      name: string;
+      facultyGroup: string | null;
+      campusName: string | null;
+      modality: string | null;
+      initialCapacity: number;
+      maxExtraCapacity: number;
+      enforceVirtualCapacity: number;
+    };
+
+    return this.sectionsRepo.manager.transaction(async (manager) => {
+      const runRows: Array<{ id: string; status: string }> = await manager.query(
+        `
+        SELECT id, status
+        FROM leveling_runs
+        WHERE periodId = ?
+          AND status != 'ARCHIVED'
+        ORDER BY updatedAt DESC
+        LIMIT 1
+        `,
+        [activePeriodId]
+      );
+      const run = runRows[0];
+      if (!run?.id) {
+        throw new BadRequestException('No existe corrida de nivelación activa para el periodo operativo');
+      }
+
+      let sectionRow: SectionRow | null = null;
+
+      const potentialSectionsRows: SectionRow[] = await manager.query(
+        `
+        SELECT
+          id, code, name, facultyGroup, campusName, modality,
+          initialCapacity, maxExtraCapacity,
+          COALESCE(enforceVirtualCapacity, 0) AS enforceVirtualCapacity
+        FROM sections
+        WHERE facultyGroup = ?
+          AND UPPER(TRIM(COALESCE(campusName, ''))) = ?
+          AND UPPER(TRIM(COALESCE(modality, ''))) = ?
+        ORDER BY createdAt ASC, code ASC
+        `,
+        [facultyGroup, this.scopeKey(campusName), modality]
+      );
+
+      for (const p of potentialSectionsRows) {
+        const existingForCourse: Array<{ id: string }> = await manager.query(
+          `SELECT id FROM section_courses WHERE sectionId = ? AND courseId = ? AND periodId = ? LIMIT 1`,
+          [p.id, course.id, activePeriodId]
+        );
+        if (!existingForCourse.length || !existingForCourse[0]?.id) {
+          sectionRow = p;
+          break;
+        }
+      }
+
+      if (!sectionRow) {
+        const code = await this.generateCorrelativeSectionCode(manager, {
+          runId: run.id,
+          facultyGroup,
+          campusName,
+          modality,
+        });
+
+        const fnRows: Array<{ facultyName: string | null }> = await manager.query(
+          `SELECT facultyName FROM sections WHERE facultyGroup = ? AND facultyName IS NOT NULL LIMIT 1`,
+          [facultyGroup]
+        );
+        const resolvedFacultyName = fnRows[0]?.facultyName ?? null;
+
+        const sectionId = randomUUID();
+        await manager.query(
+          `
+          INSERT INTO sections (
+            id,
+            name,
+            code,
+            akademicSectionId,
+            facultyGroup,
+            facultyName,
+            campusName,
+            modality,
+            teacherId,
+            initialCapacity,
+            maxExtraCapacity,
+            enforceVirtualCapacity,
+            isAutoLeveling,
+            levelingRunId,
+            createdAt,
+            updatedAt
+          )
+          VALUES (?, ?, ?, NULL, ?, ?, ?, ?, NULL, ?, ?, ?, 0, ?, NOW(6), NOW(6))
+          `,
+          [
+            sectionId,
+            code,
+            code,
+            facultyGroup,
+            resolvedFacultyName,
+            campusName,
+            modality,
+            initialCapacity,
+            maxExtraCapacity,
+            enforceVirtualCapacity ? 1 : 0,
+            run.id,
+          ]
+        );
+        sectionRow = {
+          id: sectionId,
+          code,
+          name: code,
+          facultyGroup,
+          campusName,
+          modality,
+          initialCapacity,
+          maxExtraCapacity,
+          enforceVirtualCapacity: enforceVirtualCapacity ? 1 : 0,
+        };
+      }
+
+      const existing: Array<{ id: string }> = await manager.query(
+        `
+        SELECT id
+        FROM section_courses
+        WHERE sectionId = ?
+          AND courseId = ?
+          AND periodId = ?
+        LIMIT 1
+        `,
+        [sectionRow.id, course.id, activePeriodId]
+      );
+      if (existing[0]?.id) {
+        throw new ConflictException('Ya existe una seccion-curso para este curso en la seccion seleccionada');
+      }
+
+      const sectionCourseId = randomUUID();
+      await manager.query(
+        `
+        INSERT INTO section_courses (
+          id,
+          periodId,
+          sectionId,
+          courseId,
+          idakademic,
+          initialCapacity,
+          maxExtraCapacity,
+          enforceVirtualCapacity,
+          createdAt,
+          updatedAt
+        )
+        VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NOW(6), NOW(6))
+        `,
+        [
+          sectionCourseId,
+          activePeriodId,
+          sectionRow.id,
+          course.id,
+          initialCapacity,
+          maxExtraCapacity,
+          enforceVirtualCapacity ? 1 : 0,
+        ]
+      );
+
+      return {
+        sectionId: sectionRow.id,
+        sectionCode: sectionRow.code,
+        sectionName: sectionRow.name,
+        sectionCourseId,
+        courseId: course.id,
+        courseName: course.name,
+        modality,
+      };
+    });
   }
 
   async updateCapacity(params: {
@@ -1237,6 +1453,7 @@ export class SectionsService {
       SET
         initialCapacity = ?,
         maxExtraCapacity = ?,
+        enforceVirtualCapacity = 1,
         updatedAt = NOW(6)
       WHERE id = ?
       LIMIT 1
@@ -1915,6 +2132,9 @@ export class SectionsService {
           : 'Sin docente',
       ],
       ['Horario:', context.scheduleSummary || 'Sin horario'],
+      ['Aula:', context.classroomCode
+        ? `${context.classroomCode}${context.classroomPavilionCode ? ` (${context.classroomPavilionCode})` : ''}${context.classroomLevelName ? ` - ${context.classroomLevelName}` : ''}`
+        : 'Sin aula'],
       [],
       ['Codigo estudiante', 'Apellidos', 'Nombres', 'Carrera'],
     ];
@@ -1985,6 +2205,12 @@ export class SectionsService {
           : 'Sin docente'
       },
       { label: 'Horario: ', value: context.scheduleSummary || 'Sin horario' },
+      {
+        label: 'Aula: ',
+        value: context.classroomCode
+          ? `${context.classroomCode}${context.classroomPavilionCode ? ` (${context.classroomPavilionCode})` : ''}${context.classroomLevelName ? ` - ${context.classroomLevelName}` : ''}`
+          : 'Sin aula'
+      },
     ];
 
     doc.fontSize(10);
@@ -2175,8 +2401,8 @@ export class SectionsService {
     const classroomLabel = isVirtual
       ? 'Sin aula'
       : String(row.classroomCode ?? '').trim() ||
-        String(row.classroomName ?? '').trim() ||
-        'Sin aula';
+      String(row.classroomName ?? '').trim() ||
+      'Sin aula';
     return {
       initialCapacity: row.initialCapacity,
       maxExtraCapacity: row.maxExtraCapacity,
@@ -2530,7 +2756,7 @@ export class SectionsService {
       const motherSectionCode =
         facultyGroup === 'GENERAL' && isVirtual
           ? motherSectionCodeByWelcomeCourse.get(courseKey) ??
-            String(row.sectionCode ?? '').trim()
+          String(row.sectionCode ?? '').trim()
           : String(row.sectionCode ?? '').trim();
       return {
         Alumno: row.codigoAlumno ? String(row.codigoAlumno) : '',
@@ -2598,6 +2824,9 @@ export class SectionsService {
       periodCode: string;
       teacherName: string | null;
       teacherDni: string | null;
+      classroomCode: string | null;
+      classroomPavilionCode: string | null;
+      classroomLevelName: string | null;
     }> = await this.sectionsRepo.manager.query(
       `
       SELECT
@@ -2611,7 +2840,10 @@ export class SectionsService {
         c.name AS courseName,
         p.code AS periodCode,
         COALESCE(tc.fullName, ts.fullName) AS teacherName,
-        COALESCE(tc.dni, ts.dni) AS teacherDni
+        COALESCE(tc.dni, ts.dni) AS teacherDni,
+        cl.code AS classroomCode,
+        pv.code AS classroomPavilionCode,
+        cl.levelName AS classroomLevelName
       FROM section_courses sc
       INNER JOIN sections s ON s.id = sc.sectionId
       INNER JOIN courses c ON c.id = sc.courseId
@@ -2619,6 +2851,8 @@ export class SectionsService {
       LEFT JOIN section_course_teachers sct ON sct.sectionCourseId = sc.id
       LEFT JOIN users tc ON tc.id = sct.teacherId
       LEFT JOIN users ts ON ts.id = s.teacherId
+      LEFT JOIN classrooms cl ON cl.id = sc.classroomId
+      LEFT JOIN pavilions pv ON pv.id = cl.pavilionId
       WHERE sc.sectionId = ?
         AND sc.courseId = ?
         AND sc.periodId = ?
@@ -2705,6 +2939,9 @@ export class SectionsService {
       periodCode: String(sectionCourseRow.periodCode ?? ''),
       teacherName: sectionCourseRow.teacherName ? String(sectionCourseRow.teacherName) : null,
       teacherDni: sectionCourseRow.teacherDni ? String(sectionCourseRow.teacherDni) : null,
+      classroomCode: sectionCourseRow.classroomCode ? String(sectionCourseRow.classroomCode) : null,
+      classroomPavilionCode: sectionCourseRow.classroomPavilionCode ? String(sectionCourseRow.classroomPavilionCode) : null,
+      classroomLevelName: sectionCourseRow.classroomLevelName ? String(sectionCourseRow.classroomLevelName) : null,
       scheduleSummary: this.buildScheduleSummaryForExport(blockRows),
       students,
     };
@@ -3209,14 +3446,23 @@ export class SectionsService {
     studentCount: number;
     hasClassroomConflict: boolean;
     hasTeacherConflict: boolean;
+    enforceVirtualCapacity: boolean;
+    initialCapacity: number;
+    maxExtraCapacity: number;
   }) {
     if (this.isVirtualModality(params.modality)) {
+      const hardCap =
+        Math.max(0, Number(params.initialCapacity ?? 0)) +
+        Math.max(0, Number(params.maxExtraCapacity ?? 0));
+      const availableSeats = params.enforceVirtualCapacity
+        ? Math.max(0, hardCap - Math.max(0, params.studentCount ?? 0))
+        : null;
       return {
         planningStatus: 'OK' as const,
         planningStatusLabel: 'OK',
         hasClassroomConflict: false,
         hasTeacherConflict: Boolean(params.hasTeacherConflict),
-        availableSeats: null,
+        availableSeats,
       };
     }
 
@@ -3560,6 +3806,97 @@ export class SectionsService {
 
   private isVirtualCampusFilter(campusName: string) {
     return this.norm(campusName).includes('VIRTUAL');
+  }
+
+  private facultyChar(group: string) {
+    const normalized = this.scopeKey(group);
+    if (normalized === 'SALUD') return 'S';
+    if (normalized === 'GENERAL') return 'G';
+    return normalized.slice(0, 1) || 'F';
+  }
+
+  private normalizeCampus(raw: string) {
+    const n = this.norm(raw);
+    if (n.includes('CHINCHA')) return { campusName: 'SEDE CHINCHA', campusCode: 'CH' };
+    if (n.includes('ICA')) return { campusName: 'FILIAL ICA', campusCode: 'IC' };
+    if (n.includes('HUAURA') || n.includes('HUACHO')) {
+      return { campusName: 'FILIAL HUAURA', campusCode: 'HU' };
+    }
+    const words = raw
+      .split(/\s+/g)
+      .map((x) => x.trim())
+      .filter(Boolean);
+    const code =
+      words.length >= 2
+        ? `${words[0][0] ?? ''}${words[1][0] ?? ''}`.toUpperCase()
+        : (raw.slice(0, 2) || 'XX').toUpperCase();
+    return {
+      campusName: raw || 'SEDE',
+      campusCode: code,
+    };
+  }
+
+  private alphaCode(idx: number) {
+    let n = Math.max(1, Math.floor(idx));
+    let out = '';
+    while (n > 0) {
+      const rem = (n - 1) % 26;
+      out = String.fromCharCode(65 + rem) + out;
+      n = Math.floor((n - 1) / 26);
+    }
+    return out || 'A';
+  }
+
+  private alphaIndex(code: string) {
+    const chars = code.trim().toUpperCase().split('');
+    return chars.reduce((acc, ch) => acc * 26 + (ch.charCodeAt(0) - 64), 0);
+  }
+
+  private async generateCorrelativeSectionCode(
+    manager: Repository<SectionEntity>['manager'],
+    params: { runId: string; facultyGroup: string; campusName: string; modality: string }
+  ) {
+    const facultyChar = this.facultyChar(params.facultyGroup);
+    const campus = this.normalizeCampus(params.campusName);
+    const modalityChar = this.isVirtualModality(params.modality) ? 'V' : 'P';
+    const rows: Array<{ code: string | null }> = await manager.query(
+      `
+      SELECT code
+      FROM sections
+      WHERE facultyGroup = ?
+        AND UPPER(TRIM(COALESCE(campusName, ''))) = ?
+        AND UPPER(TRIM(COALESCE(modality, ''))) = ?
+        AND code IS NOT NULL
+      `,
+      [params.facultyGroup, this.scopeKey(campus.campusName), params.modality]
+    );
+
+    const matcher = new RegExp(`^([A-Z]+)${modalityChar}${facultyChar}-${campus.campusCode}$`);
+    let maxIndex = 0;
+    for (const row of rows) {
+      const code = String(row.code ?? '').trim().toUpperCase();
+      const match = code.match(matcher);
+      if (!match) continue;
+      maxIndex = Math.max(maxIndex, this.alphaIndex(match[1]));
+    }
+
+    for (let idx = Math.max(1, maxIndex + 1); idx <= maxIndex + 1000; idx += 1) {
+      const candidate = `${this.alphaCode(idx)}${modalityChar}${facultyChar}-${campus.campusCode}`;
+      const existsRows: Array<{ c: number }> = await manager.query(
+        `
+        SELECT COUNT(*) AS c
+        FROM sections
+        WHERE code = ?
+        `,
+        [candidate]
+      );
+      if (Number(existsRows[0]?.c ?? 0) === 0) {
+        return candidate;
+      }
+    }
+    return `${this.alphaCode(maxIndex + 1)}${modalityChar}${facultyChar}-${campus.campusCode}-${randomUUID()
+      .slice(0, 4)
+      .toUpperCase()}`;
   }
 
   private norm(value: string) {

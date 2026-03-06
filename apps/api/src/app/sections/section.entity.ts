@@ -52,6 +52,9 @@ export class SectionEntity {
   maxExtraCapacity!: number;
 
   @Column({ type: 'boolean', default: false })
+  enforceVirtualCapacity!: boolean;
+
+  @Column({ type: 'boolean', default: false })
   isAutoLeveling!: boolean;
 
   @Column({ type: 'char', length: 36, nullable: true })

@@ -36,6 +36,13 @@ interface SectionStudentRow {
         >
           Refrescar
         </button>
+        <button
+          class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50 disabled:opacity-60"
+          [disabled]="exporting || students.length === 0"
+          (click)="exportAttendanceCsv()"
+        >
+          {{ exporting ? 'Exportando...' : 'Exportar asistencia' }}
+        </button>
       </div>
     </div>
 
@@ -201,6 +208,7 @@ export class AdminSectionAttendancePage {
   error: string | null = null;
   success: string | null = null;
   saving = false;
+  exporting = false;
 
   get filteredBlocks() {
     const course = this.selectedCourseName.trim();
@@ -417,6 +425,39 @@ export class AdminSectionAttendancePage {
       studentId,
       target.checked ? AttendanceStatus.ASISTIO : AttendanceStatus.FALTO
     );
+  }
+
+  exportAttendanceCsv() {
+    if (this.students.length === 0 || this.weekDates.length === 0) return;
+    this.exporting = true;
+    try {
+      const header = ['DNI', 'Codigo', 'Alumno', ...this.weekDates];
+      const rows = this.students.map((s) => [
+        s.dni,
+        this.studentCode(s.codigoAlumno),
+        s.fullName,
+        ...this.weekDates.map((d) =>
+          this.getStatus(d, s.id) === AttendanceStatus.ASISTIO ? 'ASISTIO' : 'FALTO'
+        ),
+      ]);
+      const csv = [header, ...rows]
+        .map((r) => r.map((v) => `"${String(v ?? '').replace(/\"/g, '\"\"')}"`).join(','))
+        .join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const filenameBase = this.selectedCourseName
+        ? this.selectedCourseName.replace(/\\s+/g, '_')
+        : 'asistencia_seccion';
+      a.href = url;
+      a.download = `${filenameBase}_asistencia.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } finally {
+      this.exporting = false;
+    }
   }
 
   markAllPresent() {

@@ -2,6 +2,7 @@ import { CommonModule } from '@angular/common';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { ChangeDetectorRef, Component, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { ActivatedRoute } from '@angular/router';
 import { firstValueFrom, skip, Subscription } from 'rxjs';
 import type {
   LevelingMatriculationPreviewResponse,
@@ -49,14 +50,14 @@ interface ActiveRunSummary {
       No existe una corrida de nivelacion activa. Primero aplica estructura en Nivelacion.
     </div>
 
-    <div *ngIf="runId" class="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+    <div *ngIf="runId && viewMode === 'default'" class="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
       <div class="text-sm text-slate-700">
         Estado del proceso de matricula:
         <b>{{ runStatusLabel(runStatus) }}</b>
       </div>
     </div>
 
-    <div *ngIf="runId" class="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+    <div *ngIf="runId && viewMode === 'default'" class="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
       <div class="grid gap-3 lg:grid-cols-[1fr_auto_auto] lg:items-end">
         <label class="text-xs text-slate-700">
           Facultad (solo listas para matricula)
@@ -103,7 +104,24 @@ interface ActiveRunSummary {
       </div>
     </div>
 
-    <div *ngIf="preview && preview.selectedFacultyGroup" class="mt-4 space-y-4">
+    <div *ngIf="runId && viewMode !== 'default'" class="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+      <label class="text-xs text-slate-700 block">
+        Facultad
+        <select
+          class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm"
+          [(ngModel)]="selectedFaculty"
+          (ngModelChange)="onSelectedFacultyChange($event)"
+          [ngModelOptions]="{ standalone: true }"
+        >
+          <option value="" disabled>Selecciona facultad</option>
+          <option *ngFor="let fac of matriculableFaculties" [value]="fac.facultyGroup">
+            {{ fac.facultyGroup }} ({{ fac.totalSectionCourses }} cursos-seccion)
+          </option>
+        </select>
+      </label>
+    </div>
+
+    <div *ngIf="viewMode === 'default' && preview && preview.selectedFacultyGroup" class="mt-4 space-y-4">
       <div class="rounded-2xl border border-slate-200 bg-white p-4">
         <div class="text-sm font-semibold">Resumen de previsualizacion</div>
         <div class="mt-3 grid gap-2 sm:grid-cols-3">
@@ -149,7 +167,7 @@ interface ActiveRunSummary {
                 <td class="px-3 py-2">{{ row.courseName }}</td>
                 <td class="px-3 py-2">{{ row.teacherName || row.sectionTeacherName || '-' }}</td>
                 <td class="px-3 py-2">{{ classroomLabel(row.modality, row.classroomCode, row.classroomPavilionCode, row.classroomLevelName, row.classroomCapacity, row.capacitySource) }}</td>
-                <td class="px-3 py-2">{{ capacityLabel(row.modality, row.initialCapacity, row.maxExtraCapacity, row.classroomCapacity, row.capacitySource, row.assignedCount) }}</td>
+                <td class="px-3 py-2">{{ capacityLabel(row.modality, row.initialCapacity, row.maxExtraCapacity, row.classroomCapacity, row.capacitySource, row.assignedCount, row.enforceVirtualCapacity) }}</td>
                 <td class="px-3 py-2 font-semibold">{{ row.assignedCount }}</td>
                 <td class="px-3 py-2">
                   <button
@@ -228,7 +246,7 @@ interface ActiveRunSummary {
 
       <div class="rounded-2xl border border-slate-200 bg-white p-4">
         <div class="text-sm font-semibold">Detalle por alumno ({{ previewStudentDetailRows.length }} asignaciones)</div>
-        <div class="mt-1 text-xs text-slate-500">Verifica que cada alumno tenga sus cursos en la misma seccion.</div>
+        <div class="mt-1 text-xs text-slate-500">Verifica que cada alumno tenga sus cursos en la misma sección.</div>
         <div class="mt-3 max-h-[520px] overflow-auto rounded-xl border border-slate-200">
           <table class="min-w-full text-xs">
             <thead class="bg-slate-50 text-left text-slate-700 sticky top-0">
@@ -288,7 +306,11 @@ interface ActiveRunSummary {
       </div>
     </div>
 
-    <div *ngIf="runId && selectedFaculty" class="rounded-2xl border border-emerald-200 bg-white p-4 mt-4">
+    <div
+      *ngIf="runId && selectedFaculty && viewMode === 'validation'"
+      id="section-validation"
+      class="rounded-2xl border border-emerald-200 bg-white p-4 mt-4"
+    >
       <div class="flex items-center justify-between">
         <div>
           <div class="text-sm font-semibold text-emerald-800">Validacion de matricula actual</div>
@@ -358,6 +380,78 @@ interface ActiveRunSummary {
             </tbody>
           </table>
         </div>
+      </div>
+    </div>
+
+    <div
+      *ngIf="runId && selectedFaculty && viewMode === 'reassignments'"
+      id="section-reassignments"
+      class="mt-4 rounded-2xl border border-slate-200 bg-white p-4"
+    >
+      <div class="flex items-center justify-between gap-3">
+        <div>
+          <div class="text-sm font-semibold text-slate-800">Cambios de sección registrados</div>
+          <div class="mt-0.5 text-xs text-slate-500">
+            Historial de reubicaciones para la facultad seleccionada.
+          </div>
+        </div>
+        <button
+          class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50 disabled:opacity-60"
+          [disabled]="sectionReassignmentsLoading"
+          (click)="loadSectionReassignments()"
+        >
+          {{ sectionReassignmentsLoading ? 'Cargando...' : 'Actualizar' }}
+        </button>
+      </div>
+
+      <div *ngIf="sectionReassignments" class="mt-3 max-h-[420px] overflow-auto rounded-xl border border-slate-200">
+        <table class="min-w-full text-xs">
+          <thead class="bg-slate-50 text-left text-slate-700">
+            <tr>
+              <th class="px-3 py-2">Fecha</th>
+              <th class="px-3 py-2">Alumno</th>
+              <th class="px-3 py-2">De sección</th>
+              <th class="px-3 py-2">A sección</th>
+              <th class="px-3 py-2">Curso</th>
+              <th class="px-3 py-2">Motivo</th>
+              <th class="px-3 py-2">Responsable</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let row of sectionReassignments" class="border-t border-slate-100">
+              <td class="px-3 py-1.5 text-slate-600">{{ row.changedAt | date: 'dd/MM HH:mm' }}</td>
+              <td class="px-3 py-1.5">
+                <div class="font-semibold">{{ studentCode(row.studentCode) }} - {{ row.studentName }}</div>
+                <div class="text-[11px] text-slate-500">{{ row.careerName || '-' }}</div>
+              </td>
+              <td class="px-3 py-1.5">
+                <div class="font-semibold">{{ row.fromSectionCode }}</div>
+                <div class="text-[10px] font-semibold"
+                  [ngClass]="row.fromModality === 'VIRTUAL' ? 'text-violet-700' : 'text-emerald-700'">
+                  {{ row.fromModality === 'VIRTUAL' ? 'Virtual' : 'Presencial' }}
+                </div>
+              </td>
+              <td class="px-3 py-1.5">
+                <div class="font-semibold">{{ row.toSectionCode }}</div>
+                <div class="text-[10px] font-semibold"
+                  [ngClass]="row.toModality === 'VIRTUAL' ? 'text-violet-700' : 'text-emerald-700'">
+                  {{ row.toModality === 'VIRTUAL' ? 'Virtual' : 'Presencial' }}
+                </div>
+              </td>
+              <td class="px-3 py-1.5">
+                {{ row.fromCourseName === row.toCourseName ? row.toCourseName : (row.fromCourseName + ' -> ' + row.toCourseName) }}
+              </td>
+              <td class="px-3 py-1.5">{{ row.reason || '-' }}</td>
+              <td class="px-3 py-1.5">{{ row.changedByName || 'N/D' }}</td>
+            </tr>
+            <tr *ngIf="sectionReassignments.length === 0" class="border-t">
+              <td class="px-3 py-3 text-slate-500" colspan="7">No se registran cambios de sección para esta facultad.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div *ngIf="sectionReassignments" class="mt-2 text-xs text-slate-500">
+        Total mostrados: {{ sectionReassignments.length }} (máx. 200 recientes)
       </div>
     </div>
 
@@ -520,6 +614,7 @@ export class AdminMatriculaPage {
   private readonly cdr = inject(ChangeDetectorRef);
   private readonly workflowState = inject(WorkflowStateService);
   private readonly adminPeriodContext = inject(AdminPeriodContextService);
+  private readonly route = inject(ActivatedRoute);
   private periodSub?: Subscription;
 
   loading = false;
@@ -533,6 +628,7 @@ export class AdminMatriculaPage {
 
   runId: string | null = null;
   runStatus: string | null = null;
+  viewMode: 'default' | 'reassignments' | 'validation' = 'default';
 
   preview: LevelingMatriculationPreviewResponse | null = null;
   selectedFaculty = '';
@@ -560,6 +656,26 @@ export class AdminMatriculaPage {
     groupIndex: number;
   }> | null = null;
   matriculatedReportLoading = false;
+  sectionReassignments: Array<{
+    id: string;
+    changedAt: string | Date | null;
+    studentId: string;
+    studentCode: string | null;
+    studentName: string;
+    careerName: string | null;
+    fromSectionCode: string;
+    fromSectionName: string;
+    fromModality: string;
+    fromCourseName: string;
+    toSectionCode: string;
+    toSectionName: string;
+    toModality: string;
+    toCourseName: string;
+    reason: string | null;
+    changedByName: string | null;
+  }> | null = null;
+  sectionReassignmentsLoading = false;
+  private pendingAnchor: string | null = null;
 
   get matriculableFaculties() {
     // Mostrar todas las facultades conocidas, aunque no haya pendientes, para permitir limpiar matrícula existente.
@@ -606,6 +722,7 @@ export class AdminMatriculaPage {
       classroomCapacity?: number | null;
       capacitySource?: 'VIRTUAL' | 'AULA' | 'SIN_AULA' | 'AULA_INACTIVA' | null;
       assignedCount: number;
+      enforceVirtualCapacity?: boolean | null;
       students: Array<{
         studentId: string;
         studentCode?: string | null;
@@ -632,6 +749,10 @@ export class AdminMatriculaPage {
           classroomLevelName: course.classroomLevelName ?? null,
           classroomCapacity: course.classroomCapacity ?? null,
           capacitySource: course.capacitySource ?? null,
+          enforceVirtualCapacity:
+            course.enforceVirtualCapacity ??
+            section.enforceVirtualCapacity ??
+            null,
           assignedCount: Number(course.assignedCount ?? 0),
           students: (course.students ?? []).slice(),
         });
@@ -773,6 +894,25 @@ export class AdminMatriculaPage {
       .subscribe(() => {
         void this.handlePeriodChanged();
       });
+    this.route.queryParamMap.subscribe((params) => {
+      const view = String(params.get('view') ?? '').trim().toLowerCase();
+      if (view === 'reassignments' || view === 'validation') {
+        this.viewMode = view;
+      } else {
+        this.viewMode = 'default';
+      }
+      if (view === 'reassignments') {
+        this.pendingAnchor = 'section-reassignments';
+      } else if (view === 'validation') {
+        this.pendingAnchor = 'section-validation';
+      } else {
+        this.pendingAnchor = null;
+      }
+      if (this.pendingAnchor) {
+        setTimeout(() => this.scrollToAnchor(this.pendingAnchor!), 200);
+      }
+      void this.autoloadByView();
+    });
     await this.loadContext();
   }
 
@@ -792,13 +932,34 @@ export class AdminMatriculaPage {
     this.preview = null;
     this.selectedFaculty = '';
     this.generateConfirmOpen = false;
+    this.matriculatedReport = null;
+    this.sectionReassignments = null;
     this.closeStudentsModal();
+  }
+
+  private scrollToAnchor(anchorId: string) {
+    const el = document.getElementById(anchorId);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
+
+  private async autoloadByView() {
+    if (!this.runId || !this.selectedFaculty) return;
+    if (this.viewMode === 'reassignments') {
+      await this.loadSectionReassignments();
+    } else if (this.viewMode === 'validation') {
+      await this.loadMatriculatedReport();
+    }
   }
 
   onSelectedFacultyChange(value: string) {
     this.selectedFaculty = String(value ?? '').trim();
     this.success = null;
     this.error = null;
+    this.matriculatedReport = null;
+    this.sectionReassignments = null;
+    void this.autoloadByView();
   }
 
 
@@ -830,12 +991,19 @@ export class AdminMatriculaPage {
     maxExtraCapacity: number,
     classroomCapacity: number | null | undefined,
     capacitySource: string | null | undefined,
-    assignedCount: number
+    assignedCount: number,
+    enforceVirtualCapacity?: boolean | null
   ) {
     void initialCapacity;
     void maxExtraCapacity;
     const mod = String(modality ?? '').trim().toUpperCase();
     if (mod.includes('VIRTUAL')) {
+      if (enforceVirtualCapacity) {
+        const target =
+          Math.max(0, Number(initialCapacity ?? 0)) + Math.max(0, Number(maxExtraCapacity ?? 0));
+        const available = Math.max(0, target - Number(assignedCount ?? 0));
+        return `${target} (disp. ${available})`;
+      }
       return 'Sin aforo (virtual)';
     }
     const source = String(capacitySource ?? '').trim().toUpperCase();
@@ -908,6 +1076,7 @@ export class AdminMatriculaPage {
       }
 
       await this.loadPreviewBase();
+      await this.autoloadByView();
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo cargar el contexto de matricula';
     } finally {
@@ -1055,6 +1224,65 @@ export class AdminMatriculaPage {
       this.error = e?.error?.message ?? 'No se pudo cargar el reporte';
     } finally {
       this.matriculatedReportLoading = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  async loadSectionReassignments() {
+    if (!this.runId || !this.selectedFaculty) return;
+    this.sectionReassignmentsLoading = true;
+    try {
+      const resp = await firstValueFrom(
+        this.http.get<{
+          rows: Array<{
+            id: string;
+            changedAt: string;
+            studentId: string;
+            studentCode: string | null;
+            studentName: string;
+            careerName: string | null;
+            fromSectionCode: string;
+            fromSectionName: string;
+            fromModality: string;
+            fromCourseName: string;
+            toSectionCode: string;
+            toSectionName: string;
+            toModality: string;
+            toCourseName: string;
+            reason: string | null;
+            changedByName: string | null;
+          }>;
+        }>(
+          `/api/admin/leveling/runs/${encodeURIComponent(this.runId)}/section-course-reassignments`,
+          {
+            params: new HttpParams()
+              .set('facultyGroup', this.selectedFaculty)
+              .set('limit', '200'),
+          }
+        )
+      );
+      this.sectionReassignments = (resp?.rows ?? []).map((row) => ({
+        id: row.id,
+        changedAt: row.changedAt,
+        studentId: row.studentId,
+        studentCode: row.studentCode,
+        studentName: row.studentName,
+        careerName: row.careerName,
+        fromSectionCode: row.fromSectionCode,
+        fromSectionName: row.fromSectionName,
+        fromModality: row.fromModality,
+        fromCourseName: row.fromCourseName,
+        toSectionCode: row.toSectionCode,
+        toSectionName: row.toSectionName,
+        toModality: row.toModality,
+        toCourseName: row.toCourseName,
+        reason: row.reason,
+        changedByName: row.changedByName,
+      }));
+    } catch (e: any) {
+      this.error = e?.error?.message ?? 'No se pudo cargar los cambios de seccion';
+    } finally {
+      this.sectionReassignmentsLoading = false;
       this.cdr.detectChanges();
     }
   }

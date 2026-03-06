@@ -184,6 +184,13 @@ MySQL (desde Adminer o cliente):
 - `.nx` se aisla por contenedor via volumenes (`nx_api`, `nx_web`, `nx_deps`) para evitar locks compartidos.
 - El repo incluye tipos fallback en `types/` para evitar errores de IntelliSense cuando VSCode abre el proyecto sin `node_modules` local.
 
+## Mejoras Recientes (Marzo 2026)
+
+- **Gestión de Aforo Virtual**: Ahora se permite configurar un aforo específico para secciones virtuales desde el panel de Secciones.
+- **Lógica Catch-all**: La última sección virtual de cada curso (según orden alfabético de código) actúa como recolectora ilimitada para asegurar que ningún alumno quede sin matrícula por falta de aforo.
+- **Reportes Optimizados**: Las pantallas de "Validación de Matrícula" y "Cambios de Sección" ahora muestran datos de todo el periodo académico actual, facilitando el seguimiento de alumnos asignados en cualquier fase del proceso.
+- **Estabilidad de Consultas**: Mejorado el rendimiento y la precisión de la detección de conflictos de horario y disponibilidad docente.
+
 ## VSCode recomendado
 
 - Si quieres evitar por completo errores de tipos/modulos en host, abre el proyecto con Dev Containers.

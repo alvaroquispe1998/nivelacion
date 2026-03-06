@@ -195,6 +195,7 @@ interface AppendPreviewResult {
   existingFreeSeatsDetected: number;
   newRequiredSeats: number;
   groupsConvertedToVirtual: number;
+  isAllNewFaculties?: boolean;
 }
 
 interface AppendPreviewBundle {
@@ -338,8 +339,8 @@ export class LevelingService {
           `SELECT COUNT(*) AS c
          FROM section_courses sc
          INNER JOIN sections s ON s.id = sc.sectionId
-         WHERE s.levelingRunId = ?
-           AND sc.periodId = ?`,
+         WHERE ? IS NOT NULL
+        AND sc.periodId = ?`,
           [run.id, run.periodId]
         ),
         this.dataSource.query<Array<{ c: number }>>(
@@ -347,8 +348,8 @@ export class LevelingService {
          FROM section_courses sc
          INNER JOIN sections s ON s.id = sc.sectionId
          INNER JOIN schedule_blocks sb ON sb.sectionCourseId = sc.id
-         WHERE s.levelingRunId = ?
-           AND sc.periodId = ?`,
+         WHERE ? IS NOT NULL
+        AND sc.periodId = ?`,
           [run.id, run.periodId]
         ),
         this.dataSource.query<Array<{ c: number }>>(
@@ -356,8 +357,8 @@ export class LevelingService {
          FROM section_courses sc
          INNER JOIN sections s ON s.id = sc.sectionId
          LEFT JOIN section_course_teachers sct ON sct.sectionCourseId = sc.id
-         WHERE s.levelingRunId = ?
-           AND sc.periodId = ?
+         WHERE ? IS NOT NULL
+        AND sc.periodId = ?
            AND (s.teacherId IS NOT NULL OR sct.teacherId IS NOT NULL)`,
           [run.id, run.periodId]
         ),
@@ -366,8 +367,8 @@ export class LevelingService {
          FROM section_student_courses ssc
          INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
          INNER JOIN sections s ON s.id = sc.sectionId
-         WHERE s.levelingRunId = ?
-           AND sc.periodId = ?`,
+         WHERE ? IS NOT NULL
+        AND sc.periodId = ?`,
           [run.id, run.periodId]
         ),
         this.dataSource.query<Array<{ c: number }>>(
@@ -568,6 +569,7 @@ export class LevelingService {
 
     let applied: null | ApplyStructureResult = null;
     let appendPlanning: AppendPreviewBundle | null = null;
+    let appendAllNewFaculties = false;
     if (mode === 'APPEND') {
       appendPlanning = await this.previewAppendDemandsAndExpansion(parsed.students, {
         sectionCapacity,
@@ -580,15 +582,56 @@ export class LevelingService {
             ? Math.max(1, Math.floor(welcomeGroupSizeInput || sectionCapacity))
             : null,
       });
+      appendAllNewFaculties = Boolean(appendPlanning?.preview?.isAllNewFaculties);
+      // Fallback: detectar con data existente en caso el flag no venga (compatibilidad)
+      if (!appendAllNewFaculties) {
+        const activeSummary = await this.getActiveRunSummary();
+        const activeRunId = String(activeSummary.run?.id ?? '').trim();
+        if (activeRunId) {
+          const existingFacultyRows: Array<{ facultyGroup: string | null }> =
+            await this.dataSource.query(
+              `
+              SELECT DISTINCT facultyGroup
+              FROM sections
+              WHERE levelingRunId = ?
+              `,
+              [activeRunId]
+            );
+          const existingFacultyGroups = existingFacultyRows
+            .map((r) => this.normalizeFacultyGroup(r.facultyGroup, ''))
+            .filter(Boolean);
+          const studentFacultyGroups = Array.from(
+            new Set(
+              parsed.students
+                .map((s) => this.normalizeFacultyGroup(s.facultyGroup, ''))
+                .filter(Boolean)
+            )
+          );
+          appendAllNewFaculties =
+            studentFacultyGroups.length > 0 &&
+            studentFacultyGroups.every((g) => !existingFacultyGroups.includes(g));
+        }
+      }
     }
     const groupUnits =
       mode === 'APPEND' ? appendPlanning?.groupUnits ?? [] : baseGroupUnits;
     const sectionsForResponse =
       mode === 'APPEND'
-        ? await this.buildAppendSectionsPreview({
-          groupUnits,
-          runId: appendPlanning?.preview?.runId ?? null,
-        })
+        ? appendAllNewFaculties
+          ? this.buildSectionsFromGroupUnits({
+            students: parsed.students,
+            groupUnits,
+            courseNames: this.sortCourseNames(
+              Array.from(new Set(groupUnits.map((u) => u.courseName)))
+            ),
+            sectionCapacity,
+            initialCapacity,
+            maxExtraCapacity,
+          })
+          : await this.buildAppendSectionsPreview({
+            groupUnits,
+            runId: appendPlanning?.preview?.runId ?? null,
+          })
         : plannedSections;
     const groupPlanCourseNames = this.sortCourseNames(
       Array.from(
@@ -670,6 +713,7 @@ export class LevelingService {
         initialCapacity,
         maxExtraCapacity,
       },
+      isAllNewFaculties: mode === 'APPEND' ? appendAllNewFaculties : false,
       inputSummary: {
         rowsRead: parsed.rowsRead,
         eligibleStudents: parsed.students.length,
@@ -746,7 +790,7 @@ export class LevelingService {
       SELECT COUNT(*) AS c
       FROM section_courses sc
       INNER JOIN sections s ON s.id = sc.sectionId
-      WHERE s.levelingRunId = ?
+      WHERE ? IS NOT NULL
         AND sc.periodId = ?
       `,
       [run.id, run.periodId]
@@ -767,7 +811,7 @@ export class LevelingService {
       FROM section_student_courses ssc
       INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
       INNER JOIN sections s ON s.id = sc.sectionId
-      WHERE s.levelingRunId = ?
+      WHERE ? IS NOT NULL
         AND sc.periodId = ?
       `,
       [run.id, run.periodId]
@@ -778,7 +822,7 @@ export class LevelingService {
       FROM section_courses sc
       INNER JOIN sections s ON s.id = sc.sectionId
       INNER JOIN schedule_blocks sb ON sb.sectionCourseId = sc.id
-      WHERE s.levelingRunId = ?
+      WHERE ? IS NOT NULL
         AND sc.periodId = ?
       `,
       [run.id, run.periodId]
@@ -1129,9 +1173,6 @@ export class LevelingService {
         if (run.status === 'ARCHIVED') {
           throw new BadRequestException('No se puede matricular una corrida archivada');
         }
-        const assignStrategy = String(strategy ?? 'INCREMENTAL')
-          .trim()
-          .toUpperCase() as 'FULL_REBUILD' | 'INCREMENTAL';
 
         const targetFaculty = facultyGroup ? String(facultyGroup).trim() : null;
         const capacityInitialExpr = `COALESCE(sc.initialCapacity, s.initialCapacity)`;
@@ -1157,6 +1198,7 @@ export class LevelingService {
           classroomPavilionName: string | null;
           classroomLevelName: string | null;
           capacitySource: 'VIRTUAL' | 'AULA' | 'SIN_AULA' | 'AULA_INACTIVA';
+          enforceVirtualCapacity: number;
           hasTeacher: number;
         }> = await manager.query(
           `
@@ -1185,6 +1227,7 @@ export class LevelingService {
             WHEN cl.id IS NULL THEN 'AULA_INACTIVA'
             ELSE 'AULA'
           END AS capacitySource,
+          COALESCE(sc.enforceVirtualCapacity, s.enforceVirtualCapacity, 0) AS enforceVirtualCapacity,
           CASE
             WHEN s.teacherId IS NOT NULL THEN 1
             WHEN EXISTS (
@@ -1203,15 +1246,22 @@ export class LevelingService {
          AND cl.status = 'ACTIVA'
         LEFT JOIN pavilions pv
           ON pv.id = cl.pavilionId
-        WHERE s.levelingRunId = ?
-          AND sc.periodId = ?
-          ${targetFaculty ? 'AND s.facultyGroup = ?' : ''}
+        WHERE ? IS NOT NULL
+        AND sc.periodId = ?
+          ${targetFaculty
+            ? `AND (
+                  UPPER(TRIM(s.facultyGroup)) = UPPER(TRIM(?))
+                  OR UPPER(s.facultyGroup) LIKE CONCAT(UPPER(TRIM(?)), '-%')
+                  OR UPPER(s.facultyGroup) LIKE CONCAT(UPPER(TRIM(?)), ' %')
+                )`
+            : ''
+          }
         ORDER BY
           s.code ASC,
           s.name ASC,
           c.name ASC
         `,
-          [run.id, run.periodId, ...(targetFaculty ? [targetFaculty] : [])]
+          [run.id, run.periodId, ...(targetFaculty ? [targetFaculty, targetFaculty, targetFaculty] : [])]
         );
         if (sectionCourseRows.length === 0) {
           throw new BadRequestException(
@@ -1286,10 +1336,17 @@ export class LevelingService {
               AND scx.periodId = ?
               AND scx.courseId = d.courseId
           )
-          ${targetFaculty ? 'AND d.facultyGroup = ?' : ''}
+          ${targetFaculty
+            ? `AND (
+                  UPPER(TRIM(d.facultyGroup)) = UPPER(TRIM(?))
+                  OR UPPER(d.facultyGroup) LIKE CONCAT(UPPER(TRIM(?)), '-%')
+                  OR UPPER(d.facultyGroup) LIKE CONCAT(UPPER(TRIM(?)), ' %')
+                )`
+            : ''
+          }
         ORDER BY u.fullName ASC, c.name ASC
         `,
-          [run.id, run.periodId, ...(targetFaculty ? [targetFaculty] : [])]
+          [run.id, run.periodId, ...(targetFaculty ? [targetFaculty, targetFaculty, targetFaculty] : [])]
         );
 
         const pendingByCourse = new Map<string, number>();
@@ -1339,9 +1396,9 @@ export class LevelingService {
           );
         }
 
-        if (assignStrategy === 'FULL_REBUILD') {
-          await this.deleteSectionStudentCoursesBySectionCourseIds(manager, sectionCourseIds);
-        }
+        // Se elimina el borrado automático por requerimiento: Generar debe ser incremental y no borrar lo anterior.
+        // El borrado total queda delegado al botón explícito de "Eliminar matrícula".
+
 
         const existingAssignedRows: Array<{ sectionCourseId: string; c: number }> =
           await manager.query(
@@ -1381,6 +1438,8 @@ export class LevelingService {
           classroomPavilionName: string | null;
           classroomLevelName: string | null;
           capacitySource: 'VIRTUAL' | 'AULA' | 'SIN_AULA' | 'AULA_INACTIVA' | null;
+          enforceVirtualCapacity: number;
+          isLastVirtualSection?: boolean;
           assignedCount: number;
           blocks: ScheduleBlockWindow[];
         };
@@ -1420,10 +1479,37 @@ export class LevelingService {
               ? String(row.classroomLevelName)
               : null,
             capacitySource: this.asCapacitySource(row.capacitySource),
+            enforceVirtualCapacity: Number(row.enforceVirtualCapacity ?? 0),
             assignedCount:
               existingAssignedBySectionCourse.get(String(row.sectionCourseId)) ?? 0,
             blocks: blocksBySectionCourse.get(String(row.sectionCourseId)) ?? [],
           });
+        }
+
+        // Identify last virtual sections per (course, faculty, campus) scope
+        for (const courseCandidates of candidatesByCourse.values()) {
+          const virtualCandidates = courseCandidates.filter((c) =>
+            this.isVirtualModality(c.modality),
+          );
+          if (virtualCandidates.length === 0) continue;
+
+          // Group by faculty + campus
+          const groupedByScope = new Map<string, Candidate[]>();
+          for (const vc of virtualCandidates) {
+            const scopeKey = `${vc.facultyGroup ?? 'F_NULL'}|${vc.campusName ?? 'C_NULL'}`;
+            if (!groupedByScope.has(scopeKey)) groupedByScope.set(scopeKey, []);
+            groupedByScope.get(scopeKey)!.push(vc);
+          }
+
+          for (const candidatesInScope of groupedByScope.values()) {
+            if (candidatesInScope.length === 0) continue;
+            // Sort by section code ASC. The last one would have the biggest code (like 'Z')
+            candidatesInScope.sort((a, b) =>
+              (a.sectionCode ?? '').localeCompare(b.sectionCode ?? ''),
+            );
+            candidatesInScope[candidatesInScope.length - 1].isLastVirtualSection =
+              true;
+          }
         }
 
         const demandWithCandidates = demands.map((demand) => {
@@ -1641,6 +1727,9 @@ export class LevelingService {
     const run = await this.getRunOrThrow(runId);
     const targetFaculty = facultyGroup ? String(facultyGroup).trim() : null;
 
+    // eslint-disable-next-line no-console
+    console.log('[getMatriculatedStudentReport] runId:', runId, 'periodId:', run.periodId, 'targetFaculty:', targetFaculty);
+
     const rows: Array<{
       studentId: string;
       studentCode: string | null;
@@ -1669,8 +1758,7 @@ export class LevelingService {
       INNER JOIN courses c ON c.id = sc.courseId
       INNER JOIN users u ON u.id = ssc.studentId
       WHERE sc.periodId = ?
-        AND s.levelingRunId = ?
-        ${targetFaculty ? 'AND s.facultyGroup = ?' : ''}
+        ${targetFaculty ? 'AND UPPER(TRIM(s.facultyGroup)) = UPPER(TRIM(?))' : ''}
       ORDER BY
         u.careerName ASC,
         u.fullName ASC,
@@ -1679,8 +1767,12 @@ export class LevelingService {
         s.modality ASC,
         c.name ASC
       `,
-      [run.periodId, run.id, ...(targetFaculty ? [targetFaculty] : [])]
+      [run.periodId, ...(targetFaculty ? [targetFaculty] : [])]
     );
+
+    // eslint-disable-next-line no-console
+    console.log('[getMatriculatedStudentReport] Found rows:', rows.length);
+
 
     return {
       runId: run.id,
@@ -1694,6 +1786,92 @@ export class LevelingService {
         sectionCode: row.sectionCode ? String(row.sectionCode) : row.sectionName ? String(row.sectionName) : '-',
         modality: String(row.modality ?? '').toUpperCase().includes('VIRTUAL') ? 'VIRTUAL' : 'PRESENCIAL',
         courseName: String(row.courseName ?? ''),
+      })),
+    };
+  }
+
+  async listSectionCourseReassignments(params: {
+    runId: string;
+    facultyGroup?: string | null;
+    limit?: number | null;
+  }) {
+    const run = await this.getRunOrThrow(params.runId);
+    const targetFaculty = String(params.facultyGroup ?? '').trim() || null;
+    const limit = Math.max(1, Math.min(Number(params.limit ?? 200) || 200, 1000));
+
+    const rows: Array<{
+      id: string;
+      changedAt: Date;
+      studentId: string | null;
+      studentCode: string | null;
+      studentName: string | null;
+      careerName: string | null;
+      fromSectionCode: string | null;
+      fromSectionName: string | null;
+      fromModality: string | null;
+      fromCourseName: string | null;
+      toSectionCode: string | null;
+      toSectionName: string | null;
+      toModality: string | null;
+      toCourseName: string | null;
+      reason: string | null;
+      changedByName: string | null;
+    }> = await this.dataSource.query(
+      `
+      SELECT
+        r.id AS id,
+        r.changedAt AS changedAt,
+        r.studentId AS studentId,
+        u.codigoAlumno AS studentCode,
+        u.fullName AS studentName,
+        u.careerName AS careerName,
+        fs.code AS fromSectionCode,
+        fs.name AS fromSectionName,
+        fs.modality AS fromModality,
+        fc.name AS fromCourseName,
+        ts.code AS toSectionCode,
+        ts.name AS toSectionName,
+        ts.modality AS toModality,
+        tc.name AS toCourseName,
+        r.reason AS reason,
+        ub.fullName AS changedByName
+      FROM section_course_reassignments r
+      INNER JOIN section_courses fsc ON fsc.id = r.fromSectionCourseId
+      INNER JOIN sections fs ON fs.id = fsc.sectionId
+      INNER JOIN courses fc ON fc.id = fsc.courseId
+      INNER JOIN section_courses tsc ON tsc.id = r.toSectionCourseId
+      INNER JOIN sections ts ON ts.id = tsc.sectionId
+      INNER JOIN courses tc ON tc.id = tsc.courseId
+      LEFT JOIN users u ON u.id = r.studentId
+      LEFT JOIN users ub ON ub.id = r.changedBy
+      WHERE fsc.periodId = ?
+        ${targetFaculty ? 'AND UPPER(TRIM(fs.facultyGroup)) = UPPER(TRIM(?))' : ''}
+      ORDER BY r.changedAt DESC
+      LIMIT ?
+      `,
+      [run.periodId, ...(targetFaculty ? [targetFaculty] : []), limit]
+    );
+
+    return {
+      runId: run.id,
+      facultyGroup: targetFaculty,
+      rows: rows.map((row) => ({
+        id: String(row.id),
+        changedAt: row.changedAt,
+        studentId: row.studentId ? String(row.studentId) : null,
+        studentCode: row.studentCode ? String(row.studentCode) : null,
+        studentName: row.studentName ? String(row.studentName) : null,
+        careerName: row.careerName ? String(row.careerName) : null,
+        fromSectionCode: row.fromSectionCode ? String(row.fromSectionCode) : null,
+        fromSectionName: row.fromSectionName ? String(row.fromSectionName) : null,
+        fromModality: row.fromModality ? String(row.fromModality) : null,
+        fromCourseName: row.fromCourseName ? String(row.fromCourseName) : null,
+        toSectionCode: row.toSectionCode ? String(row.toSectionCode) : null,
+        toSectionName: row.toSectionName ? String(row.toSectionName) : null,
+        toModality: row.toModality ? String(row.toModality) : null,
+        toCourseName: row.toCourseName ? String(row.toCourseName) : null,
+        reason: row.reason ? String(row.reason) : null,
+        changedByName: row.changedByName ? String(row.changedByName) : null,
       })),
     };
   }
@@ -1714,10 +1892,14 @@ export class LevelingService {
         SELECT sc.id AS sectionCourseId
         FROM section_courses sc
         INNER JOIN sections s ON s.id = sc.sectionId
-        WHERE s.levelingRunId = ?
-          AND s.facultyGroup = ?
+        WHERE sc.periodId = ?
+          AND (
+            UPPER(TRIM(s.facultyGroup)) = UPPER(TRIM(?))
+            OR UPPER(s.facultyGroup) LIKE CONCAT(UPPER(TRIM(?)), '-%')
+            OR UPPER(s.facultyGroup) LIKE CONCAT(UPPER(TRIM(?)), ' %')
+          )
         `,
-        [run.id, targetFaculty]
+        [run.periodId, targetFaculty, targetFaculty, targetFaculty]
       );
       const ids = sectionCourseRows.map((row) => String(row.sectionCourseId));
       if (ids.length === 0) {
@@ -1799,7 +1981,9 @@ export class LevelingService {
     }
 
     const scopedRows = sectionCourseRows.filter(
-      (row) => this.scopeKey(row.facultyGroup) === this.scopeKey(targetFaculty)
+      (row) =>
+        this.normalizeFacultyGroup(row.facultyGroup) ===
+        this.normalizeFacultyGroup(targetFaculty)
     );
     if (scopedRows.length === 0) {
       throw new BadRequestException(
@@ -1808,7 +1992,9 @@ export class LevelingService {
     }
 
     const canMatriculateSelectedFaculty = readyFacultyGroups.some(
-      (item) => this.scopeKey(item) === this.scopeKey(targetFaculty)
+      (item) =>
+        this.normalizeFacultyGroup(item) ===
+        this.normalizeFacultyGroup(targetFaculty)
     );
 
     if (!canMatriculateSelectedFaculty) {
@@ -1838,6 +2024,7 @@ export class LevelingService {
       assignedCount: 0,
       initialCapacity: Number(row.initialCapacity ?? 45),
       maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
+      enforceVirtualCapacity: Number(row.enforceVirtualCapacity ?? 0) > 0,
       classroomId: row.classroomId ? String(row.classroomId) : null,
       classroomCode: row.classroomCode ? String(row.classroomCode) : null,
       classroomName: row.classroomName ? String(row.classroomName) : null,
@@ -1937,6 +2124,7 @@ export class LevelingService {
           modality: row.modality ? String(row.modality) : null,
           initialCapacity: Number(row.initialCapacity ?? 45),
           maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
+          enforceVirtualCapacity: Number(row.enforceVirtualCapacity ?? 0) > 0,
           teacherId: row.teacherId ? String(row.teacherId) : null,
           teacherName: row.teacherName ? String(row.teacherName) : null,
           sectionCourses: [],
@@ -2433,6 +2621,7 @@ export class LevelingService {
     welcomeCourseName?: string | null;
     welcomeGroupingMode?: 'BY_SIZE' | 'SINGLE_GROUP' | null;
     welcomeGroupSize?: number | null;
+    strictGroupOverride?: boolean;
   }) {
     const countsByRow = new Map<
       string,
@@ -2525,6 +2714,7 @@ export class LevelingService {
     const validIds = new Set(out.map((x) => x.id));
     for (const id of params.groupModalityOverrides.keys()) {
       if (!validIds.has(id)) {
+        if (params.strictGroupOverride === false) continue;
         throw new BadRequestException(
           `groupModalityOverrides references unknown group id: ${id}`
         );
@@ -4121,6 +4311,235 @@ export class LevelingService {
         .filter(([key]) => !existingDemandKeys.has(key))
         .map(([, row]) => row);
 
+      // Detectar facultades candidatas y si todas son nuevas en la corrida
+      const existingFacultyRows: Array<{ facultyGroup: string | null }> = await manager.query(
+        `
+        SELECT DISTINCT facultyGroup
+        FROM sections
+        WHERE levelingRunId = ?
+        `,
+        [run.id]
+      );
+      const existingFacultyGroups = existingFacultyRows
+        .map((r) => this.normalizeFacultyGroup(r.facultyGroup, ''))
+        .filter(Boolean);
+
+      const demandFacultyGroups = Array.from(
+        new Set(
+          Array.from(demandCandidates.values())
+            .map((d) => this.normalizeFacultyGroup(d.facultyGroup, ''))
+            .filter(Boolean)
+        )
+      );
+      const studentFacultyGroups = Array.from(
+        new Set(
+          params.students.map((s) => this.normalizeFacultyGroup(s.facultyGroup, '')).filter(Boolean)
+        )
+      );
+      const candidateFacultyGroups =
+        demandFacultyGroups.length > 0 ? demandFacultyGroups : studentFacultyGroups;
+      const allNewFaculties =
+        candidateFacultyGroups.length > 0 &&
+        candidateFacultyGroups.every((g) => !existingFacultyGroups.includes(g));
+
+      if (allNewFaculties) {
+        // Rama “primera carga” sólo para las facultades nuevas, sin tocar las existentes
+        const courseNames = Array.from(
+          new Set(
+            params.students
+              .flatMap((s) => s.neededCourses ?? [])
+              .map((c) => String(c || '').trim())
+              .filter(Boolean)
+          )
+        );
+
+        const baseGroupUnits = this.buildCourseGroupUnits({
+          students: params.students,
+          courseNames: this.sortCourseNames(courseNames),
+          sectionCapacity: Math.max(1, Number(params.sectionCapacity ?? 1)),
+          groupModalityOverrides: params.groupModalityOverrides ?? new Map(),
+          welcomeCourseName: params.welcomeCourseName ?? null,
+          welcomeGroupingMode: params.welcomeGroupingMode ?? null,
+          welcomeGroupSize:
+            params.welcomeCourseName && params.welcomeGroupingMode === 'BY_SIZE'
+              ? Math.max(1, Math.floor(Number(params.welcomeGroupSize ?? params.sectionCapacity)))
+              : null,
+          strictGroupOverride: false, // ignorar overrides obsoletos
+        });
+
+        const plannedSections = this.buildSectionsFromGroupUnits({
+          students: params.students,
+          groupUnits: baseGroupUnits,
+          courseNames: this.sortCourseNames(courseNames),
+          sectionCapacity: Math.max(1, Number(params.sectionCapacity ?? 1)),
+          initialCapacity: Math.max(0, Number(params.sectionCapacity ?? 45) - 0), // conserva aforo base
+          maxExtraCapacity: 0,
+        });
+
+        const sectionsRepo = manager.getRepository(SectionEntity);
+        const sectionsByCode = new Map<string, SectionEntity>();
+        if (plannedSections.length > 0) {
+          const codes = Array.from(new Set(plannedSections.map((s) => s.code)));
+          const existingSections = codes.length
+            ? await sectionsRepo.find({ where: { code: In(codes) } })
+            : [];
+          const existingByCode = new Map(existingSections.map((s) => [s.code, s] as const));
+          for (const s of plannedSections) {
+            const existing = existingByCode.get(s.code);
+            if (!existing) {
+              const created = sectionsRepo.create({
+                name: s.name,
+                code: s.code,
+                akademicSectionId: null,
+                facultyGroup: s.facultyGroup,
+                facultyName: s.facultyName,
+                campusName: s.campusName,
+                modality: s.modality,
+                initialCapacity: s.initialCapacity,
+                maxExtraCapacity: s.maxExtraCapacity,
+                isAutoLeveling: true,
+                levelingRunId: run.id,
+              });
+              const saved = await sectionsRepo.save(created);
+              sectionsByCode.set(s.code, saved);
+            } else {
+              existing.name = s.name;
+              existing.facultyGroup = s.facultyGroup;
+              existing.facultyName = s.facultyName;
+              existing.campusName = s.campusName;
+              existing.modality = s.modality;
+              existing.initialCapacity = s.initialCapacity;
+              existing.maxExtraCapacity = s.maxExtraCapacity;
+              existing.isAutoLeveling = true;
+              existing.levelingRunId = run.id;
+              const saved = await sectionsRepo.save(existing);
+              sectionsByCode.set(s.code, saved);
+            }
+          }
+        }
+
+        // Cursos-sección
+        const sectionCourseCandidates = new Map<
+          string,
+          {
+            id: string;
+            sectionId: string;
+            courseId: string;
+            periodId: string;
+            idakademic: string | null;
+            initialCapacity: number;
+            maxExtraCapacity: number;
+          }
+        >();
+        for (const sec of plannedSections) {
+          const section = sectionsByCode.get(sec.code);
+          if (!section) continue;
+          const uniqueCourses = new Set<CourseName>(sec.neededCourses);
+          for (const courseName of uniqueCourses) {
+            const courseId = await this.ensureCourseIdByName(
+              manager,
+              courseIdByName,
+              courseName
+            );
+            const key = `${run.periodId}:${section.id}:${courseId}`;
+            if (!sectionCourseCandidates.has(key)) {
+              sectionCourseCandidates.set(key, {
+                id: randomUUID(),
+                sectionId: section.id,
+                courseId,
+                periodId: run.periodId,
+                idakademic: null,
+                initialCapacity: Math.max(0, Number(sec.initialCapacity ?? 0)),
+                maxExtraCapacity: Math.max(0, Number(sec.maxExtraCapacity ?? 0)),
+              });
+            }
+          }
+        }
+
+        const sectionIds = Array.from(sectionsByCode.values()).map((s) => s.id);
+        const existingSectionCourseKeys = await this.loadExistingSectionCourseKeys(
+          manager,
+          sectionIds,
+          run.periodId
+        );
+        const sectionCourseRowsToInsert = Array.from(sectionCourseCandidates.entries())
+          .filter(([key]) => !existingSectionCourseKeys.has(key))
+          .map(([, row]) => row);
+        await this.bulkInsertSectionCoursesIgnore(manager, sectionCourseRowsToInsert);
+
+        // Capacidades planificadas para cursos-sección
+        const sectionCourseRows = await this.loadSectionCoursesBySectionsAndPeriod(
+          manager,
+          sectionIds,
+          run.periodId
+        );
+        const sectionCourseIdByKey = new Map<string, string>();
+        for (const row of sectionCourseRows) {
+          sectionCourseIdByKey.set(`${row.sectionId}:${row.courseId}`, row.id);
+        }
+
+        const runSectionCourseCapacityById = new Map<
+          string,
+          { id: string; runId: string; sectionCourseId: string; plannedCapacity: number }
+        >();
+        for (const sec of plannedSections) {
+          const section = sectionsByCode.get(sec.code);
+          if (!section) continue;
+          const uniqueCourses = new Set<CourseName>(sec.neededCourses);
+          for (const courseName of uniqueCourses) {
+            const courseId = await this.ensureCourseIdByName(
+              manager,
+              courseIdByName,
+              courseName
+            );
+            const sectionCourseId = sectionCourseIdByKey.get(`${section.id}:${courseId}`);
+            if (!sectionCourseId) continue;
+            let plannedCapacity = 0;
+            for (const assignedCourses of sec.studentCoursesByDni.values()) {
+              if (assignedCourses.has(courseName)) {
+                plannedCapacity += 1;
+              }
+            }
+            runSectionCourseCapacityById.set(sectionCourseId, {
+              id: randomUUID(),
+              runId: run.id,
+              sectionCourseId,
+              plannedCapacity,
+            });
+          }
+        }
+        const hasPlannedCapacityTable = await this.tableExists(
+          manager,
+          'leveling_run_section_course_capacities'
+        );
+        if (hasPlannedCapacityTable) {
+          await this.bulkUpsertLevelingRunSectionCourseCapacities(
+            manager,
+            Array.from(runSectionCourseCapacityById.values())
+          );
+        }
+
+        await this.bulkInsertLevelingRunDemandsIgnore(manager, demandRowsToInsert);
+
+        return {
+          runId: run.id,
+          runStatus: run.status as LevelingRunStatus,
+          sectionsCreated: plannedSections.length,
+          sectionsUpdated: 0,
+          studentsCreated,
+          studentsUpdated,
+          sectionCoursesCreated: sectionCourseRowsToInsert.length,
+          sectionCoursesOmitted:
+            sectionCourseCandidates.size - sectionCourseRowsToInsert.length,
+          demandsCreated: demandRowsToInsert.length,
+          demandsOmitted: demandCandidates.size - demandRowsToInsert.length,
+          sectionsCreatedByExpansion: 0,
+          sectionCoursesCreatedByExpansion: 0,
+          offersReused: 0,
+          pendingDemandsEvaluated: 0,
+        };
+      }
+
       const pendingForExpansion = await this.loadPendingDemandsForExpansion(manager, {
         runId: run.id,
         periodId: run.periodId,
@@ -4218,6 +4637,7 @@ export class LevelingService {
           existingFreeSeatsDetected: 0,
           newRequiredSeats: 0,
           groupsConvertedToVirtual: 0,
+          isAllNewFaculties: false,
         },
         groupUnits: [],
       };
@@ -4239,6 +4659,7 @@ export class LevelingService {
             existingFreeSeatsDetected: 0,
             newRequiredSeats: 0,
             groupsConvertedToVirtual: 0,
+            isAllNewFaculties: false,
           },
           groupUnits: [],
         };
@@ -4339,6 +4760,88 @@ export class LevelingService {
         .filter(([key]) => !existingDemandKeys.has(key))
         .map(([, row]) => row);
 
+      // Detect facultades candidatas y si todas son nuevas
+      const existingFacultyRows: Array<{ facultyGroup: string | null }> = await manager.query(
+        `
+        SELECT DISTINCT facultyGroup
+        FROM sections
+        WHERE levelingRunId = ?
+        `,
+        [run.id]
+      );
+      const existingFacultyGroups = existingFacultyRows
+        .map((r) => this.normalizeFacultyGroup(r.facultyGroup, ''))
+        .filter(Boolean);
+
+      const demandFacultyGroups = Array.from(
+        new Set(
+          Array.from(demandCandidates.values())
+            .map((d) => this.normalizeFacultyGroup(d.facultyGroup, ''))
+            .filter(Boolean)
+        )
+      );
+      const studentFacultyGroups = Array.from(
+        new Set(
+          students.map((s) => this.normalizeFacultyGroup(s.facultyGroup, '')).filter(Boolean)
+        )
+      );
+      const candidateFacultyGroups =
+        demandFacultyGroups.length > 0 ? demandFacultyGroups : studentFacultyGroups;
+      const allNewFaculties =
+        candidateFacultyGroups.length > 0 &&
+        candidateFacultyGroups.every((g) => !existingFacultyGroups.includes(g));
+
+      if (allNewFaculties) {
+        // Rama “primera carga” sólo para las facultades nuevas en preview
+        const courseNames = this.sortCourseNames(
+          Array.from(
+            new Set(
+              students.flatMap((s) => s.neededCourses ?? []).map((c) => String(c || '').trim())
+            )
+          )
+        );
+        const groupUnits = this.buildCourseGroupUnits({
+          students,
+          courseNames,
+          sectionCapacity: Math.max(1, Number(options.sectionCapacity ?? 1)),
+          groupModalityOverrides: options.groupModalityOverrides,
+          welcomeCourseName: options.welcomeCourseName ?? null,
+          welcomeGroupingMode: options.welcomeGroupingMode ?? 'BY_SIZE',
+          welcomeGroupSize:
+            options.welcomeCourseName && options.welcomeGroupingMode === 'BY_SIZE'
+              ? Math.max(1, Math.floor(Number(options.welcomeGroupSize ?? options.sectionCapacity)))
+              : null,
+          strictGroupOverride: false,
+        });
+
+        const sections = this.buildSectionsFromGroupUnits({
+          students,
+          groupUnits,
+          courseNames,
+          sectionCapacity: Math.max(1, Number(options.sectionCapacity ?? 1)),
+          initialCapacity: Math.max(1, Number(options.sectionCapacity ?? 1)),
+          maxExtraCapacity: 0,
+        });
+
+        return {
+          preview: {
+            runId: run.id,
+            runStatus: run.status as LevelingRunStatus,
+            demandsCreated: demandRowsToInsert.length,
+            demandsOmitted: demandCandidates.size - demandRowsToInsert.length,
+            sectionsCreatedByExpansion: sections.length,
+            sectionCoursesCreatedByExpansion: sections.length, // aproximado a cursos por sección
+            offersReused: 0,
+            pendingDemandsEvaluated: 0,
+            existingFreeSeatsDetected: 0,
+            newRequiredSeats: groupUnits.reduce((acc, g) => acc + Math.max(0, Number(g.size ?? 0)), 0),
+            groupsConvertedToVirtual: groupUnits.filter((g) => g.modality === 'VIRTUAL').length,
+            isAllNewFaculties: true,
+          },
+          groupUnits,
+        };
+      }
+
       const pendingForExpansion = await this.loadPendingDemandsForExpansion(manager, {
         runId: run.id,
         periodId: run.periodId,
@@ -4373,6 +4876,7 @@ export class LevelingService {
           existingFreeSeatsDetected: appendGroups.existingFreeSeatsDetected,
           newRequiredSeats: appendGroups.newRequiredSeats,
           groupsConvertedToVirtual: appendGroups.groupsConvertedToVirtual,
+          isAllNewFaculties: false,
         },
         groupUnits: appendGroups.groupUnits,
       };
@@ -4553,7 +5057,7 @@ export class LevelingService {
         COALESCE(sc.maxExtraCapacity, s.maxExtraCapacity) AS maxExtraCapacity
       FROM section_courses sc
       INNER JOIN sections s ON s.id = sc.sectionId
-      WHERE s.levelingRunId = ?
+      WHERE ? IS NOT NULL
         AND sc.periodId = ?
       `,
       [params.run.id, params.run.periodId]
@@ -6218,6 +6722,7 @@ export class LevelingService {
       modality: string | null;
       initialCapacity: number;
       maxExtraCapacity: number;
+      enforceVirtualCapacity: number;
       classroomId: string | null;
       classroomCode: string | null;
       classroomName: string | null;
@@ -6244,6 +6749,7 @@ export class LevelingService {
         s.modality AS modality,
         ${capacityInitialExpr} AS initialCapacity,
         ${capacityExtraExpr} AS maxExtraCapacity,
+        COALESCE(sc.enforceVirtualCapacity, s.enforceVirtualCapacity, 0) AS enforceVirtualCapacity,
         sc.classroomId AS classroomId,
         cl.code AS classroomCode,
         cl.name AS classroomName,
@@ -6274,7 +6780,7 @@ export class LevelingService {
       LEFT JOIN section_course_teachers sct ON sct.sectionCourseId = sc.id
       LEFT JOIN users tc ON tc.id = sct.teacherId
       LEFT JOIN users ts ON ts.id = s.teacherId
-      WHERE s.levelingRunId = ?
+      WHERE ? IS NOT NULL
         AND sc.periodId = ?
       ORDER BY
         s.code ASC,
@@ -6358,7 +6864,7 @@ export class LevelingService {
       );
     const out = new Map<string, number>();
     for (const row of rows) {
-      const facultyGroup = this.scopeKey(row.facultyGroup) || 'SIN_FACULTAD';
+      const facultyGroup = this.normalizeFacultyGroup(row.facultyGroup, 'SIN_FACULTAD');
       out.set(facultyGroup, Math.max(0, Number(row.pendingDemands ?? 0)));
     }
     return out;
@@ -6465,7 +6971,7 @@ export class LevelingService {
     );
     const out = new Map<string, number>();
     for (const row of rows) {
-      const facultyGroup = this.scopeKey(row.facultyGroup) || 'SIN_FACULTAD';
+      const facultyGroup = this.normalizeFacultyGroup(row.facultyGroup, 'SIN_FACULTAD');
       const courseId = String(row.courseId ?? '').trim();
       if (!courseId) continue;
       out.set(`${facultyGroup}|${courseId}`, Math.max(0, Number(row.pendingDemands ?? 0)));
@@ -6500,7 +7006,7 @@ export class LevelingService {
     >();
 
     for (const [facultyGroupKey, pendingCount] of params.pendingDemandsByFaculty.entries()) {
-      const facultyGroup = this.scopeKey(facultyGroupKey) || 'SIN_FACULTAD';
+      const facultyGroup = this.normalizeFacultyGroup(facultyGroupKey, 'SIN_FACULTAD');
       if (!byFaculty.has(facultyGroup)) {
         byFaculty.set(facultyGroup, {
           facultyGroup,
@@ -6520,7 +7026,7 @@ export class LevelingService {
     >();
 
     for (const row of params.sectionCourseRows) {
-      const facultyGroup = this.scopeKey(row.facultyGroup) || 'SIN_FACULTAD';
+      const facultyGroup = this.normalizeFacultyGroup(row.facultyGroup, 'SIN_FACULTAD');
       if (!byFaculty.has(facultyGroup)) {
         byFaculty.set(facultyGroup, {
           facultyGroup,
@@ -6574,13 +7080,13 @@ export class LevelingService {
 
     return Array.from(byFaculty.values())
       .map((item) => {
-        const facultyGroup = this.scopeKey(item.facultyGroup) || 'SIN_FACULTAD';
+        const facultyGroup = this.normalizeFacultyGroup(item.facultyGroup, 'SIN_FACULTAD');
         const pendingEntries = Array.from(params.pendingDemandsByFacultyCourse.entries()).filter(
           ([key, value]) => {
             if (Math.max(0, Number(value ?? 0)) <= 0) return false;
             const splitAt = key.indexOf('|');
             if (splitAt < 0) return false;
-            return this.scopeKey(key.slice(0, splitAt)) === facultyGroup;
+            return this.normalizeFacultyGroup(key.slice(0, splitAt), 'SIN_FACULTAD') === facultyGroup;
           }
         );
         const hasPending = pendingEntries.length > 0;
@@ -6627,6 +7133,7 @@ export class LevelingService {
       classroomPavilionName: string | null;
       classroomLevelName: string | null;
       capacitySource: 'VIRTUAL' | 'AULA' | 'SIN_AULA' | 'AULA_INACTIVA';
+      enforceVirtualCapacity?: number;
     }>;
     blocksBySectionCourse: Map<string, ScheduleBlockWindow[]>;
   }) {
@@ -6681,6 +7188,8 @@ export class LevelingService {
       classroomPavilionName: string | null;
       classroomLevelName: string | null;
       capacitySource: 'VIRTUAL' | 'AULA' | 'SIN_AULA' | 'AULA_INACTIVA' | null;
+      enforceVirtualCapacity: number;
+      isLastVirtualSection?: boolean;
       assignedCount: number;
       blocks: ScheduleBlockWindow[];
     };
@@ -6747,10 +7256,37 @@ export class LevelingService {
           ? String(row.classroomLevelName)
           : null,
         capacitySource: this.asCapacitySource(row.capacitySource),
+        enforceVirtualCapacity: Number((row as any).enforceVirtualCapacity ?? 0),
         assignedCount:
           existingAssignedBySectionCourse.get(String(row.sectionCourseId)) ?? 0,
         blocks: params.blocksBySectionCourse.get(String(row.sectionCourseId)) ?? [],
       });
+    }
+
+    // Identify last virtual sections per (course, faculty, campus) scope
+    for (const courseCandidates of candidatesByCourse.values()) {
+      const virtualCandidates = courseCandidates.filter((c) =>
+        this.isVirtualModality(c.modality),
+      );
+      if (virtualCandidates.length === 0) continue;
+
+      // Group by faculty + campus
+      const groupedByScope = new Map<string, Candidate[]>();
+      for (const vc of virtualCandidates) {
+        const scopeKey = `${vc.facultyGroup ?? 'F_NULL'}|${vc.campusName ?? 'C_NULL'}`;
+        if (!groupedByScope.has(scopeKey)) groupedByScope.set(scopeKey, []);
+        groupedByScope.get(scopeKey)!.push(vc);
+      }
+
+      for (const candidatesInScope of groupedByScope.values()) {
+        if (candidatesInScope.length === 0) continue;
+        // Sort by section code ASC. The last one would have the biggest code (like 'Z')
+        candidatesInScope.sort((a, b) =>
+          (a.sectionCode ?? '').localeCompare(b.sectionCode ?? ''),
+        );
+        candidatesInScope[candidatesInScope.length - 1].isLastVirtualSection =
+          true;
+      }
     }
 
     const demandWithCandidates = demands.map((demand) => {
@@ -6978,6 +7514,7 @@ export class LevelingService {
         assignedCount: Number(candidate?.assignedCount ?? 0),
         initialCapacity: Number(row.initialCapacity ?? 45),
         maxExtraCapacity: Number(row.maxExtraCapacity ?? 0),
+        enforceVirtualCapacity: Number(row.enforceVirtualCapacity ?? 0) > 0,
         classroomId: row.classroomId ? String(row.classroomId) : null,
         classroomCode: row.classroomCode ? String(row.classroomCode) : null,
         classroomName: row.classroomName ? String(row.classroomName) : null,
@@ -7216,6 +7753,8 @@ export class LevelingService {
       maxExtraCapacity: number;
       classroomCapacity?: number | null;
       capacitySource?: string | null;
+      enforceVirtualCapacity?: number | boolean | null;
+      isLastVirtualSection?: boolean;
       assignedCount: number;
       blocks: ScheduleBlockWindow[];
     }
@@ -7664,7 +8203,12 @@ export class LevelingService {
     classroomCapacity?: number | null;
     capacitySource?: string | null;
     modality?: string | null;
+    enforceVirtualCapacity?: number | boolean | null;
+    isLastVirtualSection?: boolean;
   }) {
+    if (params.isLastVirtualSection) {
+      return false;
+    }
     return this.capacityBlockReason(params) !== null;
   }
 
@@ -7675,9 +8219,17 @@ export class LevelingService {
     classroomCapacity?: number | null;
     capacitySource?: string | null;
     modality?: string | null;
+    enforceVirtualCapacity?: number | boolean | null;
   }): 'SIN_AULA' | 'SIN_CAPACIDAD' | null {
     if (this.isVirtualModality(params.modality)) {
-      return null;
+      const enforce = Number(params.enforceVirtualCapacity ?? 0) > 0;
+      if (!enforce) return null;
+      const assigned = Math.max(0, Number(params.assignedCount ?? 0));
+      const hardCap =
+        Math.max(0, Number(params.initialCapacity ?? 0)) +
+        Math.max(0, Number(params.maxExtraCapacity ?? 0));
+      if (hardCap <= 0) return null;
+      return assigned >= hardCap ? 'SIN_CAPACIDAD' : null;
     }
     const assigned = Math.max(0, Number(params.assignedCount ?? 0));
     const classroomCapacity = Number(params.classroomCapacity ?? 0);
@@ -7815,13 +8367,25 @@ export class LevelingService {
     return createHash('sha256').update(buffer).digest('hex');
   }
 
-  private normalizeFacultyGroup(value: string | null | undefined, fallback = 'FICA') {
-    const normalized = this.scopeKey(value);
-    if (!normalized) return this.scopeKey(fallback) || 'FICA';
-    if (normalized === 'SALUD') return 'SALUD';
-    if (normalized === 'FICA') return 'FICA';
-    if (normalized === 'GENERAL') return 'GENERAL';
-    return normalized;
+  private normalizeFacultyGroup(value: string | null | undefined, fallback = 'FICA'): string {
+    const raw = this.scopeKey(value);
+    if (!raw) return this.scopeKey(fallback) || 'FICA';
+
+    // Extract prefix if it matches known codes or has a separator
+    const dashIdx = raw.indexOf('-');
+    const spaceIdx = raw.indexOf(' ');
+    let pivot = -1;
+    if (dashIdx > 0 && spaceIdx > 0) pivot = Math.min(dashIdx, spaceIdx);
+    else if (dashIdx > 0) pivot = dashIdx;
+    else if (spaceIdx > 0) pivot = spaceIdx;
+
+    const prefix = pivot > 0 ? raw.substring(0, pivot).trim() : raw;
+
+    // Specifically handle known prefixes to ensure canonicalization
+    if (prefix === 'SALUD' || prefix === 'FICA' || prefix === 'GENERAL') {
+      return prefix;
+    }
+    return prefix || raw;
   }
 
   private resolveDemandScopeForCourse(params: {
@@ -8711,6 +9275,3 @@ export class LevelingService {
     return 0;
   }
 }
-
-
-

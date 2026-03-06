@@ -406,16 +406,19 @@ Input: runId, facultyGroup (opcional), strategy (FULL_REBUILD | INCREMENTAL)
 
 4. Construir candidatos por curso:
    - Ordenar candidatos: preferir secciones con misma faculty+campus+modality
-   - Virtual primero (capacidad ilimitada)
+   - Virtuales:
+     → Si es la **última sección virtual** (alfabéticamente por código): Capacidad ilimitada (Catch-all).
+     → Si no es la última: Capacidad según `initialCapacity` (si `enforceVirtualCapacity` está activo).
    - Presencial: capacidad = min(classroomCapacity, initialCapacity + maxExtraCapacity)
 
 5. Para cada demanda (alumno × curso):
    a. Buscar candidatos compatibles (mismo curso)
    b. Verificar NO conflicto de horario con bloques ya asignados al alumno
    c. Verificar capacidad disponible del candidato:
-      → Virtual: siempre disponible
-      → Presencial con aula: classroomCapacity - assignedCount > 0
-      → Presencial sin aula: initialCapacity - assignedCount > 0
+      → **Última Sección Virtual**: Siempre disponible (novedad).
+      → **Virtual con Aforo**: Disponible si `assignedCount < initialCapacity`.
+      → **Presencial con aula**: classroomCapacity - assignedCount > 0
+      → **Presencial sin aula**: initialCapacity - assignedCount > 0
    d. Asignar al mejor candidato disponible
    e. Si no hay candidato → agregar a "unassigned" con motivo
 
@@ -430,6 +433,9 @@ Output: {
   conflictsFoundAfterAssign
 }
 ```
+
+#### 6.1.4 Reportes de Validación y Cambios
+A diferencia de la planificación, los reportes de **Validación de Matrícula** y **Cambios de Sección** operan a nivel de **Periodo Académico**. Esto permite visualizar todos los alumnos matriculados en el ciclo actual, sin importar si fueron asignados por la corrida actual o si vienen de procesos anteriores/manuales, garantizando una visibilidad completa del estado de la facultad.
 
 ### 6.2 Detección de Conflictos de Horario
 
@@ -555,12 +561,17 @@ Algoritmo: Asignación de Horario
 El sistema calcula la capacidad disponible según:
 
 ```
-capacitySource:
-  'VIRTUAL'        → Capacidad ilimitada
+ capacitySource:
+  'VIRTUAL'        → Capacidad según configuración:
+                     - Última sección del curso: SIN LÍMITE (Catch-all).
+                     - Otras: `initialCapacity` (si `enforceVirtualCapacity = 1`).
   'AULA'           → capacidad = classroomCapacity (aula activa)
   'SIN_AULA'       → capacidad = initialCapacity (sin aula asignada)
   'AULA_INACTIVA'  → capacidad = initialCapacity (aula inactiva)
 ```
+
+#### 6.7.1 Lógica "Catch-all" Virtual
+Para evitar que alumnos queden sin sección debido a límites de aforo, el sistema identifica automáticamente la última sección virtual de cada curso (ordenada alfabéticamente por código, ej: la sección `Z` vs la `A`). Esta sección actúa como recolector final y no bloquea el ingreso de alumnos por capacidad, asegurando el 100% de matrícula.
 
 ---
 
@@ -784,5 +795,5 @@ const GRADE_SCALE = [0, 20];                  // Escala vigesimal
 
 ---
 
-> **Última actualización**: Febrero 2026
+> **Última actualización**: Marzo 2026
 > **Versión del sistema**: 0.0.0 (desarrollo activo)

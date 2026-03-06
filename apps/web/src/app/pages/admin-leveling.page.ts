@@ -491,7 +491,14 @@ const PREFERRED_COURSE_ORDER = [
       </div>
     </div>
 
-    <div *ngIf="result && result.summary.byFaculty.length > 0 && lastPlanMode !== 'APPEND'" class="mt-5 space-y-4">
+    <div
+      *ngIf="
+        result &&
+        result.summary.byFaculty.length > 0 &&
+        (lastPlanMode !== 'APPEND' || result.isAllNewFaculties)
+      "
+      class="mt-5 space-y-4"
+    >
       <div
         *ngFor="let fac of result.summary.byFaculty; trackBy: trackFaculty"
         class="rounded-2xl border border-slate-200 bg-white p-4"
@@ -1733,5 +1740,4 @@ export class AdminLevelingPage {
     return students.filter((st) => (st.sectionCourses ?? []).includes(this.sectionCourseFilter));
   }
 }
-
 

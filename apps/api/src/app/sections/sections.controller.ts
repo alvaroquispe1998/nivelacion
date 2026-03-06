@@ -7,7 +7,6 @@ import {
   Patch,
   Post,
   Query,
-  Req,
   StreamableFile,
   UseGuards,
 } from '@nestjs/common';
@@ -26,6 +25,9 @@ import { UpdateSectionCapacityDto } from './dto/update-section-capacity.dto';
 import { UpdateSectionCourseCapacityDto } from './dto/update-section-course-capacity.dto';
 import { UpdateSectionCourseCapacityByCourseNameDto } from './dto/update-section-course-capacity-by-course-name.dto';
 import { SectionsService } from './sections.service';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import type { JwtUser } from '../common/decorators/current-user.decorator';
+import { CreateSectionCourseDto } from './dto/create-section-course.dto';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -78,6 +80,7 @@ export class SectionsController {
         modality: s.modality,
         initialCapacity: s.initialCapacity,
         maxExtraCapacity: s.maxExtraCapacity,
+        enforceVirtualCapacity: s.enforceVirtualCapacity,
         isAutoLeveling: s.isAutoLeveling,
         teacherId: s.teacher?.id ?? null,
         teacherDni: s.teacher?.dni ?? null,
@@ -153,7 +156,7 @@ export class SectionsController {
   @Post('schedule-conflicts/reassign')
   reassignStudentSectionCourse(
     @Body() dto: ReassignStudentSectionCourseDto,
-    @Req() req: any
+    @CurrentUser() user: JwtUser
   ) {
     return this.sectionsService.reassignStudentSectionCourse({
       studentId: dto.studentId,
@@ -161,7 +164,7 @@ export class SectionsController {
       toSectionCourseId: dto.toSectionCourseId,
       confirmOverCapacity: Boolean(dto.confirmOverCapacity),
       reason: String(dto.reason ?? '').trim() || null,
-      changedBy: String(req?.user?.id ?? '').trim() || null,
+      changedBy: String(user?.sub ?? '').trim() || null,
     });
   }
 
@@ -297,6 +300,12 @@ export class SectionsController {
       teacherDni: section.teacher?.dni ?? null,
       teacherName: section.teacher?.fullName ?? null,
     };
+  }
+
+  @Post('section-courses')
+  async createSectionCourse(@Body() dto: CreateSectionCourseDto) {
+    console.log('[DEBUG] POST /api/admin/sections/section-courses called with', dto);
+    return this.sectionsService.createSectionCourse(dto);
   }
 
   @Patch(':id/capacity')
