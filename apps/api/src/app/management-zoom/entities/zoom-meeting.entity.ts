@@ -7,6 +7,9 @@ import {
 } from 'typeorm';
 
 export type ZoomMeetingStatus = 'SCHEDULED' | 'LIVE' | 'ENDED' | 'DELETED';
+export type ZoomMeetingMode = 'ONE_TIME' | 'RECURRING';
+export type ZoomRecurrenceType = 'WEEKLY';
+export type ZoomRecurrenceEndMode = 'UNTIL_DATE' | 'BY_COUNT';
 
 @Entity({ name: 'zoom_meetings' })
 export class ZoomMeetingEntity {
@@ -36,6 +39,31 @@ export class ZoomMeetingEntity {
 
   @Column({ type: 'int', unsigned: true })
   duration!: number;
+
+  @Column({
+    type: 'enum',
+    enum: ['ONE_TIME', 'RECURRING'],
+    default: 'ONE_TIME',
+  })
+  meetingMode!: ZoomMeetingMode;
+
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  recurrenceType!: ZoomRecurrenceType | null;
+
+  @Column({ type: 'int', unsigned: true, nullable: true })
+  repeatInterval!: number | null;
+
+  @Column({ type: 'varchar', length: 32, nullable: true })
+  weeklyDays!: string | null;
+
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  recurrenceEndMode!: ZoomRecurrenceEndMode | null;
+
+  @Column({ type: 'date', nullable: true })
+  recurrenceEndDate!: string | null;
+
+  @Column({ type: 'int', unsigned: true, nullable: true })
+  recurrenceEndTimes!: number | null;
 
   @Column({ type: 'varchar', length: 60, default: 'America/Lima' })
   timezone!: string;

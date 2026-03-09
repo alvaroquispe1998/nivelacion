@@ -20,7 +20,9 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { AttendanceService } from '../attendance/attendance.service';
 import { CreateAttendanceSessionDto } from '../attendance/dto/create-attendance-session.dto';
 import { UpdateAttendanceRecordDto } from '../attendance/dto/update-attendance-record.dto';
+import { ScheduleBlocksService } from '../schedule-blocks/schedule-blocks.service';
 import { SectionsService } from '../sections/sections.service';
+import { WorkshopsService } from '../workshops/workshops.service';
 
 @ApiTags('teacher')
 @ApiBearerAuth()
@@ -31,8 +33,15 @@ export class TeacherController {
   constructor(
     private readonly dataSource: DataSource,
     private readonly attendanceService: AttendanceService,
-    private readonly sectionsService: SectionsService
+    private readonly scheduleBlocksService: ScheduleBlocksService,
+    private readonly sectionsService: SectionsService,
+    private readonly workshopsService: WorkshopsService
   ) {}
+
+  @Get('courses')
+  courses(@CurrentUser() user: JwtUser) {
+    return this.sectionsService.listTeacherAssignments(user.sub);
+  }
 
   @Get('assignments')
   assignments(@CurrentUser() user: JwtUser) {
@@ -51,6 +60,7 @@ export class TeacherController {
       endTime: string;
       startDate: string | null;
       endDate: string | null;
+      zoomMeetingRecordId: string | null;
       joinUrl: string | null;
       startUrl: string | null;
       location: string | null;
@@ -68,6 +78,7 @@ export class TeacherController {
         b.endTime AS endTime,
         b.startDate AS startDate,
         b.endDate AS endDate,
+        b.zoomMeetingRecordId AS zoomMeetingRecordId,
         b.joinUrl AS joinUrl,
         b.startUrl AS startUrl,
         b.location AS location,
@@ -90,8 +101,9 @@ export class TeacherController {
       [user.sub]
     );
 
-    return rows.map((row) => ({
+    const courseItems = rows.map((row) => ({
       id: String(row.id),
+      kind: 'COURSE' as const,
       sectionId: String(row.sectionId),
       sectionCourseId: String(row.sectionCourseId),
       courseName: String(row.courseName ?? ''),
@@ -100,12 +112,91 @@ export class TeacherController {
       endTime: String(row.endTime ?? ''),
       startDate: this.toIsoDateOnly(row.startDate),
       endDate: this.toIsoDateOnly(row.endDate),
+      zoomMeetingRecordId: row.zoomMeetingRecordId
+        ? String(row.zoomMeetingRecordId)
+        : null,
       joinUrl: row.joinUrl ? String(row.joinUrl) : null,
       startUrl: row.startUrl ? String(row.startUrl) : null,
       location: row.location ? String(row.location) : null,
       sectionName: String(row.sectionName ?? ''),
       sectionCode: row.sectionCode ? String(row.sectionCode) : null,
     }));
+    const workshopItems = await this.workshopsService.listTeacherScheduleItems(user.sub);
+    return [...courseItems, ...workshopItems].sort((a, b) => {
+      if (a.dayOfWeek !== b.dayOfWeek) return a.dayOfWeek - b.dayOfWeek;
+      if (a.startTime !== b.startTime) return a.startTime.localeCompare(b.startTime);
+      return a.courseName.localeCompare(b.courseName, 'es', { sensitivity: 'base' });
+    });
+  }
+
+  @Get('workshops')
+  workshops(@CurrentUser() user: JwtUser) {
+    return this.workshopsService.listTeacherWorkshops(user.sub);
+  }
+
+  @Get('workshops/:applicationId/groups')
+  workshopGroups(
+    @Param('applicationId') applicationId: string,
+    @CurrentUser() user: JwtUser
+  ) {
+    return this.workshopsService.listTeacherWorkshopGroups(user.sub, applicationId);
+  }
+
+  @Get('workshop-attendance')
+  workshopAttendance(
+    @Query('applicationGroupId') applicationGroupId: string | undefined,
+    @Query('date') date: string | undefined,
+    @CurrentUser() user: JwtUser
+  ) {
+    const groupId = String(applicationGroupId ?? '').trim();
+    const sessionDate = String(date ?? '').trim();
+    if (!groupId) {
+      throw new BadRequestException('applicationGroupId is required');
+    }
+    if (!sessionDate) {
+      throw new BadRequestException('date is required');
+    }
+    return this.workshopsService.getTeacherWorkshopAttendance(
+      user.sub,
+      groupId,
+      sessionDate
+    );
+  }
+
+  @Put('workshop-attendance')
+  updateWorkshopAttendance(
+    @Body()
+    body: {
+      applicationGroupId?: string;
+      sessionDate?: string;
+      items?: Array<{
+        studentId?: string;
+        status?: string;
+        notes?: string | null;
+      }>;
+    },
+    @CurrentUser() user: JwtUser
+  ) {
+    const applicationGroupId = String(body?.applicationGroupId ?? '').trim();
+    const sessionDate = String(body?.sessionDate ?? '').trim();
+    if (!applicationGroupId) {
+      throw new BadRequestException('applicationGroupId is required');
+    }
+    if (!sessionDate) {
+      throw new BadRequestException('sessionDate is required');
+    }
+    return this.workshopsService.saveTeacherWorkshopAttendance({
+      teacherId: user.sub,
+      applicationGroupId,
+      sessionDate,
+      items: Array.isArray(body?.items)
+        ? body.items.map((item) => ({
+            studentId: String(item?.studentId ?? '').trim(),
+            status: String(item?.status ?? 'FALTO').trim() as any,
+            notes: item?.notes ?? null,
+          }))
+        : [],
+    });
   }
 
   @Get('section-courses/:sectionCourseId/students')
@@ -157,6 +248,7 @@ export class TeacherController {
       endTime: string;
       startDate: string | null;
       endDate: string | null;
+      zoomMeetingRecordId: string | null;
       joinUrl: string | null;
       startUrl: string | null;
       location: string | null;
@@ -172,6 +264,7 @@ export class TeacherController {
         endTime,
         startDate,
         endDate,
+        zoomMeetingRecordId,
         joinUrl,
         startUrl,
         location
@@ -191,10 +284,35 @@ export class TeacherController {
       endTime: String(row.endTime ?? ''),
       startDate: this.toIsoDateOnly(row.startDate),
       endDate: this.toIsoDateOnly(row.endDate),
+      zoomMeetingRecordId: row.zoomMeetingRecordId
+        ? String(row.zoomMeetingRecordId)
+        : null,
       joinUrl: row.joinUrl ? String(row.joinUrl) : null,
       startUrl: row.startUrl ? String(row.startUrl) : null,
       location: row.location ? String(row.location) : null,
     }));
+  }
+
+  @Post('schedule-blocks/:id/refresh-meeting-links')
+  async refreshMeetingLinks(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtUser
+  ) {
+    const block = await this.scheduleBlocksService.getByIdOrThrow(id);
+    const sectionCourseId = String(block.sectionCourseId ?? '').trim();
+    if (!sectionCourseId) {
+      throw new BadRequestException('Schedule block is not linked to a section-course');
+    }
+    await this.assertTeacherAssignmentOrThrow(user.sub, sectionCourseId);
+    return this.scheduleBlocksService.refreshMeetingLinks(id);
+  }
+
+  @Post('workshop-schedule-blocks/:id/refresh-meeting-links')
+  refreshWorkshopMeetingLinks(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtUser
+  ) {
+    return this.workshopsService.refreshTeacherWorkshopScheduleBlockLinks(user.sub, id);
   }
 
   @Get('attendance-sessions')

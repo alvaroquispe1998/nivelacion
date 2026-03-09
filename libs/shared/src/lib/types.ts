@@ -38,11 +38,20 @@ export interface AuthChangePasswordResponse {
 }
 
 export interface StudentScheduleItem {
+  id?: Uuid | string;
+  kind?: 'COURSE' | 'WORKSHOP';
+  scheduleBlockId?: Uuid | string | null;
+  zoomMeetingRecordId?: Uuid | null;
   dayOfWeek: number; // 1=Lunes ... 7=Domingo
   startTime: string; // HH:mm
   endTime: string; // HH:mm
   courseName: string;
   sectionName: string;
+  sectionCourseId?: Uuid | null;
+  workshopId?: Uuid | null;
+  applicationId?: Uuid | null;
+  applicationGroupId?: Uuid | null;
+  groupName?: string | null;
   teacherName?: string | null;
   modality?: string | null;
   classroomCode?: string | null;
@@ -55,9 +64,15 @@ export interface StudentScheduleItem {
 }
 
 export interface StudentAttendanceItem {
+  kind?: 'COURSE' | 'WORKSHOP';
   courseName: string;
   sessionDate: string; // YYYY-MM-DD
   status: AttendanceStatus;
+  sectionCourseId?: Uuid | null;
+  sectionName?: string | null;
+  applicationId?: Uuid | null;
+  applicationGroupId?: Uuid | null;
+  groupName?: string | null;
 }
 
 export interface StudentGradesReportComponentScore {
@@ -338,6 +353,7 @@ export interface AdminScheduleBlock {
   endTime: string;
   startDate?: string | null;
   endDate?: string | null;
+  zoomMeetingRecordId?: Uuid | null;
   joinUrl?: string | null;
   startUrl?: string | null;
   location?: string | null;
@@ -798,11 +814,23 @@ export interface ZoomMeetingView {
   startTime: string;
   endTime: string;
   duration: number;
+  meetingMode: 'ONE_TIME' | 'RECURRING';
+  recurrence: ZoomMeetingRecurrenceView | null;
+  recurrenceSummary: string;
   timezone: string;
   joinUrl: string;
   startUrl: string;
   status: 'SCHEDULED' | 'LIVE' | 'ENDED' | 'DELETED';
   createdAt: string;
+}
+
+export interface ZoomMeetingRecurrenceView {
+  type: 'WEEKLY';
+  repeatInterval: number;
+  weeklyDays: number[];
+  endMode: 'UNTIL_DATE' | 'BY_COUNT';
+  endDate: string | null;
+  endTimes: number | null;
 }
 
 export interface ZoomRecordingView {

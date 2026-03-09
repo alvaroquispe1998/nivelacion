@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { MeetingsService } from '../management-zoom/meetings.service';
 import { PeriodsService } from '../periods/periods.service';
 import { SectionsService } from '../sections/sections.service';
 import { timesOverlap } from '../common/utils/time.util';
@@ -16,6 +17,7 @@ export class ScheduleBlocksService {
   constructor(
     @InjectRepository(ScheduleBlockEntity)
     private readonly blocksRepo: Repository<ScheduleBlockEntity>,
+    private readonly meetingsService: MeetingsService,
     private readonly sectionsService: SectionsService,
     private readonly periodsService: PeriodsService
   ) {}
@@ -65,6 +67,15 @@ export class ScheduleBlocksService {
     });
   }
 
+  async getByIdOrThrow(id: string) {
+    const block = await this.blocksRepo.findOne({
+      where: { id },
+      relations: { section: true },
+    });
+    if (!block) throw new NotFoundException('Schedule block not found');
+    return block;
+  }
+
   private async assertNoOverlap(params: {
     sectionId: string;
     dayOfWeek: number;
@@ -110,6 +121,7 @@ export class ScheduleBlocksService {
     endTime: string;
     startDate?: string | null;
     endDate?: string | null;
+    zoomMeetingRecordId?: string | null;
     joinUrl?: string | null;
     startUrl?: string | null;
     location?: string | null;
@@ -216,6 +228,7 @@ export class ScheduleBlocksService {
       endTime: body.endTime,
       startDate: body.startDate ?? null,
       endDate: body.endDate ?? null,
+      zoomMeetingRecordId: body.zoomMeetingRecordId ?? null,
       joinUrl: body.joinUrl ?? null,
       startUrl: body.startUrl ?? null,
       location: body.location ?? null,
@@ -234,6 +247,7 @@ export class ScheduleBlocksService {
       endTime: string;
       startDate: string | null;
       endDate: string | null;
+      zoomMeetingRecordId: string | null;
       joinUrl: string | null;
       startUrl: string | null;
       location: string | null;
@@ -252,6 +266,28 @@ export class ScheduleBlocksService {
     });
     if (!block) throw new NotFoundException('Schedule block not found');
 
+    if (this.isMetadataOnlyUpdate(body)) {
+      if (body.joinUrl !== undefined) {
+        block.joinUrl = body.joinUrl ?? null;
+      }
+      if (body.startUrl !== undefined) {
+        block.startUrl = body.startUrl ?? null;
+      }
+      if (body.zoomMeetingRecordId !== undefined) {
+        block.zoomMeetingRecordId = body.zoomMeetingRecordId ?? null;
+      }
+      if (body.location !== undefined) {
+        block.location = body.location ?? null;
+      }
+      if (body.referenceModality !== undefined) {
+        block.referenceModality = body.referenceModality ?? null;
+      }
+      if (body.referenceClassroom !== undefined) {
+        block.referenceClassroom = body.referenceClassroom ?? null;
+      }
+      return this.blocksRepo.save(block);
+    }
+
     const next = {
       courseName: body.courseName ?? block.courseName,
       dayOfWeek: body.dayOfWeek ?? block.dayOfWeek,
@@ -259,6 +295,10 @@ export class ScheduleBlocksService {
       endTime: body.endTime ?? block.endTime,
       startDate: body.startDate !== undefined ? body.startDate : block.startDate,
       endDate: body.endDate !== undefined ? body.endDate : block.endDate,
+      zoomMeetingRecordId:
+        body.zoomMeetingRecordId !== undefined
+          ? body.zoomMeetingRecordId
+          : block.zoomMeetingRecordId,
       joinUrl: body.joinUrl ?? block.joinUrl,
       startUrl: body.startUrl ?? block.startUrl,
       location: body.location ?? block.location,
@@ -352,6 +392,7 @@ export class ScheduleBlocksService {
     block.endTime = next.endTime;
     block.startDate = next.startDate ?? null;
     block.endDate = next.endDate ?? null;
+    block.zoomMeetingRecordId = next.zoomMeetingRecordId ?? null;
     block.joinUrl = next.joinUrl;
     block.startUrl = next.startUrl;
     block.location = next.location;
@@ -361,11 +402,73 @@ export class ScheduleBlocksService {
     return this.blocksRepo.save(block);
   }
 
+  private isMetadataOnlyUpdate(
+    body: Partial<{
+      courseName: string;
+      dayOfWeek: number;
+      startTime: string;
+      endTime: string;
+      startDate: string | null;
+      endDate: string | null;
+      zoomMeetingRecordId: string | null;
+      joinUrl: string | null;
+      startUrl: string | null;
+      location: string | null;
+      referenceModality: string | null;
+      referenceClassroom: string | null;
+      applyToWholeCourse: boolean;
+      applyTeacherToWholeCourse: boolean;
+      scopeFacultyGroup: string | null;
+      scopeCampusName: string | null;
+      scopeCourseName: string | null;
+    }>
+  ) {
+    const touchesScheduleShape =
+      body.courseName !== undefined ||
+      body.dayOfWeek !== undefined ||
+      body.startTime !== undefined ||
+      body.endTime !== undefined ||
+      body.startDate !== undefined ||
+      body.endDate !== undefined ||
+      body.applyToWholeCourse !== undefined ||
+      body.applyTeacherToWholeCourse !== undefined ||
+      body.scopeFacultyGroup !== undefined ||
+      body.scopeCampusName !== undefined ||
+      body.scopeCourseName !== undefined;
+
+    return !touchesScheduleShape;
+  }
+
   async remove(id: string) {
     const block = await this.blocksRepo.findOne({ where: { id } });
     if (!block) throw new NotFoundException('Schedule block not found');
     await this.blocksRepo.remove(block);
     return { ok: true };
+  }
+
+  async refreshMeetingLinks(id: string) {
+    const block = await this.getByIdOrThrow(id);
+    const meetingRecordId = String(block.zoomMeetingRecordId ?? '').trim();
+    if (!meetingRecordId) {
+      const joinUrl = String(block.joinUrl ?? '').trim();
+      const startUrl = String(block.startUrl ?? '').trim();
+      if (!joinUrl && !startUrl) {
+        throw new BadRequestException(
+          'El bloque no tiene una reunion Zoom vinculada ni enlaces guardados.',
+        );
+      }
+      return {
+        joinUrl: joinUrl || null,
+        startUrl: startUrl || null,
+        meetingMode: null,
+      };
+    }
+
+    const refreshed = await this.meetingsService.refreshMeetingLinks(meetingRecordId);
+    block.joinUrl = refreshed.joinUrl ?? null;
+    block.startUrl = refreshed.startUrl ?? null;
+    await this.blocksRepo.save(block);
+    return refreshed;
   }
 
   private async loadActivePeriodIdOrThrow() {

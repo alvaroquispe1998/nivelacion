@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import 'reflect-metadata';
 import { DataSource } from 'typeorm';
 import { createDataSourceOptionsFromEnv } from './app/database/typeorm.options';
@@ -14,4 +15,3 @@ main().catch((err) => {
   console.error(err);
   process.exit(1);
 });
-

@@ -1,7 +1,9 @@
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { ChangeDetectorRef, Component, inject } from '@angular/core';
+import { ActivatedRoute, Router } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
+import { PrivateRouteContextService } from '../core/navigation/private-route-context.service';
 
 interface StudentGradesResponse {
   periodId: string;
@@ -54,8 +56,8 @@ interface StudentGradesResponse {
       {{ error }}
     </div>
 
-    <div class="mt-5 space-y-4" *ngIf="rows.length > 0">
-      <article *ngFor="let row of rows; trackBy: trackRow" class="rounded-2xl border border-slate-200 bg-white p-4">
+    <div class="mt-5 space-y-4" *ngIf="filteredRows.length > 0">
+      <article *ngFor="let row of filteredRows; trackBy: trackRow" class="rounded-2xl border border-slate-200 bg-white p-4">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <div>
             <div class="text-base font-semibold">{{ row.courseName }}</div>
@@ -103,19 +105,37 @@ interface StudentGradesResponse {
       </article>
     </div>
 
-    <div *ngIf="!error && rows.length === 0" class="mt-5 rounded-2xl border border-slate-200 bg-white px-4 py-8 text-center text-slate-600">
-      No hay notas registradas todavía.
+    <div *ngIf="!error && filteredRows.length === 0" class="mt-5 rounded-2xl border border-slate-200 bg-white px-4 py-8 text-center text-slate-600">
+      No hay notas registradas todavia.
     </div>
   `,
 })
 export class StudentGradesPage {
   private readonly http = inject(HttpClient);
   private readonly cdr = inject(ChangeDetectorRef);
+  private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
+  private readonly routeContext = inject(PrivateRouteContextService);
 
   rows: StudentGradesResponse['rows'] = [];
   error: string | null = null;
+  focusSectionCourseId = '';
+
+  get filteredRows() {
+    if (!this.focusSectionCourseId) return this.rows;
+    return this.rows.filter((row) => row.sectionCourseId === this.focusSectionCourseId);
+  }
 
   async ngOnInit() {
+    const context = this.routeContext.getStudentGradesFocus();
+    this.focusSectionCourseId = String(context?.sectionCourseId ?? '').trim();
+    if (this.route.snapshot.queryParamMap.keys.length > 0) {
+      void this.router.navigate([], {
+        relativeTo: this.route,
+        queryParams: {},
+        replaceUrl: true,
+      });
+    }
     await this.load();
   }
 

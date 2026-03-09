@@ -42,10 +42,13 @@ export class ScheduleBlockEntity {
   @Column({ type: 'date', nullable: true })
   endDate!: string | null; // YYYY-MM-DD
 
-  @Column({ type: 'varchar', length: 500, nullable: true })
+  @Column({ type: 'char', length: 36, nullable: true })
+  zoomMeetingRecordId!: string | null;
+
+  @Column({ type: 'varchar', length: 1024, nullable: true })
   joinUrl!: string | null;
 
-  @Column({ type: 'varchar', length: 500, nullable: true })
+  @Column({ type: 'varchar', length: 2048, nullable: true })
   startUrl!: string | null;
 
   @Column({ type: 'varchar', length: 200, nullable: true })

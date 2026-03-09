@@ -15,6 +15,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { WorkshopsService } from './workshops.service';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -58,6 +59,7 @@ export class WorkshopsController {
       careerName?: string;
       deliveryMode?: 'VIRTUAL' | 'PRESENCIAL';
       venueCampusName?: string;
+      responsibleTeacherId?: string | null;
       studentIds?: string[];
     }
   ) {
@@ -80,6 +82,7 @@ export class WorkshopsController {
       careerName?: string;
       deliveryMode?: 'VIRTUAL' | 'PRESENCIAL';
       venueCampusName?: string;
+      responsibleTeacherId?: string | null;
       studentIds?: string[];
     }>
   ) {
@@ -100,13 +103,116 @@ export class WorkshopsController {
     return this.workshopsService.listStudents({ facultyGroup, campusName, careerName });
   }
 
+  @Get(':id/groups')
+  listGroups(@Param('id') id: string) {
+    return this.workshopsService.listGroups(id);
+  }
+
+  @Put(':id/groups')
+  upsertGroups(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      groups: Array<{
+        id?: string;
+        code?: string | null;
+        displayName: string;
+        capacity?: number | null;
+        sortOrder?: number;
+        isActive?: boolean;
+      }>;
+    }
+  ) {
+    return this.workshopsService.upsertGroups(id, body?.groups ?? []);
+  }
+
+  @Post(':id/groups/regenerate')
+  regenerateGroups(@Param('id') id: string) {
+    return this.workshopsService.regenerateGroups(id);
+  }
+
+  @Get(':id/groups/:groupId/schedule')
+  listGroupSchedule(@Param('id') id: string, @Param('groupId') groupId: string) {
+    return this.workshopsService.listGroupSchedule(id, groupId);
+  }
+
+  @Put(':id/groups/:groupId/schedule')
+  updateGroupSchedule(
+    @Param('id') id: string,
+    @Param('groupId') groupId: string,
+    @Body()
+    body: {
+      blocks: Array<{
+        id?: string;
+        dayOfWeek: number;
+        startTime: string;
+        endTime: string;
+        startDate?: string | null;
+        endDate?: string | null;
+        zoomMeetingRecordId?: string | null;
+        joinUrl?: string | null;
+        startUrl?: string | null;
+      }>;
+    }
+  ) {
+    return this.workshopsService.updateGroupSchedule(id, groupId, body?.blocks ?? []);
+  }
+
+  @Put(':id/groups/:groupId/schedule/:blockId/meeting-links')
+  updateGroupScheduleBlockMeetingLinks(
+    @Param('id') id: string,
+    @Param('groupId') groupId: string,
+    @Param('blockId') blockId: string,
+    @Body()
+    body: {
+      zoomMeetingRecordId?: string | null;
+      joinUrl?: string | null;
+      startUrl?: string | null;
+    }
+  ) {
+    return this.workshopsService.updateGroupScheduleBlockMeetingLinks(id, groupId, blockId, body);
+  }
+
+  @Post(':id/groups/:groupId/schedule/:blockId/refresh-meeting-links')
+  refreshGroupScheduleBlockMeetingLinks(
+    @Param('id') id: string,
+    @Param('groupId') groupId: string,
+    @Param('blockId') blockId: string
+  ) {
+    return this.workshopsService.refreshWorkshopGroupScheduleBlockLinksForAdmin(
+      id,
+      groupId,
+      blockId
+    );
+  }
+
+  @Post(':id/assignments/preview')
+  previewAssignments(@Param('id') id: string) {
+    return this.workshopsService.previewAssignments(id);
+  }
+
+  @Post(':id/assignments/run')
+  runAssignments(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.workshopsService.runAssignments(id, String(user?.sub ?? '').trim() || null);
+  }
+
+  @Get(':id/assignments/:runId')
+  getAssignmentRun(@Param('id') id: string, @Param('runId') runId: string) {
+    return this.workshopsService.getAssignmentRun(id, runId);
+  }
+
+  @Get(':id/assignments/:runId/pending')
+  getAssignmentRunPending(@Param('id') id: string, @Param('runId') runId: string) {
+    return this.workshopsService.getAssignmentRunPending(id, runId);
+  }
+
   @Post(':id/preview')
   preview(@Param('id') id: string) {
     return this.workshopsService.preview(id);
   }
 
   @Post(':id/apply')
-  apply(@Param('id') id: string) {
-    return this.workshopsService.apply(id);
+  apply(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.workshopsService.apply(id, String(user?.sub ?? '').trim() || null);
   }
 }

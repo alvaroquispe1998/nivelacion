@@ -1,9 +1,30 @@
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { ChangeDetectorRef, Component, inject } from '@angular/core';
-import type { StudentScheduleItem } from '@uai/shared';
 import { firstValueFrom } from 'rxjs';
 import { StudentWeeklyScheduleComponent } from '../components/student-weekly-schedule.component';
+
+interface StudentScheduleItem {
+  id?: string;
+  kind?: 'COURSE' | 'WORKSHOP';
+  scheduleBlockId?: string | null;
+  zoomMeetingRecordId?: string | null;
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+  courseName: string;
+  sectionName: string;
+  groupName?: string | null;
+  teacherName?: string | null;
+  modality?: string | null;
+  classroomCode?: string | null;
+  classroomName?: string | null;
+  joinUrl?: string | null;
+  startUrl?: string | null;
+  location?: string | null;
+  referenceModality?: string | null;
+  referenceClassroom?: string | null;
+}
 
 @Component({
   standalone: true,

@@ -237,6 +237,21 @@ export class SectionsController {
     return this.sectionsService.listCoursesBySection(id);
   }
 
+  @Get(':id/zoom-context')
+  async getZoomContext(
+    @Param('id') sectionId: string,
+    @Query('courseName') courseName?: string
+  ) {
+    const normalizedCourseName = String(courseName ?? '').trim();
+    if (!normalizedCourseName) {
+      throw new BadRequestException('courseName query param is required');
+    }
+    return this.sectionsService.getZoomContextBySectionAndCourseName(
+      sectionId,
+      normalizedCourseName
+    );
+  }
+
   @Get(':id/students')
   listStudents(@Param('id') id: string, @Query('courseName') courseName?: string) {
     return this.sectionsService.listStudents(id, (courseName ?? '').trim());

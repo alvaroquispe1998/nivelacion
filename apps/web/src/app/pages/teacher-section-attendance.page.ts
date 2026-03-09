@@ -2,10 +2,9 @@ import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { ChangeDetectorRef, Component, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { ActivatedRoute } from '@angular/router';
 import { AttendanceStatus } from '@uai/shared';
-import { combineLatest, firstValueFrom } from 'rxjs';
-import type { Subscription } from 'rxjs';
+import { firstValueFrom } from 'rxjs';
+import { PrivateRouteContextService } from '../core/navigation/private-route-context.service';
 import { DAYS } from '../shared/days';
 
 interface TeacherAssignment {
@@ -200,13 +199,12 @@ interface TeacherRecordRow {
 })
 export class TeacherSectionAttendancePage {
   private readonly http = inject(HttpClient);
-  private readonly route = inject(ActivatedRoute);
   private readonly cdr = inject(ChangeDetectorRef);
+  private readonly routeContext = inject(PrivateRouteContextService);
 
   readonly AttendanceStatus = AttendanceStatus;
   readonly days = DAYS;
   sectionCourseId = '';
-  private routeSub?: Subscription;
 
   assignment: TeacherAssignment | null = null;
   blocks: TeacherScheduleBlock[] = [];
@@ -238,14 +236,9 @@ export class TeacherSectionAttendancePage {
   }
 
   async ngOnInit() {
-    this.routeSub = combineLatest([this.route.paramMap]).subscribe(([params]) => {
-      this.sectionCourseId = String(params.get('sectionCourseId') ?? '').trim();
-      void this.loadAll();
-    });
-  }
-
-  ngOnDestroy() {
-    this.routeSub?.unsubscribe();
+    const context = this.routeContext.getTeacherSectionAttendanceFocus();
+    this.sectionCourseId = String(context?.sectionCourseId ?? '').trim();
+    await this.loadAll();
   }
 
   trackText(_: number, item: string) {
@@ -293,7 +286,7 @@ export class TeacherSectionAttendancePage {
     this.students = [];
 
     if (!this.sectionCourseId) {
-      this.error = 'sectionCourseId invalido';
+      this.error = 'Selecciona un curso desde Mis cursos.';
       this.cdr.detectChanges();
       return;
     }

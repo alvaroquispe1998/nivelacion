@@ -1,8 +1,9 @@
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { ChangeDetectorRef, Component, inject } from '@angular/core';
-import { RouterLink } from '@angular/router';
+import { Router } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
+import { PrivateRouteContextService } from '../core/navigation/private-route-context.service';
 
 interface TeacherAssignment {
   sectionCourseId: string;
@@ -15,7 +16,7 @@ interface TeacherAssignment {
 
 @Component({
   standalone: true,
-  imports: [CommonModule, RouterLink],
+  imports: [CommonModule],
   template: `
     <div class="flex items-center justify-between">
       <div>
@@ -48,12 +49,13 @@ interface TeacherAssignment {
             <td class="px-4 py-3 font-medium">{{ item.sectionCode || item.sectionName }}</td>
             <td class="px-4 py-3">{{ item.courseName }}</td>
             <td class="px-4 py-3">
-              <a
+              <button
+                type="button"
                 class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
-                [routerLink]="['/teacher/grades', item.sectionCourseId]"
+                (click)="openGrades(item)"
               >
                 Abrir
-              </a>
+              </button>
             </td>
           </tr>
           <tr *ngIf="assignments.length === 0" class="border-t border-slate-100">
@@ -67,6 +69,8 @@ interface TeacherAssignment {
 export class TeacherGradesPage {
   private readonly http = inject(HttpClient);
   private readonly cdr = inject(ChangeDetectorRef);
+  private readonly router = inject(Router);
+  private readonly routeContext = inject(PrivateRouteContextService);
 
   assignments: TeacherAssignment[] = [];
   error: string | null = null;
@@ -77,6 +81,13 @@ export class TeacherGradesPage {
 
   trackItem(_: number, item: TeacherAssignment) {
     return item.sectionCourseId;
+  }
+
+  async openGrades(item: TeacherAssignment) {
+    this.routeContext.setTeacherSectionGradesFocus({
+      sectionCourseId: item.sectionCourseId,
+    });
+    await this.router.navigate(['/teacher/section-grades']);
   }
 
   async load() {

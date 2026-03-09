@@ -1,7 +1,37 @@
 import { CommonModule } from '@angular/common';
-import { Component, EventEmitter, Input, Output } from '@angular/core';
-import type { StudentScheduleItem } from '@uai/shared';
+import { HttpClient } from '@angular/common/http';
+import {
+  ChangeDetectorRef,
+  Component,
+  EventEmitter,
+  Input,
+  Output,
+  inject,
+} from '@angular/core';
+import { firstValueFrom } from 'rxjs';
 import { DAYS, minutesFromHHmm } from '../shared/days';
+
+interface StudentScheduleItem {
+  id?: string;
+  kind?: 'COURSE' | 'WORKSHOP';
+  scheduleBlockId?: string | null;
+  zoomMeetingRecordId?: string | null;
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+  courseName: string;
+  sectionName: string;
+  groupName?: string | null;
+  teacherName?: string | null;
+  modality?: string | null;
+  classroomCode?: string | null;
+  classroomName?: string | null;
+  joinUrl?: string | null;
+  startUrl?: string | null;
+  location?: string | null;
+  referenceModality?: string | null;
+  referenceClassroom?: string | null;
+}
 
 @Component({
   selector: 'app-student-weekly-schedule',
@@ -59,7 +89,11 @@ import { DAYS, minutesFromHHmm } from '../shared/days';
             <ng-container *ngFor="let item of items">
               <button
                 type="button"
-                class="m-0.5 rounded-lg bg-sky-600 px-2 py-1 text-[11px] font-semibold text-white shadow-sm hover:bg-sky-700"
+                class="m-0.5 rounded-lg px-2 py-1 text-[11px] font-semibold text-white shadow-sm"
+                [class.bg-sky-600]="itemKind(item) === 'COURSE'"
+                [class.hover:bg-sky-700]="itemKind(item) === 'COURSE'"
+                [class.bg-emerald-600]="itemKind(item) === 'WORKSHOP'"
+                [class.hover:bg-emerald-700]="itemKind(item) === 'WORKSHOP'"
                 [style.gridColumn]="gridCol(item)"
                 [style.gridRow]="gridRow(item)"
                 (click)="selectItem(item)"
@@ -68,7 +102,7 @@ import { DAYS, minutesFromHHmm } from '../shared/days';
                 <div class="font-normal opacity-90">
                   {{ item.startTime }}-{{ item.endTime }}
                   <span class="opacity-80">|</span>
-                  {{ item.sectionName }}
+                  {{ secondaryLabel(item) }}
                 </div>
               </button>
             </ng-container>
@@ -87,7 +121,9 @@ import { DAYS, minutesFromHHmm } from '../shared/days';
         (click)="$event.stopPropagation()"
       >
         <div class="flex items-start justify-between gap-3">
-          <div class="text-base font-semibold text-slate-900">Detalle de curso</div>
+          <div class="text-base font-semibold text-slate-900">
+            Detalle de {{ itemKind(selectedItem) === 'WORKSHOP' ? 'taller' : 'curso' }}
+          </div>
           <button
             type="button"
             class="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-semibold hover:bg-slate-50"
@@ -97,16 +133,41 @@ import { DAYS, minutesFromHHmm } from '../shared/days';
           </button>
         </div>
         <div class="mt-3 space-y-1 text-sm text-slate-700">
-          <div><b>Curso:</b> {{ selectedItem.courseName }}</div>
+          <div>
+            <b>{{ itemKind(selectedItem) === 'WORKSHOP' ? 'Taller' : 'Curso' }}:</b>
+            {{ selectedItem.courseName }}
+          </div>
+          <div>
+            <b>{{ itemKind(selectedItem) === 'WORKSHOP' ? 'Grupo' : 'Seccion' }}:</b>
+            {{ secondaryLabel(selectedItem) }}
+          </div>
           <div><b>Dia:</b> {{ dayLabel(selectedItem.dayOfWeek) }}</div>
           <div><b>Hora:</b> {{ selectedItem.startTime }}-{{ selectedItem.endTime }}</div>
           <div><b>Docente:</b> {{ selectedItem.teacherName || 'Sin docente asignado' }}</div>
+          <div>
+            <b>Tipo:</b> {{ itemKind(selectedItem) === 'WORKSHOP' ? 'Taller' : 'Curso' }}
+          </div>
           <div *ngIf="isVirtualItem(selectedItem)"><b>Modalidad:</b> Virtual</div>
           <div *ngIf="!isVirtualItem(selectedItem)"><b>Aula:</b> {{ classroomLabel(selectedItem) }}</div>
         </div>
+        <div
+          *ngIf="detailError"
+          class="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700"
+        >
+          {{ detailError }}
+        </div>
         <div class="mt-4 flex flex-wrap items-center gap-2">
+          <button
+            *ngIf="itemKind(selectedItem) === 'WORKSHOP'"
+            type="button"
+            class="inline-block rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50 disabled:opacity-50"
+            (click)="joinWorkshop(selectedItem)"
+            [disabled]="!canJoinWorkshop(selectedItem) || workshopJoinLoading"
+          >
+            {{ workshopJoinLoading ? 'Uniendo...' : 'Unirse a taller' }}
+          </button>
           <a
-            *ngIf="selectedItem.joinUrl"
+            *ngIf="itemKind(selectedItem) !== 'WORKSHOP' && selectedItem.joinUrl"
             class="inline-block rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
             [href]="selectedItem.joinUrl"
             target="_blank"
@@ -115,7 +176,7 @@ import { DAYS, minutesFromHHmm } from '../shared/days';
             Abrir enlace de clase
           </a>
           <button
-            *ngIf="selectedItem.startUrl"
+            *ngIf="itemKind(selectedItem) !== 'WORKSHOP' && selectedItem.startUrl"
             type="button"
             class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
             (click)="copyStartUrl(selectedItem.startUrl)"
@@ -135,6 +196,9 @@ import { DAYS, minutesFromHHmm } from '../shared/days';
   `,
 })
 export class StudentWeeklyScheduleComponent {
+  private readonly http = inject(HttpClient);
+  private readonly cdr = inject(ChangeDetectorRef);
+
   @Input() title = '';
   @Input() subtitle = '';
   @Input() showRefresh = false;
@@ -144,6 +208,8 @@ export class StudentWeeklyScheduleComponent {
 
   days = DAYS;
   selectedItem: StudentScheduleItem | null = null;
+  detailError: string | null = null;
+  workshopJoinLoading = false;
 
   startMinutes = 6 * 60;
   endMinutes = 22 * 60;
@@ -184,11 +250,14 @@ export class StudentWeeklyScheduleComponent {
   }
 
   selectItem(item: StudentScheduleItem) {
+    this.detailError = null;
     this.selectedItem = item;
   }
 
   closeDetail() {
     this.selectedItem = null;
+    this.detailError = null;
+    this.workshopJoinLoading = false;
   }
 
   async copyStartUrl(url?: string | null) {
@@ -198,6 +267,48 @@ export class StudentWeeklyScheduleComponent {
       await navigator.clipboard.writeText(value);
     } catch {
       // ignore
+    }
+  }
+
+  canJoinWorkshop(item: StudentScheduleItem | null | undefined) {
+    return this.itemKind(item) === 'WORKSHOP' && Boolean(
+      String(item?.joinUrl ?? '').trim() ||
+      String(item?.zoomMeetingRecordId ?? '').trim()
+    );
+  }
+
+  async joinWorkshop(item: StudentScheduleItem | null | undefined) {
+    if (!item || !this.canJoinWorkshop(item)) return;
+    const blockId = String(item.scheduleBlockId ?? item.id ?? '').trim();
+    if (!blockId) return;
+    this.detailError = null;
+    this.workshopJoinLoading = true;
+    const popup = typeof window !== 'undefined'
+      ? window.open('about:blank', '_blank')
+      : null;
+    try {
+      const links = await firstValueFrom(
+        this.http.post<{ joinUrl: string | null }>(
+          `/api/student/workshop-schedule-blocks/${encodeURIComponent(blockId)}/refresh-join-link`,
+          {}
+        )
+      );
+      const joinUrl = String(links.joinUrl ?? '').trim();
+      if (!joinUrl) {
+        throw new Error('No se pudo obtener un enlace vigente para el taller.');
+      }
+      this.selectedItem = {
+        ...item,
+        joinUrl,
+      };
+      this.navigatePopupToUrl(popup, joinUrl);
+    } catch (e: any) {
+      popup?.close();
+      this.detailError =
+        e?.error?.message ?? 'No se pudo abrir un enlace actualizado para el taller.';
+    } finally {
+      this.workshopJoinLoading = false;
+      this.cdr.detectChanges();
     }
   }
 
@@ -237,8 +348,40 @@ export class StudentWeeklyScheduleComponent {
     return 'Sin aula asignada';
   }
 
+  itemKind(item: StudentScheduleItem | null | undefined) {
+    return String(item?.kind ?? 'COURSE').trim().toUpperCase() === 'WORKSHOP'
+      ? 'WORKSHOP'
+      : 'COURSE';
+  }
+
+  secondaryLabel(item: StudentScheduleItem | null | undefined) {
+    if (this.itemKind(item) === 'WORKSHOP') {
+      return String(item?.groupName ?? item?.sectionName ?? '').trim() || 'Grupo';
+    }
+    return String(item?.sectionName ?? '').trim() || 'Seccion';
+  }
+
   private safeMinutes(value: string, fallback: number) {
     const minutes = minutesFromHHmm(value);
     return Number.isFinite(minutes) ? minutes : fallback;
+  }
+
+  private navigatePopupToUrl(popup: Window | null, url: string) {
+    if (popup) {
+      try {
+        popup.opener = null;
+      } catch {}
+      try {
+        popup.location.replace(url);
+        return;
+      } catch {}
+      try {
+        popup.location.href = url;
+        return;
+      } catch {}
+    }
+    if (typeof window !== 'undefined') {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
   }
 }

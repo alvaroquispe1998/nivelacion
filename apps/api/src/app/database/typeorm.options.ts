@@ -14,6 +14,7 @@ import { SectionCourseTeacherEntity } from '../sections/section-course-teacher.e
 import { SectionEntity } from '../sections/section.entity';
 import { TeacherEntity } from '../teachers/teacher.entity';
 import { UserEntity } from '../users/user.entity';
+import { StudentEnrollmentEntity } from '../users/student-enrollment.entity';
 import { Init001Migration1760000000000 } from './migrations/001-init.migration';
 import { AcademicCatalogs002Migration1761000000000 } from './migrations/002-academic-catalogs.migration';
 import { AcademicCatalogsEnglish003Migration1761100000000 } from './migrations/003-academic-catalogs-english.migration';
@@ -60,6 +61,17 @@ import { ZoomHostEntity } from '../management-zoom/entities/zoom-host.entity';
 import { ZoomMeetingEntity } from '../management-zoom/entities/zoom-meeting.entity';
 import { ZoomManagement039Migration1774300000000 } from './migrations/039-zoom-management.migration';
 import { VirtualCapacityFlag042Migration1774500000000 } from './migrations/042-virtual-capacity-flag.migration';
+import { WorkshopsPersistenceMigration1774600000000 } from './migrations/042-workshops-persistence.migration';
+import { UsersCampusName043Migration1774700000000 } from './migrations/043-users-campus-name.migration';
+import { WorkshopGroupsSchedule044Migration1774800000000 } from './migrations/044-workshop-groups-schedule.migration';
+import { StudentEnrollments045Migration1763300000000 } from './migrations/045-student-enrollments.migration';
+import { WorkshopIntelligentAssignment046Migration1774900000000 } from './migrations/046-workshop-intelligent-assignment.migration';
+import { ZoomRecurrence047Migration1775100000000 } from './migrations/047-zoom-recurrence.migration';
+import { WorkshopResponsibleTeacher048Migration1775200000000 } from './migrations/048-workshop-responsible-teacher.migration';
+import { ScheduleBlockZoomUrlLengths049Migration1775300000000 } from './migrations/049-schedule-block-zoom-url-lengths.migration';
+import { WorkshopAttendance050Migration1775400000000 } from './migrations/050-workshop-attendance.migration';
+import { ScheduleBlockZoomMeetingRecord051Migration1775500000000 } from './migrations/051-schedule-block-zoom-meeting-record.migration';
+import { WorkshopGroupScheduleZoomLinks052Migration1775600000000 } from './migrations/052-workshop-group-schedule-zoom-links.migration';
 
 export const TYPEORM_ENTITIES = [
   UserEntity,
@@ -78,6 +90,7 @@ export const TYPEORM_ENTITIES = [
   ZoomHostGroupEntity,
   ZoomHostEntity,
   ZoomMeetingEntity,
+  StudentEnrollmentEntity,
 ];
 
 export const TYPEORM_MIGRATIONS = [
@@ -123,6 +136,17 @@ export const TYPEORM_MIGRATIONS = [
   WorkshopsMigration1774400000000,
   WorkshopsFiltersJson1774400000001,
   VirtualCapacityFlag042Migration1774500000000,
+  WorkshopsPersistenceMigration1774600000000,
+  UsersCampusName043Migration1774700000000,
+  WorkshopGroupsSchedule044Migration1774800000000,
+  StudentEnrollments045Migration1763300000000,
+  WorkshopIntelligentAssignment046Migration1774900000000,
+  ZoomRecurrence047Migration1775100000000,
+  WorkshopResponsibleTeacher048Migration1775200000000,
+  ScheduleBlockZoomUrlLengths049Migration1775300000000,
+  WorkshopAttendance050Migration1775400000000,
+  ScheduleBlockZoomMeetingRecord051Migration1775500000000,
+  WorkshopGroupScheduleZoomLinks052Migration1775600000000,
 ];
 
 export function createDataSourceOptionsFromEnv(): DataSourceOptions {

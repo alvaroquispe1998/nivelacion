@@ -1,16 +1,13 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { AttendanceRecordEntity } from '../attendance/attendance-record.entity';
 import { ScheduleBlockEntity } from '../schedule-blocks/schedule-block.entity';
 
 @Injectable()
 export class StudentService {
   constructor(
     @InjectRepository(ScheduleBlockEntity)
-    private readonly blocksRepo: Repository<ScheduleBlockEntity>,
-    @InjectRepository(AttendanceRecordEntity)
-    private readonly recordsRepo: Repository<AttendanceRecordEntity>
+    private readonly blocksRepo: Repository<ScheduleBlockEntity>
   ) {}
 
   async getSchedule(studentId: string) {
@@ -78,6 +75,7 @@ export class StudentService {
     );
 
     return rows.map((row) => ({
+      kind: 'COURSE' as const,
       dayOfWeek: Number(row.dayOfWeek ?? 0),
       startTime: this.toHHmm(row.startTime),
       endTime: this.toHHmm(row.endTime),
@@ -96,35 +94,97 @@ export class StudentService {
       referenceClassroom: row.referenceClassroom
         ? String(row.referenceClassroom)
         : null,
+      sectionCourseId: null,
+      applicationId: null,
+      applicationGroupId: null,
+      groupName: null,
     }));
   }
 
   async getAttendance(studentId: string) {
     const activePeriodId = await this.loadActivePeriodIdOrThrow();
-    const records = await this.recordsRepo
-      .createQueryBuilder('r')
-      .innerJoinAndSelect('r.attendanceSession', 's')
-      .innerJoinAndSelect('s.scheduleBlock', 'b')
-      .where('r.studentId = :studentId', { studentId })
-      .andWhere('b.sectionCourseId IS NOT NULL')
-      .andWhere(
-        `
-        EXISTS (
-          SELECT 1
-          FROM section_courses sc
-          WHERE sc.id = b.sectionCourseId
-            AND sc.periodId = :periodId
-        )
-        `,
-        { periodId: activePeriodId }
-      )
-      .orderBy('s.sessionDate', 'DESC')
-      .getMany();
+    const rows: Array<{
+      courseName: string;
+      sessionDate: string;
+      status: string;
+      sectionCourseId: string;
+      sectionName: string;
+    }> = await this.blocksRepo.manager.query(
+      `
+      SELECT
+        b.courseName AS courseName,
+        s.sessionDate AS sessionDate,
+        r.status AS status,
+        b.sectionCourseId AS sectionCourseId,
+        sec.name AS sectionName
+      FROM attendance_records r
+      INNER JOIN attendance_sessions s ON s.id = r.attendanceSessionId
+      INNER JOIN schedule_blocks b ON b.id = s.scheduleBlockId
+      INNER JOIN section_courses sc ON sc.id = b.sectionCourseId
+      INNER JOIN sections sec ON sec.id = sc.sectionId
+      WHERE r.studentId = ?
+        AND sc.periodId = ?
+      ORDER BY s.sessionDate DESC, b.courseName ASC
+      `,
+      [studentId, activePeriodId]
+    );
 
-    return records.map((r) => ({
-      courseName: r.attendanceSession.scheduleBlock.courseName,
-      sessionDate: r.attendanceSession.sessionDate,
-      status: r.status,
+    return rows.map((row) => ({
+      kind: 'COURSE' as const,
+      courseName: String(row.courseName ?? ''),
+      sessionDate: this.normalizeIsoDate(row.sessionDate),
+      status: String(row.status ?? 'FALTO'),
+      sectionCourseId: String(row.sectionCourseId ?? ''),
+      sectionName: String(row.sectionName ?? ''),
+      applicationId: null,
+      applicationGroupId: null,
+      groupName: null,
+    }));
+  }
+
+  async listCourses(studentId: string) {
+    const activePeriodId = await this.loadActivePeriodIdOrThrow();
+    const rows: Array<{
+      sectionCourseId: string;
+      sectionId: string;
+      sectionName: string;
+      sectionCode: string | null;
+      courseId: string;
+      courseName: string;
+    }> = await this.blocksRepo.manager.query(
+      `
+      SELECT
+        sc.id AS sectionCourseId,
+        s.id AS sectionId,
+        s.name AS sectionName,
+        s.code AS sectionCode,
+        c.id AS courseId,
+        c.name AS courseName
+      FROM section_student_courses ssc
+      INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
+      INNER JOIN sections s ON s.id = sc.sectionId
+      INNER JOIN courses c ON c.id = sc.courseId
+      WHERE ssc.studentId = ?
+        AND sc.periodId = ?
+      ORDER BY
+        CASE
+          WHEN UPPER(COALESCE(s.modality, '')) LIKE '%PRESENCIAL%' THEN 0
+          WHEN UPPER(COALESCE(s.modality, '')) LIKE '%VIRTUAL%' THEN 1
+          ELSE 2
+        END,
+        s.code ASC,
+        s.name ASC,
+        c.name ASC
+      `,
+      [studentId, activePeriodId]
+    );
+    return rows.map((row) => ({
+      sectionCourseId: String(row.sectionCourseId),
+      sectionId: String(row.sectionId),
+      sectionName: String(row.sectionName ?? ''),
+      sectionCode: row.sectionCode ? String(row.sectionCode) : null,
+      courseId: String(row.courseId),
+      courseName: String(row.courseName ?? ''),
     }));
   }
 
@@ -153,5 +213,15 @@ export class StudentService {
     const mm = Number(match[2]);
     if (!Number.isFinite(hh) || !Number.isFinite(mm)) return text;
     return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+  }
+
+  private normalizeIsoDate(value: unknown) {
+    const text = String(value ?? '').trim();
+    if (!text) return '';
+    const direct = text.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (direct) return direct[1];
+    const parsed = new Date(text);
+    if (Number.isNaN(parsed.getTime())) return text;
+    return parsed.toISOString().slice(0, 10);
   }
 }

@@ -33,6 +33,8 @@ export class MeetingsController {
       startTime: dto.start_time,
       endTime: dto.end_time,
       timezone: dto.timezone,
+      meetingMode: dto.meeting_mode,
+      recurrence: dto.recurrence,
       groupId: dto.groupId,
       periodId: dto.periodId,
     });

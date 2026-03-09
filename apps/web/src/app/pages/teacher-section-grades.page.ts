@@ -2,9 +2,9 @@ import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { ChangeDetectorRef, Component, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { ActivatedRoute } from '@angular/router';
 import { SectionCourseGradesResponse } from '@uai/shared';
-import { combineLatest, firstValueFrom, Subscription } from 'rxjs';
+import { firstValueFrom } from 'rxjs';
+import { PrivateRouteContextService } from '../core/navigation/private-route-context.service';
 
 @Component({
   standalone: true,
@@ -115,9 +115,8 @@ import { combineLatest, firstValueFrom, Subscription } from 'rxjs';
 })
 export class TeacherSectionGradesPage {
   private readonly http = inject(HttpClient);
-  private readonly route = inject(ActivatedRoute);
   private readonly cdr = inject(ChangeDetectorRef);
-  private routeSub?: Subscription;
+  private readonly routeContext = inject(PrivateRouteContextService);
 
   sectionCourseId = '';
   sectionGrades: SectionCourseGradesResponse | null = null;
@@ -142,14 +141,9 @@ export class TeacherSectionGradesPage {
   }
 
   ngOnInit() {
-    this.routeSub = combineLatest([this.route.paramMap]).subscribe(([params]) => {
-      this.sectionCourseId = String(params.get('sectionCourseId') ?? '').trim();
-      void this.load();
-    });
-  }
-
-  ngOnDestroy() {
-    this.routeSub?.unsubscribe();
+    const context = this.routeContext.getTeacherSectionGradesFocus();
+    this.sectionCourseId = String(context?.sectionCourseId ?? '').trim();
+    void this.load();
   }
 
   trackComponent(_: number, item: { id: string }) {

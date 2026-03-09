@@ -3841,6 +3841,8 @@ export class LevelingService {
             email: s.email,
             sex: s.sex,
             careerName: s.careerName || null,
+            campusName: s.campusName || null,
+            facultyGroup: s.facultyGroup || null,
             examDate: s.examDate || null,
             role: Role.ALUMNO,
             passwordHash: null,
@@ -3892,6 +3894,14 @@ export class LevelingService {
         }
         if (s.examDate && existing.examDate !== s.examDate) {
           existing.examDate = s.examDate;
+          dirty = true;
+        }
+        if (s.campusName && (existing as any).campusName !== s.campusName) {
+          (existing as any).campusName = s.campusName;
+          dirty = true;
+        }
+        if (s.facultyGroup && (existing as any).facultyGroup !== s.facultyGroup) {
+          (existing as any).facultyGroup = s.facultyGroup;
           dirty = true;
         }
 
@@ -4101,6 +4111,22 @@ export class LevelingService {
         .map(([, row]) => row);
       await this.bulkInsertLevelingRunDemandsIgnore(manager, demandRowsToInsert);
 
+      // --- NEW: Track Student Enrollment Profile for this period ---
+      const enrollmentRows = sourceStudents.map(s => {
+        const savedUser = studentByDni.get(s.dni);
+        return {
+          id: randomUUID(),
+          periodId: activePeriodId,
+          studentId: savedUser?.id ?? '',
+          facultyGroup: s.facultyGroup,
+          campusName: s.campusName,
+          careerName: s.careerName,
+        };
+      }).filter(e => e.studentId);
+
+      await this.bulkUpsertStudentEnrollments(manager, enrollmentRows);
+      // -----------------------------------------------------------
+
       return {
         runId,
         runStatus: 'STRUCTURED',
@@ -4185,6 +4211,8 @@ export class LevelingService {
             email: s.email,
             sex: s.sex,
             careerName: s.careerName || null,
+            campusName: s.campusName || null,
+            facultyGroup: s.facultyGroup || null,
             role: Role.ALUMNO,
             passwordHash: null,
           });
@@ -4231,6 +4259,14 @@ export class LevelingService {
         }
         if (s.careerName && existing.careerName !== s.careerName) {
           existing.careerName = s.careerName;
+          dirty = true;
+        }
+        if (s.campusName && (existing as any).campusName !== s.campusName) {
+          (existing as any).campusName = s.campusName;
+          dirty = true;
+        }
+        if (s.facultyGroup && (existing as any).facultyGroup !== s.facultyGroup) {
+          (existing as any).facultyGroup = s.facultyGroup;
           dirty = true;
         }
 
@@ -4310,6 +4346,21 @@ export class LevelingService {
       const demandRowsToInsert = Array.from(demandCandidates.entries())
         .filter(([key]) => !existingDemandKeys.has(key))
         .map(([, row]) => row);
+
+      // --- SNAPSHOT ENROLLMENTS FOR THIS PERIOD ---
+      const enrollmentRows = params.students.map((s) => {
+        const savedUser = studentByDni.get(s.dni);
+        return {
+          id: randomUUID(),
+          periodId: run.periodId,
+          studentId: savedUser?.id ?? '',
+          facultyGroup: s.facultyGroup,
+          campusName: s.campusName,
+          careerName: s.careerName,
+        };
+      }).filter((e) => e.studentId);
+      await this.bulkUpsertStudentEnrollments(manager, enrollmentRows);
+      // ---------------------------------------------
 
       // Detectar facultades candidatas y si todas son nuevas en la corrida
       const existingFacultyRows: Array<{ facultyGroup: string | null }> = await manager.query(
@@ -6449,6 +6500,52 @@ export class LevelingService {
           updatedAt
         )
         VALUES ${placeholders}
+        `,
+        params
+      );
+    }
+  }
+
+  private async bulkUpsertStudentEnrollments(
+    manager: EntityManager,
+    rows: Array<{
+      id: string;
+      periodId: string;
+      studentId: string;
+      facultyGroup: string | null;
+      campusName: string | null;
+      careerName: string | null;
+    }>
+  ) {
+    if (rows.length === 0) return;
+    const batchSize = 1000;
+    for (let i = 0; i < rows.length; i += batchSize) {
+      const batch = rows.slice(i, i + batchSize);
+      const placeholders = batch
+        .map(() => '(?, ?, ?, ?, ?, ?, NOW(6), NOW(6))')
+        .join(', ');
+      const params: Array<string | null> = [];
+      for (const row of batch) {
+        params.push(
+          row.id,
+          row.periodId,
+          row.studentId,
+          row.facultyGroup,
+          row.campusName,
+          row.careerName
+        );
+      }
+      await manager.query(
+        `
+        INSERT INTO student_enrollments (
+          id, periodId, studentId, facultyGroup, campusName, careerName, createdAt, updatedAt
+        )
+        VALUES ${placeholders}
+        ON DUPLICATE KEY UPDATE
+          facultyGroup = VALUES(facultyGroup),
+          campusName = VALUES(campusName),
+          careerName = VALUES(careerName),
+          updatedAt = NOW(6)
         `,
         params
       );

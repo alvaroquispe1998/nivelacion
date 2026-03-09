@@ -31,6 +31,24 @@ export const appRoutes: Route[] = [
           ),
       },
       {
+        path: 'student/courses',
+        canActivate: [roleGuard],
+        data: { roles: [Role.ALUMNO] },
+        loadComponent: () =>
+          import('./pages/student-courses.page').then(
+            (m) => m.StudentCoursesPage
+          ),
+      },
+      {
+        path: 'student/workshops',
+        canActivate: [roleGuard],
+        data: { roles: [Role.ALUMNO] },
+        loadComponent: () =>
+          import('./pages/student-workshops.page').then(
+            (m) => m.StudentWorkshopsPage
+          ),
+      },
+      {
         path: 'student/attendance',
         canActivate: [roleGuard],
         data: { roles: [Role.ALUMNO] },
@@ -58,6 +76,33 @@ export const appRoutes: Route[] = [
           ),
       },
       {
+        path: 'teacher/courses',
+        canActivate: [roleGuard],
+        data: { roles: [Role.DOCENTE] },
+        loadComponent: () =>
+          import('./pages/teacher-courses.page').then(
+            (m) => m.TeacherCoursesPage
+          ),
+      },
+      {
+        path: 'teacher/workshops',
+        canActivate: [roleGuard],
+        data: { roles: [Role.DOCENTE] },
+        loadComponent: () =>
+          import('./pages/teacher-workshops.page').then(
+            (m) => m.TeacherWorkshopsPage
+          ),
+      },
+      {
+        path: 'teacher/workshop-attendance',
+        canActivate: [roleGuard],
+        data: { roles: [Role.DOCENTE] },
+        loadComponent: () =>
+          import('./pages/teacher-workshop-attendance.page').then(
+            (m) => m.TeacherWorkshopAttendancePage
+          ),
+      },
+      {
         path: 'teacher/attendance',
         canActivate: [roleGuard],
         data: { roles: [Role.DOCENTE] },
@@ -67,7 +112,7 @@ export const appRoutes: Route[] = [
           ),
       },
       {
-        path: 'teacher/attendance/:sectionCourseId',
+        path: 'teacher/section-attendance',
         canActivate: [roleGuard],
         data: { roles: [Role.DOCENTE] },
         loadComponent: () =>
@@ -85,7 +130,7 @@ export const appRoutes: Route[] = [
           ),
       },
       {
-        path: 'teacher/grades/:sectionCourseId',
+        path: 'teacher/section-grades',
         canActivate: [roleGuard],
         data: { roles: [Role.DOCENTE] },
         loadComponent: () =>
@@ -247,6 +292,42 @@ export const appRoutes: Route[] = [
         loadComponent: () =>
           import('./pages/admin-workshops.page').then(
             (m) => m.AdminWorkshopsPage
+          ),
+      },
+      {
+        path: 'admin/workshops/new',
+        canActivate: [roleGuard],
+        data: { roles: ADMIN_BACKOFFICE_ROLES },
+        loadComponent: () =>
+          import('./pages/admin-workshop-editor.page').then(
+            (m) => m.AdminWorkshopEditorPage
+          ),
+      },
+      {
+        path: 'admin/workshops/:id/edit',
+        canActivate: [roleGuard],
+        data: { roles: ADMIN_BACKOFFICE_ROLES },
+        loadComponent: () =>
+          import('./pages/admin-workshop-editor.page').then(
+            (m) => m.AdminWorkshopEditorPage
+          ),
+      },
+      {
+        path: 'admin/workshops/:id/groups',
+        canActivate: [roleGuard],
+        data: { roles: ADMIN_BACKOFFICE_ROLES },
+        loadComponent: () =>
+          import('./pages/admin-workshop-groups.page').then(
+            (m) => m.AdminWorkshopGroupsPage
+          ),
+      },
+      {
+        path: 'admin/workshops/:id/preview',
+        canActivate: [roleGuard],
+        data: { roles: ADMIN_BACKOFFICE_ROLES },
+        loadComponent: () =>
+          import('./pages/admin-workshop-preview.page').then(
+            (m) => m.AdminWorkshopPreviewPage
           ),
       },
       {

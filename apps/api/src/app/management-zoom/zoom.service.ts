@@ -23,6 +23,23 @@ interface ZoomMeetingListResponse {
   meetings: ZoomMeetingResponse[];
 }
 
+export interface ZoomMeetingCreateBody {
+  topic: string;
+  agenda?: string;
+  start_time: string;
+  duration: number;
+  timezone: string;
+  meeting_mode?: 'ONE_TIME' | 'RECURRING';
+  recurrence?: {
+    type: 'WEEKLY';
+    repeat_interval: number;
+    weekly_days: number[];
+    end_mode: 'UNTIL_DATE' | 'BY_COUNT';
+    end_date?: string;
+    end_times?: number;
+  };
+}
+
 export interface ZoomRecordingFile {
   id: string;
   file_type: string;
@@ -267,34 +284,48 @@ export class ZoomService {
     return all;
   }
 
-  /** Create a scheduled meeting for a specific host */
+  /** Create a one-time or recurring meeting for a specific host */
   async createMeeting(
     hostEmail: string,
-    body: {
-      topic: string;
-      agenda?: string;
-      start_time: string;
-      duration: number;
-      timezone: string;
-    },
+    body: ZoomMeetingCreateBody,
   ): Promise<ZoomMeetingResponse> {
+    const recurrenceInput =
+      body.meeting_mode === 'RECURRING' ? body.recurrence : undefined;
+    const recurrence = recurrenceInput
+      ? {
+          type: 2,
+          repeat_interval: recurrenceInput.repeat_interval,
+          weekly_days: recurrenceInput.weekly_days.join(','),
+          ...(recurrenceInput.end_mode === 'UNTIL_DATE'
+            ? { end_date_time: recurrenceInput.end_date }
+            : { end_times: recurrenceInput.end_times }),
+        }
+      : undefined;
+
     return this.zoomFetch<ZoomMeetingResponse>(
       `/users/${encodeURIComponent(hostEmail)}/meetings`,
       {
         method: 'POST',
         body: JSON.stringify({
           topic: body.topic,
-          type: 2, // scheduled
+          type: recurrence ? 8 : 2,
           start_time: body.start_time,
           duration: body.duration,
           timezone: body.timezone,
           agenda: body.agenda ?? '',
+          ...(recurrence ? { recurrence } : {}),
           settings: {
             join_before_host: true,
             waiting_room: false,
           },
         }),
       },
+    );
+  }
+
+  async getMeeting(meetingId: string | number): Promise<ZoomMeetingResponse> {
+    return this.zoomFetch<ZoomMeetingResponse>(
+      `/meetings/${encodeURIComponent(String(meetingId))}`,
     );
   }
 

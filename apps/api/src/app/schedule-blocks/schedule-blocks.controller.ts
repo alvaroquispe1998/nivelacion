@@ -43,6 +43,7 @@ export class ScheduleBlocksController {
       endTime: b.endTime,
       startDate: b.startDate,
       endDate: b.endDate,
+      zoomMeetingRecordId: b.zoomMeetingRecordId,
       joinUrl: b.joinUrl,
       startUrl: b.startUrl,
       location: b.location,
@@ -62,6 +63,7 @@ export class ScheduleBlocksController {
       endTime: dto.endTime,
       startDate: dto.startDate ?? null,
       endDate: dto.endDate ?? null,
+      zoomMeetingRecordId: dto.zoomMeetingRecordId ?? null,
       joinUrl: dto.joinUrl ?? null,
       startUrl: dto.startUrl ?? null,
       location: dto.location ?? null,
@@ -83,6 +85,7 @@ export class ScheduleBlocksController {
       endTime: block.endTime,
       startDate: block.startDate,
       endDate: block.endDate,
+      zoomMeetingRecordId: block.zoomMeetingRecordId,
       joinUrl: block.joinUrl,
       startUrl: block.startUrl,
       location: block.location,
@@ -98,18 +101,19 @@ export class ScheduleBlocksController {
       dayOfWeek: dto.dayOfWeek,
       startTime: dto.startTime,
       endTime: dto.endTime,
-      startDate: dto.startDate ?? null,
-      endDate: dto.endDate ?? null,
-      joinUrl: dto.joinUrl ?? null,
-      startUrl: dto.startUrl ?? null,
-      location: dto.location ?? null,
-      referenceModality: dto.referenceModality ?? null,
-      referenceClassroom: dto.referenceClassroom ?? null,
-      applyToWholeCourse: Boolean(dto.applyToWholeCourse),
-      applyTeacherToWholeCourse: Boolean(dto.applyTeacherToWholeCourse),
-      scopeFacultyGroup: dto.scopeFacultyGroup ?? null,
-      scopeCampusName: dto.scopeCampusName ?? null,
-      scopeCourseName: dto.scopeCourseName ?? null,
+      startDate: dto.startDate,
+      endDate: dto.endDate,
+      zoomMeetingRecordId: dto.zoomMeetingRecordId,
+      joinUrl: dto.joinUrl,
+      startUrl: dto.startUrl,
+      location: dto.location,
+      referenceModality: dto.referenceModality,
+      referenceClassroom: dto.referenceClassroom,
+      applyToWholeCourse: dto.applyToWholeCourse,
+      applyTeacherToWholeCourse: dto.applyTeacherToWholeCourse,
+      scopeFacultyGroup: dto.scopeFacultyGroup,
+      scopeCampusName: dto.scopeCampusName,
+      scopeCourseName: dto.scopeCourseName,
     });
     return {
       id: block.id,
@@ -121,6 +125,7 @@ export class ScheduleBlocksController {
       endTime: block.endTime,
       startDate: block.startDate,
       endDate: block.endDate,
+      zoomMeetingRecordId: block.zoomMeetingRecordId,
       joinUrl: block.joinUrl,
       startUrl: block.startUrl,
       location: block.location,
@@ -132,5 +137,10 @@ export class ScheduleBlocksController {
   @Delete(':id')
   remove(@Param('id') id: string) {
     return this.blocksService.remove(id);
+  }
+
+  @Post(':id/refresh-meeting-links')
+  refreshMeetingLinks(@Param('id') id: string) {
+    return this.blocksService.refreshMeetingLinks(id);
   }
 }

@@ -287,6 +287,14 @@ export class PeriodsService {
       `,
       [periodId]
     );
+
+    await manager.query(
+      `
+      DELETE FROM student_enrollments
+      WHERE periodId = ?
+      `,
+      [periodId]
+    );
   }
 
 }

@@ -2,12 +2,13 @@ import { CommonModule } from '@angular/common';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { ChangeDetectorRef, Component, inject } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
-import { ActivatedRoute } from '@angular/router';
-import type { AdminScheduleBlock, AdminSection } from '@uai/shared';
+import { ActivatedRoute, Router } from '@angular/router';
+import { Role, type AdminScheduleBlock, type AdminSection } from '@uai/shared';
 import { combineLatest, firstValueFrom, skip } from 'rxjs';
 import type { Subscription } from 'rxjs';
+import { AuthService } from '../core/auth/auth.service';
 import { AdminPeriodContextService } from '../core/workflow/admin-period-context.service';
-import { DAYS } from '../shared/days';
+import { DAYS, minutesFromHHmm } from '../shared/days';
 import { WorkflowStateService } from '../core/workflow/workflow-state.service';
 
 interface ActivePeriod {
@@ -30,6 +31,32 @@ interface BulkApplyFromMotherResponse {
   removedBlocks?: number;
   createdBlocks?: number;
   skipped?: Array<{ sectionCourseId: string; reason: string }>;
+}
+
+interface SectionZoomContext {
+  sectionId: string;
+  sectionCode: string | null;
+  courseName: string;
+  teacherDni: string | null;
+  teacherName: string | null;
+}
+
+type ZoomActionMode = 'ONE_TIME' | 'RECURRING';
+
+interface ZoomMeetingPrefillDraft {
+  mode: ZoomActionMode;
+  topic: string;
+  agenda: string;
+  meetingDate: string;
+  startTime: string;
+  endTime: string;
+  sourceBlockId?: string;
+  sourceSectionId?: string;
+  sourceCourseName?: string;
+  weeklyDays?: number[];
+  repeatInterval?: number;
+  recurrenceEndMode?: 'UNTIL_DATE';
+  recurrenceEndDate?: string;
 }
 
 const COURSE_CONTEXT_STORAGE_KEY = 'admin.sections.selectedCourseName';
@@ -90,13 +117,14 @@ const COURSE_CONTEXT_STORAGE_KEY = 'admin.sections.selectedCourseName';
               <td class="px-4 py-3">
                 <div class="flex flex-wrap items-center gap-2">
                   <a
-                    *ngIf="b.startUrl; else noStartUrl"
+                    *ngIf="canStartMeeting(b); else noStartUrl"
                     class="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
-                    [href]="b.startUrl"
-                    target="_blank"
-                    rel="noreferrer"
+                    href=""
+                    (click)="openMeeting($event, b)"
+                    [class.pointer-events-none]="meetingActionId === b.id"
+                    [class.opacity-60]="meetingActionId === b.id"
                   >
-                    Entrar
+                    {{ meetingActionId === b.id && meetingActionType === 'start' ? 'Abriendo...' : 'Entrar' }}
                   </a>
                   <ng-template #noStartUrl>
                     <span class="text-xs text-slate-400">-</span>
@@ -104,22 +132,46 @@ const COURSE_CONTEXT_STORAGE_KEY = 'admin.sections.selectedCourseName';
                   <button
                     class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                     type="button"
-                    (click)="copyLink(b.joinUrl)"
-                    [disabled]="!b.joinUrl"
+                    (click)="copyInvitation(b)"
+                    [disabled]="!canCopyInvitation(b) || meetingActionId === b.id"
                   >
-                    Copiar invitacion
+                    {{ meetingActionId === b.id && meetingActionType === 'copy' ? 'Copiando...' : 'Copiar invitacion' }}
                   </button>
                 </div>
               </td>
               <td class="px-4 py-3">
-                <div class="flex items-center gap-2">
+                <div class="flex flex-wrap items-center gap-2">
+                  <ng-container *ngIf="canUseZoomPrefill">
+                    <span [title]="zoomPrefillReason(b, 'ONE_TIME') || 'Abrir Zoom con reunion unica precargada'">
+                      <button
+                        type="button"
+                        class="rounded-lg border border-sky-300 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        [disabled]="!!zoomPrefillReason(b, 'ONE_TIME')"
+                        (click)="openZoomPrefill(b, 'ONE_TIME')"
+                      >
+                        Reunion unica
+                      </button>
+                    </span>
+                    <span [title]="zoomPrefillReason(b, 'RECURRING') || 'Abrir Zoom con reunion recurrente precargada'">
+                      <button
+                        type="button"
+                        class="rounded-lg border border-violet-300 bg-violet-50 px-3 py-1.5 text-xs font-semibold text-violet-700 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        [disabled]="!!zoomPrefillReason(b, 'RECURRING')"
+                        (click)="openZoomPrefill(b, 'RECURRING')"
+                      >
+                        Reunion recurrente
+                      </button>
+                    </span>
+                  </ng-container>
                   <button
+                    type="button"
                     class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
                     (click)="startEdit(b)"
                   >
                     Editar
                   </button>
                   <button
+                    type="button"
                     class="rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50"
                     (click)="remove(b.id)"
                   >
@@ -278,8 +330,10 @@ const COURSE_CONTEXT_STORAGE_KEY = 'admin.sections.selectedCourseName';
 export class AdminSectionSchedulePage {
   private readonly http = inject(HttpClient);
   private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
   private readonly fb = inject(FormBuilder);
   private readonly cdr = inject(ChangeDetectorRef);
+  private readonly auth = inject(AuthService);
   private readonly adminPeriodContext = inject(AdminPeriodContextService);
   private readonly workflowState = inject(WorkflowStateService);
 
@@ -299,7 +353,11 @@ export class AdminSectionSchedulePage {
   scopeCourseName = '';
   isMotherSection = false;
   editingBlockId: string | null = null;
+  meetingActionId: string | null = null;
+  meetingActionType: 'start' | 'copy' | null = null;
   period: ActivePeriod | null = null;
+  zoomContext: SectionZoomContext | null = null;
+  zoomContextError: string | null = null;
   referenceDefaults: CourseReferenceDefaults = {
     referenceModality: 'PRESENCIAL',
     referenceClassroom: 'Sin aula',
@@ -341,6 +399,10 @@ export class AdminSectionSchedulePage {
 
   get canApplyWholeCourse() {
     return this.isWelcomeScope && this.isMotherSection && this.hasScopeFilters;
+  }
+
+  get canUseZoomPrefill() {
+    return this.auth.user?.role === Role.ADMIN;
   }
 
   get showMotherOnlyInfo() {
@@ -399,13 +461,66 @@ export class AdminSectionSchedulePage {
     return 'Sin rango';
   }
 
-  async copyLink(url?: string | null) {
-    const value = String(url ?? '').trim();
-    if (!value) return;
+  canStartMeeting(block: AdminScheduleBlock) {
+    return Boolean(
+      String(block.startUrl ?? '').trim() || String(block.zoomMeetingRecordId ?? '').trim()
+    );
+  }
+
+  canCopyInvitation(block: AdminScheduleBlock) {
+    return Boolean(
+      String(block.joinUrl ?? '').trim() || String(block.zoomMeetingRecordId ?? '').trim()
+    );
+  }
+
+  async openMeeting(event: Event, block: AdminScheduleBlock) {
+    event.preventDefault();
+    if (!this.canStartMeeting(block)) return;
+    this.error = null;
+    this.success = null;
+    this.meetingActionId = block.id;
+    this.meetingActionType = 'start';
+    const popup = typeof window !== 'undefined'
+      ? window.open('about:blank', '_blank')
+      : null;
     try {
-      await navigator.clipboard.writeText(value);
-    } catch {
-      // ignore clipboard errors
+      const links = await this.refreshMeetingLinks(block.id);
+      if (!links.startUrl) {
+        throw new Error('No se pudo obtener un enlace de inicio actualizado.');
+      }
+      this.patchBlockMeetingLinks(block.id, links);
+      this.success = 'Enlace de inicio actualizado.';
+      this.navigatePopupToUrl(popup, links.startUrl);
+    } catch (e: any) {
+      popup?.close();
+      this.error = e?.error?.message ?? 'No se pudo iniciar la reunion con un enlace actualizado.';
+    } finally {
+      this.meetingActionId = null;
+      this.meetingActionType = null;
+      this.cdr.detectChanges();
+    }
+  }
+
+  async copyInvitation(block: AdminScheduleBlock) {
+    if (!this.canCopyInvitation(block)) return;
+    this.error = null;
+    this.success = null;
+    this.meetingActionId = block.id;
+    this.meetingActionType = 'copy';
+    try {
+      const links = await this.refreshMeetingLinks(block.id);
+      if (!links.joinUrl) {
+        throw new Error('No se pudo obtener un enlace de invitacion actualizado.');
+      }
+      this.patchBlockMeetingLinks(block.id, links);
+      await navigator.clipboard.writeText(links.joinUrl);
+      this.success = 'Invitacion actualizada y copiada.';
+    } catch (e: any) {
+      this.error = e?.error?.message ?? 'No se pudo copiar una invitacion actualizada.';
+    } finally {
+      this.meetingActionId = null;
+      this.meetingActionType = null;
+      this.cdr.detectChanges();
     }
   }
 
@@ -446,6 +561,7 @@ export class AdminSectionSchedulePage {
       this.selectedCourseName = selectedCourseName;
       this.referenceDefaults = await this.loadReferenceDefaults(selectedCourseName);
       await this.refreshMotherSectionContext();
+      this.zoomContext = await this.loadZoomContext(selectedCourseName);
       this.form.patchValue({
         courseName: selectedCourseName,
         startDate: this.form.get('startDate')?.value || this.period?.startsAt || '',
@@ -571,6 +687,7 @@ export class AdminSectionSchedulePage {
           referenceClassroom: String(v.referenceClassroom ?? '').trim() || null,
           joinUrl: String(v.joinUrl ?? '').trim() || undefined,
           startUrl: String(v.startUrl ?? '').trim() || undefined,
+          zoomMeetingRecordId: null,
           applyToWholeCourse: Boolean(v.applyToWholeCourse),
           applyTeacherToWholeCourse: Boolean(v.applyTeacherToWholeCourse),
           scopeFacultyGroup: this.scopeFacultyGroup || null,
@@ -642,6 +759,195 @@ export class AdminSectionSchedulePage {
     }
   }
 
+  zoomPrefillReason(block: AdminScheduleBlock, mode: ZoomActionMode) {
+    if (!this.canUseZoomPrefill) return 'Disponible solo para administradores.';
+    if (!this.zoomContext) {
+      return this.zoomContextError || 'No se pudo cargar el contexto de Zoom para este curso.';
+    }
+    if (!String(this.zoomContext.teacherDni ?? '').trim()) {
+      return 'Falta el DNI del docente para este curso.';
+    }
+    if (mode === 'RECURRING' && !String(block.endDate ?? '').trim()) {
+      return 'La reunion recurrente requiere fecha fin en el horario.';
+    }
+    if (!this.getNextValidClassDate(block)) {
+      return 'No hay una proxima clase valida dentro de la vigencia del horario.';
+    }
+    return null;
+  }
+
+  async openZoomPrefill(block: AdminScheduleBlock, mode: ZoomActionMode) {
+    const reason = this.zoomPrefillReason(block, mode);
+    if (reason) {
+      this.error = reason;
+      this.success = null;
+      this.cdr.detectChanges();
+      return;
+    }
+
+    const draft = this.buildZoomPrefillDraft(block, mode);
+    if (!draft) {
+      this.error = 'No se pudo construir la precarga para Zoom.';
+      this.success = null;
+      this.cdr.detectChanges();
+      return;
+    }
+
+    await this.router.navigate(['/admin/zoom/meetings'], {
+      state: { zoomMeetingPrefill: draft },
+    });
+  }
+
+  private async loadZoomContext(courseName: string): Promise<SectionZoomContext | null> {
+    this.zoomContext = null;
+    this.zoomContextError = null;
+    const normalizedCourseName = String(courseName ?? '').trim();
+    if (!this.canUseZoomPrefill || !this.sectionId || !normalizedCourseName) {
+      return null;
+    }
+    try {
+      return await firstValueFrom(
+        this.http.get<SectionZoomContext>(
+          `/api/admin/sections/${encodeURIComponent(
+            this.sectionId
+          )}/zoom-context?courseName=${encodeURIComponent(normalizedCourseName)}`
+        )
+      );
+    } catch (e: any) {
+      this.zoomContextError =
+        e?.error?.message ?? 'No se pudo cargar el contexto de Zoom para este curso.';
+      return null;
+    }
+  }
+
+  private buildZoomPrefillDraft(
+    block: AdminScheduleBlock,
+    mode: ZoomActionMode
+  ): ZoomMeetingPrefillDraft | null {
+    const ctx = this.zoomContext;
+    if (!ctx) return null;
+    const teacherDni = String(ctx.teacherDni ?? '').trim();
+    const meetingDate = this.getNextValidClassDate(block);
+    if (!teacherDni || !meetingDate) return null;
+
+    const draft: ZoomMeetingPrefillDraft = {
+      mode,
+      topic: [
+        String(block.courseName ?? '').trim(),
+        teacherDni,
+        String(ctx.sectionCode ?? '').trim(),
+        String(block.startTime ?? '').trim(),
+        String(block.endTime ?? '').trim(),
+      ].join(' | '),
+      agenda: 'Clase nivelacion',
+      meetingDate,
+      startTime: String(block.startTime ?? '').trim(),
+      endTime: String(block.endTime ?? '').trim(),
+      sourceBlockId: String(block.id ?? '').trim() || undefined,
+      sourceSectionId: this.sectionId || undefined,
+      sourceCourseName: String(block.courseName ?? '').trim() || undefined,
+    };
+
+    if (mode === 'RECURRING') {
+      const recurrenceEndDate = String(block.endDate ?? '').trim();
+      if (!recurrenceEndDate) return null;
+      draft.weeklyDays = [this.zoomWeekdayFromBlockDay(Number(block.dayOfWeek ?? 0))];
+      draft.repeatInterval = 1;
+      draft.recurrenceEndMode = 'UNTIL_DATE';
+      draft.recurrenceEndDate = recurrenceEndDate;
+    }
+
+    return draft;
+  }
+
+  private getNextValidClassDate(block: AdminScheduleBlock) {
+    const targetDay = Number(block.dayOfWeek ?? 0);
+    if (!Number.isInteger(targetDay) || targetDay < 1 || targetDay > 7) return null;
+
+    const today = this.startOfLocalDay(new Date());
+    const startBoundary = this.parseIsoDateOnly(block.startDate);
+    const endBoundary = this.parseIsoDateOnly(block.endDate);
+    const baseDate =
+      startBoundary && startBoundary.getTime() > today.getTime() ? startBoundary : today;
+
+    let candidate = this.firstOccurrenceOnOrAfter(baseDate, targetDay);
+    if (
+      this.isSameLocalDate(candidate, today) &&
+      this.timeHasAlreadyPassed(String(block.startTime ?? '').trim())
+    ) {
+      candidate = this.addDays(candidate, 7);
+    }
+
+    if (startBoundary && candidate.getTime() < startBoundary.getTime()) {
+      candidate = this.firstOccurrenceOnOrAfter(startBoundary, targetDay);
+    }
+    if (endBoundary && candidate.getTime() > endBoundary.getTime()) {
+      return null;
+    }
+    return this.formatIsoDateOnly(candidate);
+  }
+
+  private zoomWeekdayFromBlockDay(dayOfWeek: number) {
+    if (dayOfWeek === 7) return 1;
+    if (dayOfWeek >= 1 && dayOfWeek <= 6) return dayOfWeek + 1;
+    return 1;
+  }
+
+  private firstOccurrenceOnOrAfter(baseDate: Date, targetDayOfWeek: number) {
+    const baseAppDay = this.appDayOfWeek(baseDate);
+    const delta = (targetDayOfWeek - baseAppDay + 7) % 7;
+    return this.addDays(baseDate, delta);
+  }
+
+  private timeHasAlreadyPassed(hhmm: string) {
+    const targetMinutes = minutesFromHHmm(hhmm);
+    if (!Number.isFinite(targetMinutes)) return false;
+    const now = new Date();
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    return currentMinutes >= targetMinutes;
+  }
+
+  private appDayOfWeek(value: Date) {
+    const day = value.getDay();
+    return day === 0 ? 7 : day;
+  }
+
+  private parseIsoDateOnly(value?: string | null) {
+    const raw = String(value ?? '').trim();
+    const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return null;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    if (!year || !month || !day) return null;
+    return new Date(year, month - 1, day);
+  }
+
+  private formatIsoDateOnly(value: Date) {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, '0');
+    const day = String(value.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  private startOfLocalDay(value: Date) {
+    return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+  }
+
+  private addDays(value: Date, days: number) {
+    const next = new Date(value);
+    next.setDate(next.getDate() + days);
+    return this.startOfLocalDay(next);
+  }
+
+  private isSameLocalDate(a: Date, b: Date) {
+    return (
+      a.getFullYear() === b.getFullYear() &&
+      a.getMonth() === b.getMonth() &&
+      a.getDate() === b.getDate()
+    );
+  }
+
   private async refreshMotherSectionContext() {
     this.isMotherSection = false;
     if (!this.hasScopeFilters) return;
@@ -657,6 +963,50 @@ export class AdminSectionSchedulePage {
       this.isMotherSection = Boolean(mother && String(mother.id ?? '').trim() === this.sectionId);
     } catch {
       this.isMotherSection = false;
+    }
+  }
+
+  private async refreshMeetingLinks(blockId: string) {
+    return firstValueFrom(
+      this.http.post<{ joinUrl: string | null; startUrl: string | null }>(
+        `/api/admin/schedule-blocks/${encodeURIComponent(blockId)}/refresh-meeting-links`,
+        {}
+      )
+    );
+  }
+
+  private patchBlockMeetingLinks(
+    blockId: string,
+    links: { joinUrl: string | null; startUrl: string | null }
+  ) {
+    this.blocks = this.blocks.map((block) =>
+      block.id === blockId
+        ? {
+            ...block,
+            joinUrl: links.joinUrl,
+            startUrl: links.startUrl,
+          }
+        : block
+    );
+  }
+
+  private navigatePopupToUrl(popup: Window | null, url: string) {
+    if (popup) {
+      try {
+        popup.opener = null;
+      } catch {}
+      try {
+        popup.location.replace(url);
+        return;
+      } catch {}
+      try {
+        popup.location.href = url;
+        return;
+      } catch {}
+    }
+
+    if (typeof window !== 'undefined') {
+      window.open(url, '_blank', 'noopener,noreferrer');
     }
   }
 

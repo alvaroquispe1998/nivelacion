@@ -47,6 +47,10 @@ export class CreateScheduleBlockDto {
   endDate?: string;
 
   @IsOptional()
+  @IsUUID()
+  zoomMeetingRecordId?: string;
+
+  @IsOptional()
   @IsString()
   joinUrl?: string;
 

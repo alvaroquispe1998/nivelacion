@@ -44,6 +44,12 @@ export class UserEntity {
   @Column({ type: 'varchar', length: 200, nullable: true })
   careerName!: string | null;
 
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  campusName!: string | null;
+
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  facultyGroup!: string | null;
+
   @Column({ type: 'varchar', length: 255, nullable: true })
   examDate!: string | null;
 

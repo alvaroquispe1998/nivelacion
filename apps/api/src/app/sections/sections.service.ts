@@ -2801,6 +2801,58 @@ export class SectionsService {
     return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
   }
 
+  async getZoomContextBySectionAndCourseName(sectionId: string, courseName: string) {
+    await this.getByIdOrThrow(sectionId);
+    const activePeriodId = await this.periodsService.getOperationalPeriodIdOrThrow();
+    const course = await this.resolveCourseByName(courseName);
+    if (!course) {
+      throw new BadRequestException(`Curso no encontrado: ${courseName}`);
+    }
+
+    const rows: Array<{
+      sectionId: string;
+      sectionCode: string | null;
+      courseName: string;
+      teacherName: string | null;
+      teacherDni: string | null;
+    }> = await this.sectionsRepo.manager.query(
+      `
+      SELECT
+        s.id AS sectionId,
+        s.code AS sectionCode,
+        c.name AS courseName,
+        COALESCE(tc.fullName, ts.fullName) AS teacherName,
+        COALESCE(tc.dni, ts.dni) AS teacherDni
+      FROM section_courses sc
+      INNER JOIN sections s ON s.id = sc.sectionId
+      INNER JOIN courses c ON c.id = sc.courseId
+      LEFT JOIN section_course_teachers sct ON sct.sectionCourseId = sc.id
+      LEFT JOIN users tc ON tc.id = sct.teacherId
+      LEFT JOIN users ts ON ts.id = s.teacherId
+      WHERE sc.sectionId = ?
+        AND sc.courseId = ?
+        AND sc.periodId = ?
+      LIMIT 1
+      `,
+      [sectionId, course.id, activePeriodId]
+    );
+
+    const row = rows[0];
+    if (!row?.sectionId) {
+      throw new BadRequestException(
+        `No existe relacion seccion-curso para seccion ${sectionId} y curso ${course.name}`
+      );
+    }
+
+    return {
+      sectionId: String(row.sectionId),
+      sectionCode: row.sectionCode ? String(row.sectionCode) : null,
+      courseName: String(row.courseName ?? course.name),
+      teacherDni: row.teacherDni ? String(row.teacherDni) : null,
+      teacherName: row.teacherName ? String(row.teacherName) : null,
+    };
+  }
+
   private async loadSectionCourseStudentsExportContext(params: {
     sectionId: string;
     courseName: string;

@@ -259,24 +259,24 @@ interface StudentPlatformItem {
                     Horario
                   </a>
                   <a
-                    routerLink="/student/attendance"
+                    routerLink="/student/courses"
                     routerLinkActive="bg-blue-50 text-blue-700 font-semibold"
                     class="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors"
                   >
                     <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75l2.25 2.25L15 9.75m6 2.25a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 4.5h16.5m-16.5 7.5h16.5m-16.5 7.5h16.5" />
                     </svg>
-                    Asistencia
+                    Mis cursos
                   </a>
                   <a
-                    routerLink="/student/grades"
+                    routerLink="/student/workshops"
                     routerLinkActive="bg-blue-50 text-blue-700 font-semibold"
                     class="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors"
                   >
                     <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3v18h16.5M7.5 15.75v-6m4.5 6v-10.5m4.5 10.5v-3.75" />
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m6-9v6a2.25 2.25 0 01-2.25 2.25h-7.5A2.25 2.25 0 016 15V9m12 0V6.75A2.25 2.25 0 0015.75 4.5h-7.5A2.25 2.25 0 006 6.75V9m12 0H6" />
                     </svg>
-                    Calificaciones
+                    Mis talleres
                   </a>
                 </ng-container>
 
@@ -290,27 +290,27 @@ interface StudentPlatformItem {
                     <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
                       <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 3v2.25m7.5-2.25v2.25M3.75 8.25h16.5M4.5 6h15A1.5 1.5 0 0121 7.5v11.25a1.5 1.5 0 01-1.5 1.5h-15A1.5 1.5 0 013 18.75V7.5A1.5 1.5 0 014.5 6z" />
                     </svg>
-                    Mi Horario
+                    Horario
                   </a>
                   <a
-                    routerLink="/teacher/attendance"
+                    routerLink="/teacher/courses"
                     routerLinkActive="bg-blue-50 text-blue-700 font-semibold"
                     class="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors"
                   >
                     <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6l4 2M3.75 12a8.25 8.25 0 1116.5 0 8.25 8.25 0 01-16.5 0z" />
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 4.5h16.5m-16.5 7.5h16.5m-16.5 7.5h16.5" />
                     </svg>
-                    Registrar Asistencia
+                    Mis cursos
                   </a>
                   <a
-                    routerLink="/teacher/grades"
+                    routerLink="/teacher/workshops"
                     routerLinkActive="bg-blue-50 text-blue-700 font-semibold"
                     class="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors"
                   >
                     <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3v18h16.5M7.5 15.75v-6m4.5 6v-10.5m4.5 10.5v-3.75" />
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m6-9v6a2.25 2.25 0 01-2.25 2.25h-7.5A2.25 2.25 0 016 15V9m12 0V6.75A2.25 2.25 0 0015.75 4.5h-7.5A2.25 2.25 0 006 6.75V9m12 0H6" />
                     </svg>
-                    Registrar Notas
+                    Mis talleres
                   </a>
                 </ng-container>
 
