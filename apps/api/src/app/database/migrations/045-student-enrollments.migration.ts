@@ -20,14 +20,8 @@ export class StudentEnrollments045Migration1763300000000
         KEY IX_student_enrollments_periodId (periodId),
         KEY IX_student_enrollments_studentId (studentId),
         KEY IX_student_enrollments_faculty (facultyGroup),
-        KEY IX_student_enrollments_campus (campusName),
-        CONSTRAINT FK_student_enrollments_periodId
-          FOREIGN KEY (periodId) REFERENCES periods(id)
-          ON DELETE CASCADE,
-        CONSTRAINT FK_student_enrollments_studentId
-          FOREIGN KEY (studentId) REFERENCES users(id)
-          ON DELETE CASCADE
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+        KEY IX_student_enrollments_campus (campusName)
+      ) ENGINE=InnoDB;
     `);
     }
 

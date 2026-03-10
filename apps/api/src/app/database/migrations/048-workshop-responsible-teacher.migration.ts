@@ -19,24 +19,6 @@ export class WorkshopResponsibleTeacher048Migration1775200000000
     return Number(rows[0]?.c ?? 0) > 0;
   }
 
-  private async hasConstraint(
-    queryRunner: QueryRunner,
-    tableName: string,
-    constraintName: string
-  ) {
-    const rows: Array<{ c: number }> = await queryRunner.query(
-      `
-      SELECT COUNT(*) AS c
-      FROM information_schema.TABLE_CONSTRAINTS
-      WHERE TABLE_SCHEMA = DATABASE()
-        AND TABLE_NAME = ?
-        AND CONSTRAINT_NAME = ?
-      `,
-      [tableName, constraintName]
-    );
-    return Number(rows[0]?.c ?? 0) > 0;
-  }
-
   private async hasIndex(queryRunner: QueryRunner, tableName: string, indexName: string) {
     const rows: Array<{ c: number }> = await queryRunner.query(
       `
@@ -55,32 +37,13 @@ export class WorkshopResponsibleTeacher048Migration1775200000000
     if (!(await this.hasColumn(queryRunner, 'workshops', 'responsibleTeacherId'))) {
       await queryRunner.query(`
         ALTER TABLE workshops
-        ADD COLUMN responsibleTeacherId CHAR(36)
-          CHARACTER SET utf8mb4
-          COLLATE utf8mb4_0900_ai_ci
-          NULL AFTER venueCampusName;
+        ADD COLUMN responsibleTeacherId CHAR(36) NULL AFTER venueCampusName;
       `);
     }
-    await queryRunner.query(`
-      ALTER TABLE workshops
-      MODIFY COLUMN responsibleTeacherId CHAR(36)
-        CHARACTER SET utf8mb4
-        COLLATE utf8mb4_0900_ai_ci
-        NULL;
-    `);
     if (!(await this.hasIndex(queryRunner, 'workshops', 'idx_workshops_responsible_teacher'))) {
       await queryRunner.query(`
         CREATE INDEX idx_workshops_responsible_teacher
         ON workshops (responsibleTeacherId);
-      `);
-    }
-    if (!(await this.hasConstraint(queryRunner, 'workshops', 'fk_workshops_responsible_teacher'))) {
-      await queryRunner.query(`
-        ALTER TABLE workshops
-        ADD CONSTRAINT fk_workshops_responsible_teacher
-        FOREIGN KEY (responsibleTeacherId) REFERENCES users(id)
-        ON DELETE SET NULL
-        ON UPDATE CASCADE;
       `);
     }
 
@@ -124,12 +87,6 @@ export class WorkshopResponsibleTeacher048Migration1775200000000
       `);
     }
 
-    if (await this.hasConstraint(queryRunner, 'workshops', 'fk_workshops_responsible_teacher')) {
-      await queryRunner.query(`
-        ALTER TABLE workshops
-        DROP FOREIGN KEY fk_workshops_responsible_teacher;
-      `);
-    }
     if (await this.hasIndex(queryRunner, 'workshops', 'idx_workshops_responsible_teacher')) {
       await queryRunner.query(`
         DROP INDEX idx_workshops_responsible_teacher ON workshops;
