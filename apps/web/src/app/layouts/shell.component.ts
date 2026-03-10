@@ -201,19 +201,37 @@ interface StudentPlatformItem {
             <div class="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
 
               <!-- Brand -->
-              <a routerLink="/" class="flex items-center gap-2">
-                <div class="h-9 w-9 rounded-xl bg-slate-900 text-white grid place-items-center font-bold text-sm select-none">
-                  UAI
-                </div>
-                <div class="hidden sm:block leading-tight">
-                  <div class="text-sm font-semibold text-slate-900">Sistema Académico</div>
-                  <div class="text-[11px] text-slate-500">
-                    {{ u.fullName }}
-                    <span class="mx-1 text-slate-300">·</span>
-                    <span class="font-medium text-slate-700">{{ roleLabel(u.role) }}</span>
+              <div class="relative">
+                <button
+                  type="button"
+                  class="flex items-center gap-2 rounded-xl px-1 py-1 text-left hover:bg-slate-100 transition-colors"
+                  (click)="toggleProfileMenu()"
+                >
+                  <div class="h-9 w-9 rounded-xl bg-slate-900 text-white grid place-items-center font-bold text-sm select-none">
+                    UAI
                   </div>
+                  <div class="hidden sm:block leading-tight">
+                    <div class="text-sm font-semibold text-slate-900">Sistema Académico</div>
+                    <div class="text-[11px] text-slate-500">
+                      {{ u.fullName }}
+                      <span class="mx-1 text-slate-300">·</span>
+                      <span class="font-medium text-slate-700">{{ roleLabel(u.role) }}</span>
+                    </div>
+                  </div>
+                </button>
+                <div
+                  *ngIf="profileMenuOpen"
+                  class="absolute left-0 top-full z-30 mt-2 min-w-[220px] rounded-xl border border-slate-200 bg-white p-2 shadow-lg"
+                >
+                  <a
+                    routerLink="/account/password"
+                    class="block rounded-lg px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                    (click)="closeProfileMenu()"
+                  >
+                    Cambiar contraseña
+                  </a>
                 </div>
-              </a>
+              </div>
 
               <!-- Nav -->
               <nav class="flex items-center gap-1">
@@ -662,6 +680,7 @@ export class ShellComponent implements OnInit, OnDestroy {
   platformsModalOpen = false;
   resourcesModalOpen = false;
   copiedKey: string | null = null;
+  profileMenuOpen = false;
 
   private userSub?: Subscription;
 
@@ -725,11 +744,21 @@ export class ShellComponent implements OnInit, OnDestroy {
   // ── Auth ──────────────────────────────────────────────────────────────────
 
   logout() {
+    this.closeProfileMenu();
     this.auth.logout();
     this.router.navigateByUrl('/login');
   }
 
+  toggleProfileMenu() {
+    this.profileMenuOpen = !this.profileMenuOpen;
+  }
+
+  closeProfileMenu() {
+    this.profileMenuOpen = false;
+  }
+
   openPlatformsModal() {
+    this.closeProfileMenu();
     this.copiedKey = null;
     this.platformsModalOpen = true;
   }
@@ -740,18 +769,21 @@ export class ShellComponent implements OnInit, OnDestroy {
   }
 
   switchToResourcesModal() {
+    this.closeProfileMenu();
     this.copiedKey = null;
     this.platformsModalOpen = false;
     this.resourcesModalOpen = true;
   }
 
   switchToPlatformsModal() {
+    this.closeProfileMenu();
     this.copiedKey = null;
     this.resourcesModalOpen = false;
     this.platformsModalOpen = true;
   }
 
   closeAllModals() {
+    this.closeProfileMenu();
     this.resourcesModalOpen = false;
     this.platformsModalOpen = false;
     this.copiedKey = null;
@@ -887,6 +919,7 @@ export class ShellComponent implements OnInit, OnDestroy {
       ADMINISTRATIVO: 'Administrativo',
       ALUMNO: 'Alumno',
       DOCENTE: 'Docente',
+      SOPORTE_TECNICO: 'Soporte Tecnico',
     };
     return labels[role] ?? role;
   }

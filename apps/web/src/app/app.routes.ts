@@ -11,6 +11,36 @@ export const appRoutes: Route[] = [
       import('./pages/login.page').then((m) => m.LoginPage),
   },
   {
+    path: 'support',
+    canActivate: [authGuard, roleGuard],
+    data: { roles: [Role.SOPORTE_TECNICO] },
+    loadComponent: () =>
+      import('./layouts/support-shell.component').then(
+        (m) => m.SupportShellComponent
+      ),
+    children: [
+      {
+        path: '',
+        pathMatch: 'full',
+        redirectTo: 'classroom-schedule',
+      },
+      {
+        path: 'classroom-schedule',
+        loadComponent: () =>
+          import('./pages/admin-classroom-schedule.page').then(
+            (m) => m.AdminClassroomSchedulePage
+          ),
+      },
+      {
+        path: 'account/password',
+        loadComponent: () =>
+          import('./pages/account-change-password.page').then(
+            (m) => m.AccountChangePasswordPage
+          ),
+      },
+    ],
+  },
+  {
     path: '',
     canActivate: [authGuard],
     loadComponent: () =>
@@ -139,6 +169,15 @@ export const appRoutes: Route[] = [
           ),
       },
       {
+        path: 'account/password',
+        canActivate: [roleGuard],
+        data: { roles: [Role.ALUMNO, Role.DOCENTE] },
+        loadComponent: () =>
+          import('./pages/account-change-password.page').then(
+            (m) => m.AccountChangePasswordPage
+          ),
+      },
+      {
         path: 'admin/dashboard',
         canActivate: [roleGuard],
         data: { roles: ADMIN_BACKOFFICE_ROLES },
@@ -182,6 +221,15 @@ export const appRoutes: Route[] = [
         loadComponent: () =>
           import('./pages/admin-sections.page').then(
             (m) => m.AdminSectionsPage
+          ),
+      },
+      {
+        path: 'admin/classroom-schedule',
+        canActivate: [roleGuard, workflowStepGuard],
+        data: { roles: ADMIN_BACKOFFICE_ROLES, workflowStep: 'sections' },
+        loadComponent: () =>
+          import('./pages/admin-classroom-schedule.page').then(
+            (m) => m.AdminClassroomSchedulePage
           ),
       },
       {

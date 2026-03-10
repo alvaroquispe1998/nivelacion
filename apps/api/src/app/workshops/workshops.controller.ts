@@ -7,6 +7,7 @@ import {
   Post,
   Put,
   Query,
+  StreamableFile,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -204,6 +205,18 @@ export class WorkshopsController {
   @Get(':id/assignments/:runId/pending')
   getAssignmentRunPending(@Param('id') id: string, @Param('runId') runId: string) {
     return this.workshopsService.getAssignmentRunPending(id, runId);
+  }
+
+  @Get(':id/export/groups/excel')
+  async exportLatestAppliedGroupsExcel(
+    @Param('id') id: string
+  ): Promise<StreamableFile> {
+    const { fileBuffer, fileName } =
+      await this.workshopsService.buildLatestAppliedGroupsExportWorkbook(id);
+    return new StreamableFile(fileBuffer, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="${fileName}"`,
+    });
   }
 
   @Post(':id/preview')

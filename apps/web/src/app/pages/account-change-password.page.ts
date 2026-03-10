@@ -12,7 +12,7 @@ import { firstValueFrom } from 'rxjs';
     <div class="mx-auto max-w-xl rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
       <div class="text-xl font-semibold">Cambiar contraseña</div>
       <div class="mt-1 text-sm text-slate-600">
-        Actualiza tu password de acceso al backoffice.
+        Actualiza tu contraseña de acceso al sistema.
       </div>
 
       <div
@@ -32,7 +32,7 @@ import { firstValueFrom } from 'rxjs';
       <form class="mt-5 space-y-4" [formGroup]="form" (ngSubmit)="submit()">
         <label class="block">
           <span class="mb-1 block text-xs font-semibold text-slate-700">
-            Password actual
+            Contraseña actual
           </span>
           <input
             type="password"
@@ -44,25 +44,25 @@ import { firstValueFrom } from 'rxjs';
 
         <label class="block">
           <span class="mb-1 block text-xs font-semibold text-slate-700">
-            Nuevo password
+            Nueva contraseña
           </span>
           <input
             type="password"
             class="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
             formControlName="newPassword"
-            placeholder="Minimo 8 caracteres"
+            placeholder="Mínimo 8 caracteres"
           />
         </label>
 
         <label class="block">
           <span class="mb-1 block text-xs font-semibold text-slate-700">
-            Confirmar nuevo password
+            Confirmar nueva contraseña
           </span>
           <input
             type="password"
             class="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
             formControlName="confirmPassword"
-            placeholder="Repite el nuevo password"
+            placeholder="Repite la nueva contraseña"
           />
         </label>
 
@@ -70,13 +70,13 @@ import { firstValueFrom } from 'rxjs';
           class="w-full rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
           [disabled]="form.invalid || loading"
         >
-          {{ loading ? 'Actualizando...' : 'Actualizar password' }}
+          {{ loading ? 'Actualizando...' : 'Actualizar contraseña' }}
         </button>
       </form>
     </div>
   `,
 })
-export class AdminChangePasswordPage {
+export class AccountChangePasswordPage {
   private readonly http = inject(HttpClient);
   private readonly fb = inject(FormBuilder);
 
@@ -98,7 +98,7 @@ export class AdminChangePasswordPage {
     const confirmPassword = String(this.form.value.confirmPassword ?? '');
 
     if (newPassword !== confirmPassword) {
-      this.error = 'La confirmacion no coincide.';
+      this.error = 'La confirmación no coincide.';
       this.success = null;
       return;
     }
@@ -107,19 +107,16 @@ export class AdminChangePasswordPage {
     this.error = null;
     this.success = null;
     try {
-      const payload: AuthChangePasswordRequest = {
-        currentPassword,
-        newPassword,
-      };
+      const payload: AuthChangePasswordRequest = { currentPassword, newPassword };
       await firstValueFrom(this.http.post('/api/auth/change-password', payload));
-      this.success = 'Password actualizado correctamente.';
+      this.success = 'Contraseña actualizada correctamente.';
       this.form.reset({
         currentPassword: '',
         newPassword: '',
         confirmPassword: '',
       });
     } catch (e: any) {
-      this.error = e?.error?.message ?? 'No se pudo actualizar el password';
+      this.error = e?.error?.message ?? 'No se pudo actualizar la contraseña';
     } finally {
       this.loading = false;
     }

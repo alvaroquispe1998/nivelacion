@@ -239,6 +239,15 @@ export class AdminWorkshopsService {
     );
   }
 
+  downloadGroupsExcel(workshopId: string) {
+    return firstValueFrom(
+      this.http.get(
+        `/api/admin/workshops/${encodeURIComponent(workshopId)}/export/groups/excel`,
+        { responseType: 'blob' }
+      )
+    );
+  }
+
   listGroups(workshopId: string) {
     return firstValueFrom(
       this.http.get<WorkshopGroupRow[]>(

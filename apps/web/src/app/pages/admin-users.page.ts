@@ -20,7 +20,7 @@ import { firstValueFrom } from 'rxjs';
       <div>
         <div class="text-xl font-semibold">Usuarios internos</div>
         <div class="text-sm text-slate-600">
-          Gestion de cuentas ADMIN y ADMINISTRATIVO.
+          Gestion de cuentas ADMIN, ADMINISTRATIVO y SOPORTE_TECNICO.
         </div>
       </div>
 
@@ -37,6 +37,7 @@ import { firstValueFrom } from 'rxjs';
           <option value="">Todos los roles</option>
           <option [value]="Role.ADMIN">Administrador</option>
           <option [value]="Role.ADMINISTRATIVO">Administrativo</option>
+          <option [value]="Role.SOPORTE_TECNICO">Soporte Tecnico</option>
         </select>
         <select
           class="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
@@ -88,6 +89,7 @@ import { firstValueFrom } from 'rxjs';
             formControlName="role"
           >
             <option [value]="Role.ADMINISTRATIVO">Administrativo</option>
+            <option [value]="Role.SOPORTE_TECNICO">Soporte Tecnico</option>
             <option [value]="Role.ADMIN">Administrador</option>
           </select>
           <input
@@ -141,6 +143,7 @@ import { firstValueFrom } from 'rxjs';
                 >
                   <option [value]="Role.ADMIN">Administrador</option>
                   <option [value]="Role.ADMINISTRATIVO">Administrativo</option>
+                  <option [value]="Role.SOPORTE_TECNICO">Soporte Tecnico</option>
                 </select>
               </td>
               <td class="px-4 py-3 align-top">
@@ -256,7 +259,7 @@ export class AdminUsersPage {
   createForm = this.fb.group({
     dni: ['', [Validators.required, Validators.pattern(/^[a-zA-Z0-9]{3,30}$/)]],
     fullName: ['', [Validators.required, Validators.maxLength(180)]],
-    role: [Role.ADMINISTRATIVO, [Validators.required]],
+    role: [Role.SOPORTE_TECNICO, [Validators.required]],
     password: ['', [Validators.required, Validators.minLength(8), Validators.maxLength(120)]],
   });
 
@@ -286,7 +289,7 @@ export class AdminUsersPage {
 
   draftFor(id: string) {
     if (!this.drafts[id]) {
-      this.drafts[id] = { dni: '', fullName: '', role: Role.ADMINISTRATIVO };
+      this.drafts[id] = { dni: '', fullName: '', role: Role.SOPORTE_TECNICO };
     }
     return this.drafts[id];
   }
@@ -321,16 +324,17 @@ export class AdminUsersPage {
       const payload: CreateAdminInternalUserRequest = {
         dni: String(this.createForm.value.dni ?? '').trim(),
         fullName: String(this.createForm.value.fullName ?? '').trim(),
-        role: (this.createForm.value.role ?? Role.ADMINISTRATIVO) as
+        role: (this.createForm.value.role ?? Role.SOPORTE_TECNICO) as
           | Role.ADMIN
-          | Role.ADMINISTRATIVO,
+          | Role.ADMINISTRATIVO
+          | Role.SOPORTE_TECNICO,
         password: String(this.createForm.value.password ?? ''),
       };
       await firstValueFrom(this.http.post('/api/admin/users', payload));
       this.createForm.reset({
         dni: '',
         fullName: '',
-        role: Role.ADMINISTRATIVO,
+        role: Role.SOPORTE_TECNICO,
         password: '',
       });
       this.success = 'Usuario interno creado.';
@@ -352,7 +356,10 @@ export class AdminUsersPage {
       const payload: UpdateAdminInternalUserRequest = {
         dni: String(draft.dni ?? '').trim(),
         fullName: String(draft.fullName ?? '').trim(),
-        role: draft.role as Role.ADMIN | Role.ADMINISTRATIVO,
+        role: draft.role as
+          | Role.ADMIN
+          | Role.ADMINISTRATIVO
+          | Role.SOPORTE_TECNICO,
       };
       await firstValueFrom(this.http.patch(`/api/admin/users/${id}`, payload));
       this.success = 'Usuario actualizado.';

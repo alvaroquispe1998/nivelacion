@@ -2,7 +2,7 @@ import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { ChangeDetectorRef, Component, inject } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators, FormsModule } from '@angular/forms';
-import type { AdminTeacher } from '@uai/shared';
+import type { AdminTeacher, ResetAdminInternalUserPasswordRequest } from '@uai/shared';
 import { firstValueFrom } from 'rxjs';
 
 @Component({
@@ -88,6 +88,13 @@ import { firstValueFrom } from 'rxjs';
                   >
                     {{ loadingDeleteId === t.id ? 'Eliminando...' : 'Eliminar' }}
                   </button>
+                  <button
+                    class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50 disabled:opacity-60"
+                    (click)="openResetPasswordModal(t)"
+                    [disabled]="loadingResetPasswordId === t.id"
+                  >
+                    {{ loadingResetPasswordId === t.id ? 'Guardando...' : 'Resetear contraseña' }}
+                  </button>
                 </div>
               </td>
             </tr>
@@ -120,6 +127,37 @@ import { firstValueFrom } from 'rxjs';
         </div>
       </div>
     </div>
+
+    <div *ngIf="resetPasswordModalOpen" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+      <div class="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+        <div class="text-lg font-semibold text-slate-900">Resetear contraseña</div>
+        <div class="mt-2 text-sm text-slate-600">
+          Nueva contraseña para {{ resetPasswordTarget?.fullName }}.
+        </div>
+        <input
+          type="password"
+          class="mt-4 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+          [(ngModel)]="resetPasswordValue"
+          [ngModelOptions]="{ standalone: true }"
+          placeholder="Nueva contraseña"
+        />
+        <div class="mt-6 flex justify-end gap-3">
+          <button
+            class="rounded-xl px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 transition-colors"
+            (click)="closeResetPasswordModal()"
+          >
+            Cancelar
+          </button>
+          <button
+            class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 transition-colors shadow-lg shadow-slate-900/20 disabled:opacity-60"
+            [disabled]="!resetPasswordTarget || loadingResetPasswordId !== null || resetPasswordValue.trim().length < 8"
+            (click)="submitResetPassword()"
+          >
+            {{ loadingResetPasswordId ? 'Guardando...' : 'Actualizar' }}
+          </button>
+        </div>
+      </div>
+    </div>
   `,
 })
 export class AdminTeachersPage {
@@ -134,6 +172,10 @@ export class AdminTeachersPage {
   loadingCreate = false;
   loadingUpdateId: string | null = null;
   loadingDeleteId: string | null = null;
+  loadingResetPasswordId: string | null = null;
+  resetPasswordModalOpen = false;
+  resetPasswordTarget: AdminTeacher | null = null;
+  resetPasswordValue = '';
 
   confirmState = {
     isOpen: false,
@@ -248,6 +290,41 @@ export class AdminTeachersPage {
       this.error = e?.error?.message ?? 'No se pudo eliminar docente';
     } finally {
       this.loadingDeleteId = null;
+      this.cdr.detectChanges();
+    }
+  }
+
+  openResetPasswordModal(teacher: AdminTeacher) {
+    this.resetPasswordTarget = teacher;
+    this.resetPasswordValue = '';
+    this.resetPasswordModalOpen = true;
+  }
+
+  closeResetPasswordModal() {
+    this.resetPasswordModalOpen = false;
+    this.resetPasswordTarget = null;
+    this.resetPasswordValue = '';
+  }
+
+  async submitResetPassword() {
+    if (!this.resetPasswordTarget) return;
+    this.loadingResetPasswordId = this.resetPasswordTarget.id;
+    this.error = null;
+    try {
+      const payload: ResetAdminInternalUserPasswordRequest = {
+        newPassword: this.resetPasswordValue,
+      };
+      await firstValueFrom(
+        this.http.post(
+          `/api/admin/users/${this.resetPasswordTarget.id}/reset-password`,
+          payload
+        )
+      );
+      this.closeResetPasswordModal();
+    } catch (e: any) {
+      this.error = e?.error?.message ?? 'No se pudo resetear la contraseña del docente';
+    } finally {
+      this.loadingResetPasswordId = null;
       this.cdr.detectChanges();
     }
   }

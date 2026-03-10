@@ -31,6 +31,11 @@ interface ActivePeriod {
   status?: string;
 }
 
+interface FacultyFilterOption {
+  facultyGroup: string;
+  facultyName: string;
+}
+
 @Component({
   standalone: true,
   imports: [CommonModule],
@@ -78,6 +83,51 @@ interface ActivePeriod {
       <div class="mt-1 text-xs text-slate-600">
         Registros listados: {{ rows.length }} | Alumnos alcanzados:
         {{ totalStudents }}
+      </div>
+    </div>
+
+    <div class="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <div class="text-sm font-semibold text-slate-800">Exportacion seccion-curso consolidada</div>
+          <div class="mt-1 text-xs text-slate-600">
+            Exporta secciones-curso con horario, docente y cantidad de matriculados del periodo activo.
+          </div>
+        </div>
+        <button
+          class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+          [disabled]="downloadingSummary"
+          (click)="downloadSectionCoursesSummaryExcel()"
+        >
+          {{ downloadingSummary ? 'Descargando...' : 'Exportar secciones-curso' }}
+        </button>
+      </div>
+
+      <div class="mt-4 grid gap-3 md:grid-cols-2">
+        <label class="text-sm text-slate-700">
+          <span class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Facultad</span>
+          <select
+            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+            [value]="selectedFacultyGroup"
+            (change)="onFacultyChange(($any($event.target)).value)"
+          >
+            <option value="">Todas</option>
+            <option *ngFor="let item of facultyOptions" [value]="item.facultyGroup">
+              {{ item.facultyName }} ({{ item.facultyGroup }})
+            </option>
+          </select>
+        </label>
+        <label class="text-sm text-slate-700">
+          <span class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Sede</span>
+          <select
+            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+            [value]="selectedCampusName"
+            (change)="selectedCampusName = ($any($event.target)).value"
+          >
+            <option value="">Todas</option>
+            <option *ngFor="let campus of campusOptions" [value]="campus">{{ campus }}</option>
+          </select>
+        </label>
       </div>
     </div>
 
@@ -131,6 +181,11 @@ export class AdminExportAssignedPage implements OnDestroy {
   activePeriod: ActivePeriod | null = null;
   error: string | null = null;
   downloading = false;
+  downloadingSummary = false;
+  facultyOptions: FacultyFilterOption[] = [];
+  campusOptions: string[] = [];
+  selectedFacultyGroup = '';
+  selectedCampusName = '';
 
   get totalStudents() {
     return this.rows.reduce((acc, row) => acc + Number(row.studentCount || 0), 0);
@@ -167,6 +222,7 @@ export class AdminExportAssignedPage implements OnDestroy {
       ]);
       this.rows = rows;
       this.activePeriod = activePeriod;
+      await this.loadSummaryFilters();
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo cargar datos de exportacion';
     } finally {
@@ -208,6 +264,70 @@ export class AdminExportAssignedPage implements OnDestroy {
       this.error = e?.error?.message ?? 'No se pudo descargar el Excel';
     } finally {
       this.downloading = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  async loadSummaryFilters() {
+    try {
+      this.facultyOptions = await firstValueFrom(
+        this.http.get<FacultyFilterOption[]>('/api/admin/sections/filters/faculties-detailed')
+      );
+      if (this.selectedFacultyGroup) {
+        this.campusOptions = await firstValueFrom(
+          this.http.get<string[]>('/api/admin/sections/filters/campuses', {
+            params: { facultyGroup: this.selectedFacultyGroup },
+          })
+        );
+      } else {
+        this.campusOptions = [];
+      }
+      if (
+        this.selectedCampusName &&
+        this.campusOptions.length > 0 &&
+        !this.campusOptions.includes(this.selectedCampusName)
+      ) {
+        this.selectedCampusName = '';
+      }
+    } catch {
+      this.facultyOptions = [];
+      this.campusOptions = [];
+      this.selectedCampusName = '';
+    }
+  }
+
+  async onFacultyChange(value: string) {
+    this.selectedFacultyGroup = String(value ?? '').trim();
+    this.selectedCampusName = '';
+    await this.loadSummaryFilters();
+    this.cdr.detectChanges();
+  }
+
+  async downloadSectionCoursesSummaryExcel() {
+    this.downloadingSummary = true;
+    this.error = null;
+    try {
+      const params: Record<string, string> = {};
+      if (this.selectedFacultyGroup) params['facultyGroup'] = this.selectedFacultyGroup;
+      if (this.selectedCampusName) params['campusName'] = this.selectedCampusName;
+      const blob = await firstValueFrom(
+        this.http.get('/api/admin/sections/export/section-courses-summary/excel', {
+          params,
+          responseType: 'blob',
+        })
+      );
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'secciones_curso.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e: any) {
+      this.error = e?.error?.message ?? 'No se pudo descargar el reporte de secciones-curso';
+    } finally {
+      this.downloadingSummary = false;
       this.cdr.detectChanges();
     }
   }

@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { randomUUID } from 'crypto';
+import * as XLSX from 'xlsx';
 import { PeriodsService } from '../periods/periods.service';
 import { AttendanceStatus, Role } from '@uai/shared';
 import { MeetingsService } from '../management-zoom/meetings.service';
@@ -1159,7 +1160,9 @@ export class WorkshopsService {
         p.studentId,
         p.reasonCode,
         p.reasonDetail,
+        u.dni,
         u.codigoAlumno,
+        u.email,
         u.fullName,
         se.careerName,
         se.campusName
@@ -1177,13 +1180,208 @@ export class WorkshopsService {
     return rows.map((row) => ({
       id: String(row.id),
       studentId: String(row.studentId),
+      dni: row.dni ? String(row.dni) : null,
       codigoAlumno: row.codigoAlumno ? String(row.codigoAlumno) : null,
+      email: row.email ? String(row.email) : null,
       fullName: String(row.fullName ?? ''),
       careerName: row.careerName ? String(row.careerName) : null,
       campusName: row.campusName ? String(row.campusName) : null,
       reasonCode: String(row.reasonCode ?? '') as PendingReasonCode,
       reasonDetail: row.reasonDetail ? String(row.reasonDetail) : null,
     }));
+  }
+
+  async buildLatestAppliedGroupsExportWorkbook(workshopId: string) {
+    const run = await this.dataSource
+      .query(
+        `
+        SELECT
+          id,
+          workshopId,
+          periodId,
+          name,
+          createdAt,
+          totalStudents,
+          responsibleTeacherName,
+          responsibleTeacherDni
+        FROM workshop_applications
+        WHERE workshopId = ?
+        ORDER BY createdAt DESC, id DESC
+        LIMIT 1
+        `,
+        [workshopId]
+      )
+      .then((rows) => rows[0] ?? null);
+    if (!run?.id) {
+      throw new BadRequestException('El taller aun no tiene una aplicacion para exportar');
+    }
+
+    const groups: Array<{
+      id: string;
+      groupCode: string | null;
+      groupName: string | null;
+      groupIndex: number;
+      studentCount: number;
+      capacitySnapshot: number | null;
+      dayOfWeek: number | null;
+      startTime: string | null;
+      endTime: string | null;
+      venueDetails: string | null;
+    }> = await this.dataSource.query(
+      `
+      SELECT
+        id,
+        groupCode,
+        groupName,
+        groupIndex,
+        studentCount,
+        capacitySnapshot,
+        dayOfWeek,
+        startTime,
+        endTime,
+        venueDetails
+      FROM workshop_application_groups
+      WHERE applicationId = ?
+      ORDER BY groupIndex ASC, createdAt ASC
+      `,
+      [run.id]
+    );
+
+    const assigned: Array<{
+      groupId: string;
+      studentId: string;
+      dni: string | null;
+      codigoAlumno: string | null;
+      email: string | null;
+      fullName: string;
+      careerName: string | null;
+      campusName: string | null;
+    }> = await this.dataSource.query(
+      `
+      SELECT
+        was.groupId,
+        was.studentId,
+        u.dni AS dni,
+        u.codigoAlumno AS codigoAlumno,
+        u.email AS email,
+        u.fullName AS fullName,
+        se.careerName AS careerName,
+        se.campusName AS campusName
+      FROM workshop_application_students was
+      INNER JOIN users u ON BINARY u.id = BINARY was.studentId
+      LEFT JOIN student_enrollments se
+        ON BINARY se.studentId = BINARY was.studentId
+       AND BINARY se.periodId = BINARY ?
+      WHERE BINARY was.applicationId = BINARY ?
+      ORDER BY u.fullName ASC, u.dni ASC
+      `,
+      [run.periodId, run.id]
+    );
+
+    const pending = await this.getAssignmentRunPending(workshopId, String(run.id));
+    const assignedByGroup = new Map<string, typeof assigned>();
+    for (const row of assigned) {
+      const key = String(row.groupId);
+      if (!assignedByGroup.has(key)) assignedByGroup.set(key, []);
+      assignedByGroup.get(key)!.push(row);
+    }
+
+    const workbook = XLSX.utils.book_new();
+    const summaryRows: Array<Array<string | number>> = [
+      ['EXPORTACION DE TALLER POR GRUPOS'],
+      [],
+      ['Taller', String(run.name ?? '')],
+      [
+        'Responsable',
+        run.responsibleTeacherName
+          ? `${String(run.responsibleTeacherName)}${run.responsibleTeacherDni ? ` (${String(run.responsibleTeacherDni)})` : ''}`
+          : 'Sin responsable',
+      ],
+      ['Fecha aplicacion', this.normalizeExcelDateTime(run.createdAt)],
+      ['Candidatos', Number(run.totalStudents ?? 0)],
+      ['Asignados', assigned.length],
+      ['Pendientes', pending.length],
+    ];
+    const summarySheet = XLSX.utils.aoa_to_sheet(summaryRows);
+    summarySheet['!cols'] = [{ wch: 22 }, { wch: 60 }];
+    XLSX.utils.book_append_sheet(workbook, summarySheet, 'Resumen');
+
+    for (const group of groups) {
+      const groupStudents = assignedByGroup.get(String(group.id)) ?? [];
+      const rows: Array<Array<string | number>> = [
+        ['Grupo', group.groupName ? String(group.groupName) : `Grupo ${Number(group.groupIndex ?? 0)}`],
+        ['Codigo', group.groupCode ? String(group.groupCode) : '-'],
+        ['Horario', this.buildApplicationGroupScheduleSummary(group)],
+        ['Capacidad', group.capacitySnapshot === null ? '-' : Number(group.capacitySnapshot)],
+        ['Asignados', groupStudents.length],
+        [],
+        ['Grupo', 'DNI', 'Codigo', 'Alumno', 'Carrera', 'Sede', 'Correo institucional'],
+      ];
+      for (const student of groupStudents) {
+        rows.push([
+          group.groupName ? String(group.groupName) : `Grupo ${Number(group.groupIndex ?? 0)}`,
+          student.dni ? String(student.dni) : '',
+          student.codigoAlumno ? String(student.codigoAlumno) : '',
+          String(student.fullName ?? ''),
+          student.careerName ? String(student.careerName) : 'SIN CARRERA',
+          student.campusName ? String(student.campusName) : 'SIN SEDE',
+          student.email ? String(student.email) : '',
+        ]);
+      }
+      const sheet = XLSX.utils.aoa_to_sheet(rows);
+      sheet['!cols'] = [
+        { wch: 20 },
+        { wch: 16 },
+        { wch: 18 },
+        { wch: 42 },
+        { wch: 30 },
+        { wch: 22 },
+        { wch: 34 },
+      ];
+      XLSX.utils.book_append_sheet(
+        workbook,
+        sheet,
+        this.toWorksheetName(group.groupName ? String(group.groupName) : `Grupo ${Number(group.groupIndex ?? 0)}`)
+      );
+    }
+
+    if (pending.length > 0) {
+      const pendingRows: Array<Array<string>> = [
+        ['DNI', 'Codigo', 'Alumno', 'Carrera', 'Sede', 'Correo institucional', 'Motivo', 'Detalle'],
+      ];
+      for (const row of pending) {
+        pendingRows.push([
+          row.dni ? String(row.dni) : '',
+          row.codigoAlumno ? String(row.codigoAlumno) : '',
+          String(row.fullName ?? ''),
+          row.careerName ? String(row.careerName) : 'SIN CARRERA',
+          row.campusName ? String(row.campusName) : 'SIN SEDE',
+          row.email ? String(row.email) : '',
+          String(row.reasonCode ?? ''),
+          row.reasonDetail ? String(row.reasonDetail) : '',
+        ]);
+      }
+      const pendingSheet = XLSX.utils.aoa_to_sheet(pendingRows);
+      pendingSheet['!cols'] = [
+        { wch: 16 },
+        { wch: 18 },
+        { wch: 42 },
+        { wch: 30 },
+        { wch: 22 },
+        { wch: 34 },
+        { wch: 22 },
+        { wch: 50 },
+      ];
+      XLSX.utils.book_append_sheet(workbook, pendingSheet, 'Pendientes');
+    }
+
+    return {
+      fileBuffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer,
+      fileName: this.buildWorkshopGroupsExportFileName(
+        String(run.name ?? 'taller'),
+        this.normalizeIsoDateOnly(run.createdAt) ?? 'aplicacion'
+      ),
+    };
   }
 
   async listTeacherScheduleItems(teacherId: string) {
@@ -2292,11 +2490,73 @@ export class WorkshopsService {
     return `${year}-${month}-${day}`;
   }
 
+  private normalizeExcelDateTime(value: unknown) {
+    if (!value) return '';
+    const parsed = new Date(String(value));
+    if (Number.isNaN(parsed.getTime())) return String(value ?? '');
+    const year = parsed.getFullYear();
+    const month = String(parsed.getMonth() + 1).padStart(2, '0');
+    const day = String(parsed.getDate()).padStart(2, '0');
+    const hours = String(parsed.getHours()).padStart(2, '0');
+    const minutes = String(parsed.getMinutes()).padStart(2, '0');
+    return `${year}-${month}-${day} ${hours}:${minutes}`;
+  }
+
   private toHHmm(value: string) {
     const normalized = this.normalize(value);
     const match = normalized.match(/^(\d{2}):(\d{2})/);
     if (!match) return normalized;
     return `${match[1]}:${match[2]}`;
+  }
+
+  private dayShort(dayOfWeek: number) {
+    const labels: Record<number, string> = {
+      1: 'Lun',
+      2: 'Mar',
+      3: 'Mie',
+      4: 'Jue',
+      5: 'Vie',
+      6: 'Sab',
+      7: 'Dom',
+    };
+    return labels[Number(dayOfWeek)] ?? String(dayOfWeek ?? '');
+  }
+
+  private buildApplicationGroupScheduleSummary(group: {
+    dayOfWeek: number | null;
+    startTime: string | null;
+    endTime: string | null;
+    venueDetails?: string | null;
+  }) {
+    if (!group.startTime || !group.endTime) return 'Sin horario';
+    const base = `${this.dayShort(Number(group.dayOfWeek ?? 0))} ${this.toHHmm(
+      String(group.startTime)
+    )}-${this.toHHmm(String(group.endTime))}`;
+    const venue = String(group.venueDetails ?? '').trim();
+    return venue ? `${base} | ${venue}` : base;
+  }
+
+  private sanitizeFilePart(value: string) {
+    return String(value ?? '')
+      .trim()
+      .replace(/[\\/:*?"<>|]+/g, '-')
+      .replace(/\s+/g, '_')
+      .slice(0, 80);
+  }
+
+  private buildWorkshopGroupsExportFileName(workshopName: string, appliedDate: string) {
+    const workshop = this.sanitizeFilePart(workshopName || 'taller');
+    const date = this.sanitizeFilePart(appliedDate || 'aplicacion');
+    return `taller_grupos_${workshop}_${date}.xlsx`;
+  }
+
+  private toWorksheetName(value: string) {
+    const cleaned = String(value ?? '')
+      .trim()
+      .replace(/[:\\/?*\[\]]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .slice(0, 31);
+    return cleaned || 'Hoja';
   }
 
   private normalizeAttendanceStatus(value: unknown): AttendanceStatus {

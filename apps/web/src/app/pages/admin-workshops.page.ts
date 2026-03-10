@@ -130,6 +130,13 @@ import { AdminWorkshopsService, WorkshopRow } from './admin-workshops.service';
                     Preview / aplicar
                   </a>
                   <button
+                    class="rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-50 disabled:opacity-50"
+                    [disabled]="!workshop.lastApplicationId || downloadingExportId === workshop.id"
+                    (click)="downloadGroupsExport(workshop)"
+                  >
+                    {{ downloadingExportId === workshop.id ? 'Exportando...' : 'Exportar grupos' }}
+                  </button>
+                  <button
                     class="rounded border border-rose-300 px-2 py-1 text-xs text-rose-700 hover:bg-rose-50"
                     (click)="deleteWorkshop(workshop)"
                   >
@@ -157,6 +164,7 @@ export class AdminWorkshopsPage implements OnInit, OnDestroy {
   loading = false;
   error: string | null = null;
   success: string | null = null;
+  downloadingExportId: string | null = null;
 
   async ngOnInit() {
     this.querySub = this.route.queryParamMap.subscribe((params) => {
@@ -201,6 +209,33 @@ export class AdminWorkshopsPage implements OnInit, OnDestroy {
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo eliminar el taller';
     } finally {
+      this.safeDetectChanges();
+    }
+  }
+
+  async downloadGroupsExport(workshop: WorkshopRow) {
+    if (!workshop.lastApplicationId) {
+      this.error = 'Aplica el taller primero para exportar grupos.';
+      this.safeDetectChanges();
+      return;
+    }
+    this.error = null;
+    this.success = null;
+    this.downloadingExportId = workshop.id;
+    try {
+      const blob = await this.workshopsService.downloadGroupsExcel(workshop.id);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${workshop.name}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e: any) {
+      this.error = e?.error?.message ?? 'No se pudo exportar grupos del taller';
+    } finally {
+      this.downloadingExportId = null;
       this.safeDetectChanges();
     }
   }

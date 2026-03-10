@@ -13,6 +13,6 @@ export class UpdateAdminUserDto {
   fullName?: string;
 
   @IsOptional()
-  @IsIn([Role.ADMIN, Role.ADMINISTRATIVO])
-  role?: Role.ADMIN | Role.ADMINISTRATIVO;
+  @IsIn([Role.ADMIN, Role.ADMINISTRATIVO, Role.SOPORTE_TECNICO])
+  role?: Role.ADMIN | Role.ADMINISTRATIVO | Role.SOPORTE_TECNICO;
 }

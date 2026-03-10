@@ -2801,6 +2801,176 @@ export class SectionsService {
     return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
   }
 
+  async buildSectionCoursesSummaryExportWorkbook(params: {
+    facultyGroup?: string | null;
+    campusName?: string | null;
+  }) {
+    const activePeriodId = await this.periodsService.getOperationalPeriodIdOrThrow();
+    const facultyGroup = String(params.facultyGroup ?? '').trim();
+    const campusName = String(params.campusName ?? '').trim();
+
+    const rows: Array<{
+      sectionCourseId: string;
+      facultyGroup: string | null;
+      facultyName: string | null;
+      campusName: string | null;
+      sectionCode: string | null;
+      sectionName: string;
+      courseName: string;
+      modality: string | null;
+      teacherName: string | null;
+      teacherDni: string | null;
+      classroomCode: string | null;
+      classroomName: string | null;
+      studentCount: number;
+    }> = await this.sectionsRepo.manager.query(
+      `
+      SELECT
+        sc.id AS sectionCourseId,
+        s.facultyGroup AS facultyGroup,
+        s.facultyName AS facultyName,
+        s.campusName AS campusName,
+        s.code AS sectionCode,
+        s.name AS sectionName,
+        c.name AS courseName,
+        s.modality AS modality,
+        COALESCE(tc.fullName, ts.fullName) AS teacherName,
+        COALESCE(tc.dni, ts.dni) AS teacherDni,
+        cl.code AS classroomCode,
+        cl.name AS classroomName,
+        COUNT(DISTINCT ssc.studentId) AS studentCount
+      FROM section_courses sc
+      INNER JOIN sections s ON s.id = sc.sectionId
+      INNER JOIN courses c ON c.id = sc.courseId
+      LEFT JOIN section_course_teachers sct ON sct.sectionCourseId = sc.id
+      LEFT JOIN users tc ON tc.id = sct.teacherId
+      LEFT JOIN users ts ON ts.id = s.teacherId
+      LEFT JOIN classrooms cl ON cl.id = sc.classroomId
+      LEFT JOIN section_student_courses ssc ON ssc.sectionCourseId = sc.id
+      WHERE sc.periodId = ?
+        AND (? = '' OR s.facultyGroup = ?)
+        AND (? = '' OR s.campusName = ?)
+      GROUP BY
+        sc.id,
+        s.facultyGroup,
+        s.facultyName,
+        s.campusName,
+        s.code,
+        s.name,
+        c.name,
+        s.modality,
+        tc.fullName,
+        ts.fullName,
+        tc.dni,
+        ts.dni
+        ,cl.code
+        ,cl.name
+      ORDER BY
+        s.facultyGroup ASC,
+        s.campusName ASC,
+        s.code ASC,
+        c.name ASC
+      `,
+      [activePeriodId, facultyGroup, facultyGroup, campusName, campusName]
+    );
+
+    const sectionCourseIds = rows.map((row) => String(row.sectionCourseId));
+    const blockRows: Array<{
+      sectionCourseId: string;
+      dayOfWeek: number;
+      startTime: string;
+      endTime: string;
+      startDate: string | null;
+      endDate: string | null;
+    }> =
+      sectionCourseIds.length > 0
+        ? await this.sectionsRepo.manager.query(
+            `
+            SELECT
+              sectionCourseId,
+              dayOfWeek,
+              startTime,
+              endTime,
+              startDate,
+              endDate
+            FROM schedule_blocks
+            WHERE sectionCourseId IN (${sectionCourseIds.map(() => '?').join(', ')})
+            ORDER BY dayOfWeek ASC, startTime ASC
+            `,
+            sectionCourseIds
+          )
+        : [];
+
+    const blocksBySectionCourse = new Map<string, typeof blockRows>();
+    for (const block of blockRows) {
+      const key = String(block.sectionCourseId);
+      if (!blocksBySectionCourse.has(key)) blocksBySectionCourse.set(key, []);
+      blocksBySectionCourse.get(key)!.push({
+        ...block,
+        startDate: this.toIsoDateOnly(block.startDate),
+        endDate: this.toIsoDateOnly(block.endDate),
+      });
+    }
+
+    const worksheetRows = rows.map((row) => ({
+      Facultad: String(row.facultyName ?? row.facultyGroup ?? '').trim() || 'SIN FACULTAD',
+      Sede: String(row.campusName ?? '').trim() || 'SIN SEDE',
+      Seccion: String(row.sectionCode ?? row.sectionName ?? '').trim() || 'SIN SECCION',
+      Curso: String(row.courseName ?? '').trim(),
+      Modalidad: String(row.modality ?? '').trim() || '-',
+      Docente: String(row.teacherName ?? '').trim() || 'Sin docente',
+      'DNI docente': String(row.teacherDni ?? '').trim() || '-',
+      Aula: String(row.modality ?? '')
+        .trim()
+        .toUpperCase()
+        .includes('VIRTUAL')
+        ? '-'
+        : String(row.classroomCode ?? row.classroomName ?? '').trim() || '-',
+      Horario: this.buildScheduleSummaryForExport(
+        blocksBySectionCourse.get(String(row.sectionCourseId)) ?? []
+      ),
+      Matriculados: Number(row.studentCount ?? 0),
+    }));
+
+    const workbook = XLSX.utils.book_new();
+    const worksheet = XLSX.utils.json_to_sheet(worksheetRows, {
+      header: [
+        'Facultad',
+        'Sede',
+        'Seccion',
+        'Curso',
+        'Modalidad',
+        'Docente',
+        'DNI docente',
+        'Aula',
+        'Horario',
+        'Matriculados',
+      ],
+    });
+    worksheet['!cols'] = [
+      { wch: 24 },
+      { wch: 20 },
+      { wch: 18 },
+      { wch: 36 },
+      { wch: 16 },
+      { wch: 34 },
+      { wch: 16 },
+      { wch: 18 },
+      { wch: 42 },
+      { wch: 14 },
+    ];
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'SeccionesCurso');
+
+    const suffixParts = [
+      this.sanitizeFilePart(facultyGroup || 'todas'),
+      this.sanitizeFilePart(campusName || 'todas'),
+    ];
+    return {
+      fileBuffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer,
+      fileName: `secciones_curso_${suffixParts.join('_')}.xlsx`,
+    };
+  }
+
   async getZoomContextBySectionAndCourseName(sectionId: string, courseName: string) {
     await this.getByIdOrThrow(sectionId);
     const activePeriodId = await this.periodsService.getOperationalPeriodIdOrThrow();
@@ -3172,6 +3342,151 @@ export class SectionsService {
         `No se puede asignar docente: cruce con ${label} (${first.startTime}-${first.endTime}).`
       );
     }
+  }
+
+  async listClassroomsWithScheduleByCampus(campusName: string) {
+    const activePeriodId = await this.periodsService.getOperationalPeriodIdOrThrow();
+    const normalizedCampus = String(campusName ?? '').trim();
+    if (!normalizedCampus) {
+      throw new BadRequestException('campusName is required');
+    }
+
+    const rows: Array<{
+      id: string;
+      code: string | null;
+      name: string | null;
+    }> = await this.sectionsRepo.manager.query(
+      `
+      SELECT DISTINCT
+        cl.id AS id,
+        cl.code AS code,
+        cl.name AS name
+      FROM section_courses sc
+      INNER JOIN sections s ON s.id = sc.sectionId
+      INNER JOIN schedule_blocks sb ON sb.sectionCourseId = sc.id
+      INNER JOIN classrooms cl ON cl.id = sc.classroomId
+      WHERE sc.periodId = ?
+        AND sc.classroomId IS NOT NULL
+        AND COALESCE(UPPER(TRIM(s.modality)), '') NOT LIKE '%VIRTUAL%'
+        AND COALESCE(UPPER(TRIM(s.campusName)), '') = ?
+      ORDER BY cl.code ASC, cl.name ASC
+      `,
+      [activePeriodId, this.scopeKey(normalizedCampus)]
+    );
+
+    return rows.map((row) => ({
+      id: String(row.id ?? '').trim(),
+      code: row.code ? String(row.code).trim() : null,
+      name: row.name ? String(row.name).trim() : null,
+    }));
+  }
+
+  async listCampusesWithScheduledClassrooms() {
+    const activePeriodId = await this.periodsService.getOperationalPeriodIdOrThrow();
+
+    const rows: Array<{
+      name: string;
+    }> = await this.sectionsRepo.manager.query(
+      `
+      SELECT DISTINCT
+        s.campusName AS name
+      FROM section_courses sc
+      INNER JOIN sections s ON s.id = sc.sectionId
+      INNER JOIN schedule_blocks sb ON sb.sectionCourseId = sc.id
+      INNER JOIN classrooms cl ON cl.id = sc.classroomId
+      WHERE sc.periodId = ?
+        AND sc.classroomId IS NOT NULL
+        AND COALESCE(UPPER(TRIM(s.modality)), '') NOT LIKE '%VIRTUAL%'
+        AND COALESCE(TRIM(s.campusName), '') <> ''
+      ORDER BY s.campusName ASC
+      `,
+      [activePeriodId]
+    );
+
+    return rows.map((row, index) => ({
+      id: `scheduled-campus-${index + 1}`,
+      name: String(row.name ?? '').trim(),
+    }));
+  }
+
+  async getClassroomSchedule(params: { campusName: string; classroomId: string }) {
+    const activePeriodId = await this.periodsService.getOperationalPeriodIdOrThrow();
+    const normalizedCampus = String(params.campusName ?? '').trim();
+    const normalizedClassroomId = String(params.classroomId ?? '').trim();
+    if (!normalizedCampus || !normalizedClassroomId) {
+      throw new BadRequestException('campusName and classroomId are required');
+    }
+
+    const rows: Array<{
+      blockId: string;
+      classroomId: string;
+      classroomCode: string | null;
+      classroomName: string | null;
+      sectionCourseId: string;
+      sectionCode: string | null;
+      sectionName: string;
+      courseName: string;
+      teacherName: string | null;
+      dayOfWeek: number;
+      startTime: string;
+      endTime: string;
+    }> = await this.sectionsRepo.manager.query(
+      `
+      SELECT
+        sb.id AS blockId,
+        cl.id AS classroomId,
+        cl.code AS classroomCode,
+        cl.name AS classroomName,
+        sc.id AS sectionCourseId,
+        s.code AS sectionCode,
+        s.name AS sectionName,
+        c.name AS courseName,
+        COALESCE(tc.fullName, ts.fullName) AS teacherName,
+        sb.dayOfWeek AS dayOfWeek,
+        sb.startTime AS startTime,
+        sb.endTime AS endTime
+      FROM section_courses sc
+      INNER JOIN sections s ON s.id = sc.sectionId
+      INNER JOIN courses c ON c.id = sc.courseId
+      INNER JOIN schedule_blocks sb ON sb.sectionCourseId = sc.id
+      INNER JOIN classrooms cl ON cl.id = sc.classroomId
+      LEFT JOIN section_course_teachers sct ON sct.sectionCourseId = sc.id
+      LEFT JOIN users tc ON tc.id = sct.teacherId
+      LEFT JOIN users ts ON ts.id = s.teacherId
+      WHERE sc.periodId = ?
+        AND sc.classroomId = ?
+        AND COALESCE(UPPER(TRIM(s.modality)), '') NOT LIKE '%VIRTUAL%'
+        AND COALESCE(UPPER(TRIM(s.campusName)), '') = ?
+      ORDER BY
+        sb.dayOfWeek ASC,
+        sb.startTime ASC,
+        c.name ASC,
+        s.code ASC,
+        s.name ASC
+      `,
+      [activePeriodId, normalizedClassroomId, this.scopeKey(normalizedCampus)]
+    );
+
+    const classroom = rows[0];
+    return {
+      classroomId: normalizedClassroomId,
+      classroomCode: classroom?.classroomCode ? String(classroom.classroomCode).trim() : null,
+      classroomName: classroom?.classroomName ? String(classroom.classroomName).trim() : null,
+      items: rows.map((row) => ({
+        id: String(row.blockId ?? '').trim(),
+        classroomId: String(row.classroomId ?? '').trim(),
+        classroomCode: row.classroomCode ? String(row.classroomCode).trim() : null,
+        classroomName: row.classroomName ? String(row.classroomName).trim() : null,
+        sectionCourseId: String(row.sectionCourseId ?? '').trim(),
+        sectionCode: row.sectionCode ? String(row.sectionCode).trim() : null,
+        sectionName: String(row.sectionName ?? '').trim(),
+        courseName: String(row.courseName ?? '').trim(),
+        teacherName: row.teacherName ? String(row.teacherName).trim() : null,
+        dayOfWeek: Number(row.dayOfWeek ?? 0),
+        startTime: String(row.startTime ?? '').slice(0, 5),
+        endTime: String(row.endTime ?? '').slice(0, 5),
+      })),
+    };
   }
 
   private buildSectionCourseStudentsExportFileName(params: {

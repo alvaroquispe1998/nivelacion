@@ -5,7 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { isAdminBackofficeRole, Role } from '@uai/shared';
+import { isInternalUserRole, Role } from '@uai/shared';
 import { hashInternalPassword, verifyStoredPassword } from '../users/passwords.util';
 import { UsersService } from '../users/users.service';
 import { UserEntity } from '../users/user.entity';
@@ -84,23 +84,17 @@ export class AuthService {
     }
 
     const user = await this.usersService.getByIdOrThrow(userId);
-    if (!isAdminBackofficeRole(user.role)) {
-      throw new UnauthorizedException('Invalid credentials');
-    }
     if (!user.isActive) {
       throw new UnauthorizedException('User is inactive');
     }
 
-    const matchesStoredPassword = await verifyStoredPassword(
-      user.passwordHash,
-      currentPassword
-    );
-    const matchesLegacyAdminEnv =
-      user.dni.toLowerCase() === ADMIN_LOGIN &&
-      user.role === Role.ADMIN &&
-      currentPassword === ADMIN_PASSWORD;
+    const isValidCurrentPassword = await this.validateLoginCredentials({
+      user,
+      password: currentPassword,
+      usuarioLower: String(user.dni ?? '').trim().toLowerCase(),
+    });
 
-    if (!matchesStoredPassword && !matchesLegacyAdminEnv) {
+    if (!isValidCurrentPassword) {
       throw new UnauthorizedException('Current password is invalid');
     }
 
@@ -116,7 +110,7 @@ export class AuthService {
   }) {
     const { user, password, usuarioLower } = params;
 
-    if (isAdminBackofficeRole(user.role)) {
+    if (isInternalUserRole(user.role)) {
       const matchesStoredPassword = await verifyStoredPassword(user.passwordHash, password);
       const matchesLegacyAdminEnv =
         usuarioLower === ADMIN_LOGIN &&
@@ -127,6 +121,9 @@ export class AuthService {
     }
 
     if (user.role === Role.ALUMNO || user.role === Role.DOCENTE) {
+      if (String(user.passwordHash ?? '').trim()) {
+        return verifyStoredPassword(user.passwordHash, password);
+      }
       return password === user.dni;
     }
 

@@ -74,7 +74,7 @@ export class UsersController {
     @Param('id') id: string,
     @Body() dto: ResetAdminUserPasswordDto
   ) {
-    await this.usersService.resetInternalPassword(id, dto.newPassword);
+    await this.usersService.resetUserPasswordByAdmin(id, dto.newPassword);
     return { ok: true };
   }
 

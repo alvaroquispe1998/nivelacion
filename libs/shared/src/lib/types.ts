@@ -1,4 +1,4 @@
-import type { AttendanceStatus, Role } from './enums';
+import type { AttendanceStatus, InternalUserRole, Role } from './enums';
 
 export type Uuid = string;
 
@@ -267,14 +267,14 @@ export interface AdminInternalUser {
 export interface CreateAdminInternalUserRequest {
   dni: string;
   fullName: string;
-  role: Role.ADMIN | Role.ADMINISTRATIVO;
+  role: InternalUserRole;
   password: string;
 }
 
 export interface UpdateAdminInternalUserRequest {
   dni?: string;
   fullName?: string;
-  role?: Role.ADMIN | Role.ADMINISTRATIVO;
+  role?: InternalUserRole;
 }
 
 export interface UpdateAdminInternalUserStatusRequest {

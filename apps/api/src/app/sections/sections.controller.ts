@@ -183,6 +183,22 @@ export class SectionsController {
     });
   }
 
+  @Get('export/section-courses-summary/excel')
+  async exportSectionCoursesSummaryExcel(
+    @Query('facultyGroup') facultyGroup?: string,
+    @Query('campusName') campusName?: string
+  ): Promise<StreamableFile> {
+    const { fileBuffer, fileName } =
+      await this.sectionsService.buildSectionCoursesSummaryExportWorkbook({
+        facultyGroup: String(facultyGroup ?? '').trim() || null,
+        campusName: String(campusName ?? '').trim() || null,
+      });
+    return new StreamableFile(fileBuffer, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="${fileName}"`,
+    });
+  }
+
   @Get('filters/campuses')
   listCampuses(@Query('facultyGroup') facultyGroup?: string) {
     const value = (facultyGroup ?? '').trim();

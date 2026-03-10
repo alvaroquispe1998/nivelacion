@@ -92,6 +92,8 @@ export class LoginPage {
       const res = await this.auth.login({ usuario, password });
       const targetUrl = isAdminBackofficeRole(res.user.role)
         ? '/admin/dashboard'
+        : res.user.role === Role.SOPORTE_TECNICO
+          ? '/support/classroom-schedule'
         : res.user.role === Role.DOCENTE
           ? '/teacher/schedule'
           : '/student/schedule';

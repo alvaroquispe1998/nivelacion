@@ -5,6 +5,8 @@ import { SectionCourseTeacherEntity } from './section-course-teacher.entity';
 import { SectionEntity } from './section.entity';
 import { SectionsService } from './sections.service';
 import { SectionsController } from './sections.controller';
+import { ClassroomScheduleController } from './classroom-schedule.controller';
+import { SupportClassroomScheduleController } from './support-classroom-schedule.controller';
 import { PeriodsModule } from '../periods/periods.module';
 import { UserEntity } from '../users/user.entity';
 
@@ -18,7 +20,11 @@ import { UserEntity } from '../users/user.entity';
     ]),
     PeriodsModule,
   ],
-  controllers: [SectionsController],
+  controllers: [
+    SectionsController,
+    ClassroomScheduleController,
+    SupportClassroomScheduleController,
+  ],
   providers: [SectionsService],
   exports: [SectionsService, TypeOrmModule],
 })

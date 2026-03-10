@@ -7,6 +7,7 @@ import type {
   AdminStudentReportSearchItem,
   AdminReassignmentOption,
   AdminReassignmentResult,
+  ResetAdminInternalUserPasswordRequest,
   StudentGradesReportRow,
 } from '@uai/shared';
 import { Subscription, firstValueFrom, skip } from 'rxjs';
@@ -19,7 +20,8 @@ type StudentDetailSection =
   | 'schedule'
   | 'enrollment'
   | 'grades'
-  | 'attendance';
+  | 'attendance'
+  | 'password';
 
 @Component({
   standalone: true,
@@ -426,6 +428,49 @@ type StudentDetailSection =
                 </div>
               </div>
             </div>
+
+            <div
+              *ngIf="activeSection === 'password'"
+              class="rounded-2xl border border-slate-200 bg-white p-5"
+            >
+              <div class="text-base font-semibold">Reset de contraseña</div>
+              <div class="mt-2 text-sm text-slate-600">
+                Nueva contraseña para {{ modalStudentName }}.
+              </div>
+
+              <div
+                *ngIf="passwordResetSuccess"
+                class="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700"
+              >
+                {{ passwordResetSuccess }}
+              </div>
+              <div
+                *ngIf="passwordResetError"
+                class="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+              >
+                {{ passwordResetError }}
+              </div>
+
+              <input
+                type="password"
+                class="mt-4 w-full max-w-md rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+                [(ngModel)]="passwordResetNewPassword"
+                [ngModelOptions]="{ standalone: true }"
+                [disabled]="passwordResetLoading"
+                placeholder="Nueva contraseña"
+              />
+
+              <div class="mt-6 flex justify-end">
+                <button
+                  type="button"
+                  class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-slate-900/20 disabled:opacity-60"
+                  [disabled]="passwordResetLoading || passwordResetNewPassword.trim().length < 8"
+                  (click)="submitPasswordReset()"
+                >
+                  {{ passwordResetLoading ? 'Guardando...' : 'Actualizar' }}
+                </button>
+              </div>
+            </div>
           </ng-container>
         </div>
       </div>
@@ -536,6 +581,7 @@ export class AdminStudentReportPage implements OnDestroy {
     { id: 'enrollment', label: 'Matricula' },
     { id: 'grades', label: 'Notas' },
     { id: 'attendance', label: 'Asistencia' },
+    { id: 'password', label: 'Resetear Contraseña' },
   ];
 
   // Reubicacion desde ficha alumno
@@ -561,6 +607,10 @@ export class AdminStudentReportPage implements OnDestroy {
   exportingPdf = false;
   error: string | null = null;
   emptyMessage: string | null = null;
+  passwordResetLoading = false;
+  passwordResetNewPassword = '';
+  passwordResetError: string | null = null;
+  passwordResetSuccess: string | null = null;
 
   get currentPeriodLabel() {
     const period = this.adminPeriodContext.getSelectedPeriod();
@@ -702,11 +752,16 @@ export class AdminStudentReportPage implements OnDestroy {
 
   setActiveSection(section: StudentDetailSection) {
     this.activeSection = section;
+    if (section !== 'password') {
+      this.passwordResetError = null;
+      this.passwordResetSuccess = null;
+    }
   }
 
   closeDetailModal() {
     this.detailModalOpen = false;
     this.activeSection = null;
+    this.resetPasswordForm();
     this.cdr.detectChanges();
   }
 
@@ -780,6 +835,7 @@ export class AdminStudentReportPage implements OnDestroy {
     this.selectedStudentId = studentId;
     this.detailModalOpen = true;
     this.activeSection = 'general';
+    this.resetPasswordForm();
     await this.loadSelectedStudent();
   }
 
@@ -954,6 +1010,43 @@ export class AdminStudentReportPage implements OnDestroy {
 
   private displayValue(value: string | null | undefined) {
     return String(value ?? '').trim() || '-';
+  }
+
+  async submitPasswordReset() {
+    if (!this.selectedStudentId) return;
+    if (this.passwordResetNewPassword.trim().length < 8) {
+      this.passwordResetError = 'La contraseña debe tener al menos 8 caracteres.';
+      this.passwordResetSuccess = null;
+      this.cdr.detectChanges();
+      return;
+    }
+
+    this.passwordResetLoading = true;
+    this.passwordResetError = null;
+    this.passwordResetSuccess = null;
+    try {
+      const payload: ResetAdminInternalUserPasswordRequest = {
+        newPassword: this.passwordResetNewPassword,
+      };
+      await firstValueFrom(
+        this.http.post(`/api/admin/users/${this.selectedStudentId}/reset-password`, payload)
+      );
+      this.passwordResetSuccess = 'Contraseña actualizada correctamente.';
+      this.passwordResetNewPassword = '';
+    } catch (e: any) {
+      this.passwordResetError =
+        e?.error?.message ?? 'No se pudo actualizar la contraseña del alumno';
+    } finally {
+      this.passwordResetLoading = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  private resetPasswordForm() {
+    this.passwordResetLoading = false;
+    this.passwordResetNewPassword = '';
+    this.passwordResetError = null;
+    this.passwordResetSuccess = null;
   }
 
   private async downloadBlob(url: string) {

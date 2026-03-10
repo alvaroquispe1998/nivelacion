@@ -18,8 +18,8 @@ export class CreateAdminUserDto {
   @MaxLength(180)
   fullName!: string;
 
-  @IsIn([Role.ADMIN, Role.ADMINISTRATIVO])
-  role!: Role.ADMIN | Role.ADMINISTRATIVO;
+  @IsIn([Role.ADMIN, Role.ADMINISTRATIVO, Role.SOPORTE_TECNICO])
+  role!: Role.ADMIN | Role.ADMINISTRATIVO | Role.SOPORTE_TECNICO;
 
   @IsString()
   @MinLength(8)

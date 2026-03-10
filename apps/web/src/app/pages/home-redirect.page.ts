@@ -20,6 +20,10 @@ export class HomeRedirectPage {
       this.router.navigateByUrl('/admin/dashboard');
       return;
     }
+    if (role === Role.SOPORTE_TECNICO) {
+      this.router.navigateByUrl('/support/classroom-schedule');
+      return;
+    }
     if (role === Role.ALUMNO) {
       this.router.navigateByUrl('/student/schedule');
       return;

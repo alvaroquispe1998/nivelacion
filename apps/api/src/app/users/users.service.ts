@@ -5,7 +5,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Role, isAdminBackofficeRole } from '@uai/shared';
+import { INTERNAL_USER_ROLES, Role, isInternalUserRole } from '@uai/shared';
+import type { InternalUserRole } from '@uai/shared';
 import { In } from 'typeorm';
 import { Repository } from 'typeorm';
 import { UserEntity } from './user.entity';
@@ -45,7 +46,7 @@ export class UsersService {
 
   async findInternalByDni(dni: string): Promise<UserEntity | null> {
     return this.usersRepo.findOne({
-      where: { dni, role: In([Role.ADMIN, Role.ADMINISTRATIVO]) },
+      where: { dni, role: In(INTERNAL_USER_ROLES) },
     });
   }
 
@@ -55,7 +56,7 @@ export class UsersService {
 
   async findStaffByDni(dni: string): Promise<UserEntity | null> {
     return this.usersRepo.findOne({
-      where: { dni, role: In([Role.ADMIN, Role.ADMINISTRATIVO, Role.DOCENTE]) },
+      where: { dni, role: In([...INTERNAL_USER_ROLES, Role.DOCENTE]) },
     });
   }
 
@@ -69,14 +70,14 @@ export class UsersService {
 
   async listInternalUsers() {
     return this.usersRepo.find({
-      where: { role: In([Role.ADMIN, Role.ADMINISTRATIVO]) },
+      where: { role: In(INTERNAL_USER_ROLES) },
       order: { role: 'ASC', fullName: 'ASC', createdAt: 'DESC' },
     });
   }
 
   async getInternalByIdOrThrow(id: string) {
     const user = await this.usersRepo.findOne({
-      where: { id, role: In([Role.ADMIN, Role.ADMINISTRATIVO]) },
+      where: { id, role: In(INTERNAL_USER_ROLES) },
     });
     if (!user) throw new NotFoundException('Internal user not found');
     return user;
@@ -85,7 +86,7 @@ export class UsersService {
   async createInternalUser(params: {
     dni: string;
     fullName: string;
-    role: Role.ADMIN | Role.ADMINISTRATIVO;
+    role: InternalUserRole;
     password: string;
   }) {
     const dni = String(params.dni ?? '').trim();
@@ -117,7 +118,7 @@ export class UsersService {
     params: {
       dni?: string;
       fullName?: string;
-      role?: Role.ADMIN | Role.ADMINISTRATIVO;
+      role?: InternalUserRole;
     }
   ) {
     const user = await this.getInternalByIdOrThrow(id);
@@ -173,11 +174,26 @@ export class UsersService {
     return this.usersRepo.save(user);
   }
 
+  async resetUserPasswordByAdmin(
+    id: string,
+    newPassword: string,
+    allowedRoles: Role[] = [...INTERNAL_USER_ROLES, Role.DOCENTE, Role.ALUMNO]
+  ) {
+    const user = await this.usersRepo.findOne({ where: { id } });
+    if (!user || !allowedRoles.includes(user.role)) {
+      throw new NotFoundException('User not found');
+    }
+    user.passwordHash = await hashInternalPassword(String(newPassword ?? ''));
+    return this.usersRepo.save(user);
+  }
+
   private assertInternalRole(
     role: Role
-  ): asserts role is Role.ADMIN | Role.ADMINISTRATIVO {
-    if (!isAdminBackofficeRole(role)) {
-      throw new BadRequestException('Role must be ADMIN or ADMINISTRATIVO');
+  ): asserts role is InternalUserRole {
+    if (!isInternalUserRole(role)) {
+      throw new BadRequestException(
+        'Role must be ADMIN, ADMINISTRATIVO or SOPORTE_TECNICO'
+      );
     }
   }
 
@@ -196,7 +212,7 @@ export class UsersService {
 
   private async assertCanDemoteAdmin(params: {
     targetUser: UserEntity;
-    nextRole: Role.ADMIN | Role.ADMINISTRATIVO;
+    nextRole: InternalUserRole;
   }) {
     const { targetUser, nextRole } = params;
     if (targetUser.role !== Role.ADMIN || nextRole === Role.ADMIN || !targetUser.isActive) {
