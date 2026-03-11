@@ -58,6 +58,8 @@ export interface StudentScheduleItem {
   classroomName?: string | null;
   joinUrl?: string | null;
   startUrl?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
   location?: string | null;
   referenceModality?: string | null;
   referenceClassroom?: string | null;

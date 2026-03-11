@@ -28,6 +28,8 @@ interface StudentScheduleItem {
   classroomName?: string | null;
   joinUrl?: string | null;
   startUrl?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
   location?: string | null;
   referenceModality?: string | null;
   referenceClassroom?: string | null;
@@ -104,6 +106,9 @@ interface StudentScheduleItem {
                   <span class="opacity-80">|</span>
                   {{ secondaryLabel(item) }}
                 </div>
+                <div *ngIf="dateRangeLabel(item)" class="font-normal opacity-90">
+                  {{ dateRangeLabel(item) }}
+                </div>
               </button>
             </ng-container>
           </div>
@@ -143,6 +148,10 @@ interface StudentScheduleItem {
           </div>
           <div><b>Dia:</b> {{ dayLabel(selectedItem.dayOfWeek) }}</div>
           <div><b>Hora:</b> {{ selectedItem.startTime }}-{{ selectedItem.endTime }}</div>
+          <div *ngIf="dateRangeLabel(selectedItem)">
+            <b>{{ itemKind(selectedItem) === 'WORKSHOP' ? 'Fecha' : 'Vigencia' }}:</b>
+            {{ dateRangeLabel(selectedItem) }}
+          </div>
           <div><b>Docente:</b> {{ selectedItem.teacherName || 'Sin docente asignado' }}</div>
           <div>
             <b>Tipo:</b> {{ itemKind(selectedItem) === 'WORKSHOP' ? 'Taller' : 'Curso' }}
@@ -361,9 +370,28 @@ export class StudentWeeklyScheduleComponent {
     return String(item?.sectionName ?? '').trim() || 'Seccion';
   }
 
+  dateRangeLabel(item: StudentScheduleItem | null | undefined) {
+    const startDate = this.formatDate(item?.startDate);
+    const endDate = this.formatDate(item?.endDate);
+    if (startDate && endDate) {
+      return startDate === endDate ? startDate : `${startDate} a ${endDate}`;
+    }
+    return startDate || endDate || '';
+  }
+
   private safeMinutes(value: string, fallback: number) {
     const minutes = minutesFromHHmm(value);
     return Number.isFinite(minutes) ? minutes : fallback;
+  }
+
+  private formatDate(value: string | null | undefined) {
+    const text = String(value ?? '').trim();
+    if (!text) return '';
+    const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (match) {
+      return `${match[3]}/${match[2]}/${match[1]}`;
+    }
+    return text;
   }
 
   private navigatePopupToUrl(popup: Window | null, url: string) {

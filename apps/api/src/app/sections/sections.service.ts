@@ -819,7 +819,10 @@ export class SectionsService {
         AND sc.id <> ?
         AND sc.sectionId <> ?
         AND COALESCE(s.facultyGroup, '') = COALESCE(?, '')
-        AND COALESCE(s.campusName, '') = COALESCE(?, '')
+        AND (
+          UPPER(COALESCE(s.modality, '')) LIKE '%VIRTUAL%'
+          OR COALESCE(s.campusName, '') = COALESCE(?, '')
+        )
         AND (
           UPPER(COALESCE(s.modality, '')) LIKE '%VIRTUAL%'
           OR (sc.classroomId IS NOT NULL AND cl.id IS NOT NULL)
@@ -946,7 +949,7 @@ export class SectionsService {
         'La seccion-curso destino debe estar en la misma facultad'
       );
     }
-    if (this.scopeKey(fromMembership.campusName) !== this.scopeKey(toSectionCourse.campusName)) {
+    if (!this.canReassignToCampus(fromMembership, toSectionCourse)) {
       throw new BadRequestException(
         'La seccion-curso destino debe estar en la misma sede'
       );
@@ -3792,6 +3795,16 @@ export class SectionsService {
 
   private isVirtualModality(value: string | null | undefined) {
     return this.scopeKey(value).includes('VIRTUAL');
+  }
+
+  private canReassignToCampus(
+    fromSectionCourse: { campusName: string | null | undefined; modality: string | null | undefined },
+    toSectionCourse: { campusName: string | null | undefined; modality: string | null | undefined }
+  ) {
+    if (this.isVirtualModality(toSectionCourse.modality)) {
+      return true;
+    }
+    return this.scopeKey(fromSectionCourse.campusName) === this.scopeKey(toSectionCourse.campusName);
   }
 
   private isWelcomeScheduleContext(params: {

@@ -42,17 +42,28 @@ interface PeriodMetadata {
 }
 
 interface StudentScheduleReportItem {
+  id?: string;
+  kind?: 'COURSE' | 'WORKSHOP';
+  scheduleBlockId?: string | null;
+  zoomMeetingRecordId?: string | null;
   dayOfWeek: number;
   startTime: string;
   endTime: string;
   courseName: string;
   sectionName: string;
+  sectionCourseId?: string | null;
+  workshopId?: string | null;
+  applicationId?: string | null;
+  applicationGroupId?: string | null;
+  groupName?: string | null;
   teacherName: string | null;
   modality: string | null;
   classroomCode: string | null;
   classroomName: string | null;
   joinUrl: string | null;
   startUrl: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
   location: string | null;
   referenceModality: string | null;
   referenceClassroom: string | null;
@@ -648,9 +659,11 @@ export class GradesService {
       workbook,
       XLSX.utils.json_to_sheet(
         report.schedule.map((item) => ({
+          Tipo: item.kind === 'WORKSHOP' ? 'Taller' : 'Curso',
           Dia: this.dayLabel(item.dayOfWeek),
           Inicio: item.startTime,
           Fin: item.endTime,
+          Fecha: this.formatScheduleDateRange(item.startDate, item.endDate),
           Curso: item.courseName,
           Seccion: item.sectionName,
           Docente: item.teacherName || 'Sin docente asignado',
@@ -784,7 +797,7 @@ export class GradesService {
       report.schedule.length > 0
         ? report.schedule.map(
             (item) =>
-              `${this.dayLabel(item.dayOfWeek)} ${item.startTime}-${item.endTime} | ${item.courseName} | ${item.sectionName} | ${item.teacherName || 'Sin docente asignado'} | ${item.referenceModality || item.modality || '-'} | ${this.classroomLabelForSchedule(item)}`
+              `${item.kind === 'WORKSHOP' ? 'Taller' : 'Curso'} | ${this.dayLabel(item.dayOfWeek)} ${item.startTime}-${item.endTime} | ${this.formatScheduleDateRange(item.startDate, item.endDate)} | ${item.courseName} | ${item.sectionName} | ${item.teacherName || 'Sin docente asignado'} | ${item.referenceModality || item.modality || '-'} | ${this.classroomLabelForSchedule(item)}`
           )
         : ['Sin horario registrado.']
     );
@@ -1559,68 +1572,180 @@ export class GradesService {
     studentId: string,
     periodId: string
   ): Promise<StudentScheduleReportItem[]> {
-    const rows: Array<any> = await this.dataSource.query(
-      `
-      SELECT
-        sb.dayOfWeek AS dayOfWeek,
-        sb.startTime AS startTime,
-        sb.endTime AS endTime,
-        sb.courseName AS courseName,
-        s.name AS sectionName,
-        MAX(COALESCE(tc.fullName, ts.fullName)) AS teacherName,
-        s.modality AS modality,
-        cl.code AS classroomCode,
-        cl.name AS classroomName,
-        sb.joinUrl AS joinUrl,
-        sb.startUrl AS startUrl,
-        sb.location AS location,
-        sb.referenceModality AS referenceModality,
-        sb.referenceClassroom AS referenceClassroom
-      FROM section_student_courses ssc
-      INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
-      INNER JOIN sections s ON s.id = sc.sectionId
-      INNER JOIN schedule_blocks sb ON sb.sectionCourseId = sc.id
-      LEFT JOIN section_course_teachers sct ON sct.sectionCourseId = sc.id
-      LEFT JOIN users tc ON tc.id = sct.teacherId
-      LEFT JOIN users ts ON ts.id = s.teacherId
-      LEFT JOIN classrooms cl ON cl.id = sc.classroomId
-      WHERE ssc.studentId = ?
-        AND sc.periodId = ?
-      GROUP BY
-        sb.id,
-        sb.dayOfWeek,
-        sb.startTime,
-        sb.endTime,
-        sb.courseName,
-        s.name,
-        s.modality,
-        cl.code,
-        cl.name,
-        sb.joinUrl,
-        sb.startUrl,
-        sb.location,
-        sb.referenceModality,
-        sb.referenceClassroom
-      ORDER BY sb.dayOfWeek ASC, sb.startTime ASC
-      `,
-      [studentId, periodId]
-    );
+    const [courseRows, workshopRows] = await Promise.all([
+      this.dataSource.query(
+        `
+        SELECT
+          sb.id AS scheduleBlockId,
+          sb.dayOfWeek AS dayOfWeek,
+          sb.startTime AS startTime,
+          sb.endTime AS endTime,
+          sb.startDate AS startDate,
+          sb.endDate AS endDate,
+          sb.courseName AS courseName,
+          sc.id AS sectionCourseId,
+          s.name AS sectionName,
+          MAX(COALESCE(tc.fullName, ts.fullName)) AS teacherName,
+          s.modality AS modality,
+          cl.code AS classroomCode,
+          cl.name AS classroomName,
+          sb.joinUrl AS joinUrl,
+          sb.startUrl AS startUrl,
+          sb.location AS location,
+          sb.referenceModality AS referenceModality,
+          sb.referenceClassroom AS referenceClassroom
+        FROM section_student_courses ssc
+        INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
+        INNER JOIN sections s ON s.id = sc.sectionId
+        INNER JOIN schedule_blocks sb ON sb.sectionCourseId = sc.id
+        LEFT JOIN section_course_teachers sct ON sct.sectionCourseId = sc.id
+        LEFT JOIN users tc ON tc.id = sct.teacherId
+        LEFT JOIN users ts ON ts.id = s.teacherId
+        LEFT JOIN classrooms cl ON cl.id = sc.classroomId
+        WHERE ssc.studentId = ?
+          AND sc.periodId = ?
+        GROUP BY
+          sb.id,
+          sb.dayOfWeek,
+          sb.startTime,
+          sb.endTime,
+          sb.startDate,
+          sb.endDate,
+          sb.courseName,
+          sc.id,
+          s.name,
+          s.modality,
+          cl.code,
+          cl.name,
+          sb.joinUrl,
+          sb.startUrl,
+          sb.location,
+          sb.referenceModality,
+          sb.referenceClassroom
+        ORDER BY sb.dayOfWeek ASC, sb.startTime ASC
+        `,
+        [studentId, periodId]
+      ),
+      this.getStudentWorkshopScheduleByStudentAndPeriod(studentId, periodId),
+    ]);
 
-    return rows.map((row) => ({
+    const courseItems = courseRows.map((row: any) => ({
+      id: String(row.scheduleBlockId),
+      kind: 'COURSE' as const,
+      scheduleBlockId: String(row.scheduleBlockId),
+      zoomMeetingRecordId: null,
       dayOfWeek: Number(row.dayOfWeek ?? 0),
       startTime: this.toHHmm(row.startTime),
       endTime: this.toHHmm(row.endTime),
       courseName: String(row.courseName ?? ''),
       sectionName: String(row.sectionName ?? ''),
+      sectionCourseId: String(row.sectionCourseId),
+      workshopId: null,
+      applicationId: null,
+      applicationGroupId: null,
+      groupName: null,
       teacherName: row.teacherName ? String(row.teacherName) : null,
       modality: row.modality ? String(row.modality) : null,
       classroomCode: row.classroomCode ? String(row.classroomCode) : null,
       classroomName: row.classroomName ? String(row.classroomName) : null,
       joinUrl: row.joinUrl ? String(row.joinUrl) : null,
       startUrl: row.startUrl ? String(row.startUrl) : null,
+      startDate: row.startDate ? this.toIsoDateOnly(row.startDate) : null,
+      endDate: row.endDate ? this.toIsoDateOnly(row.endDate) : null,
       location: row.location ? String(row.location) : null,
       referenceModality: row.referenceModality ? String(row.referenceModality) : null,
       referenceClassroom: row.referenceClassroom ? String(row.referenceClassroom) : null,
+    }));
+
+    return [...courseItems, ...workshopRows].sort((a, b) => {
+      if (a.dayOfWeek !== b.dayOfWeek) return a.dayOfWeek - b.dayOfWeek;
+      if (a.startTime !== b.startTime) return a.startTime.localeCompare(b.startTime);
+      if (a.endTime !== b.endTime) return a.endTime.localeCompare(b.endTime);
+      return a.courseName.localeCompare(b.courseName, 'es', { sensitivity: 'base' });
+    });
+  }
+
+  private async getStudentWorkshopScheduleByStudentAndPeriod(
+    studentId: string,
+    periodId: string
+  ): Promise<StudentScheduleReportItem[]> {
+    const rows: Array<any> = await this.dataSource.query(
+      `
+      SELECT
+        wb.id AS scheduleBlockId,
+        wa.id AS applicationId,
+        wa.workshopId AS workshopId,
+        wa.name AS workshopName,
+        wa.deliveryMode AS deliveryMode,
+        wa.venueCampusName AS venueCampusName,
+        wa.responsibleTeacherName AS responsibleTeacherName,
+        wag.id AS applicationGroupId,
+        wag.groupName AS groupName,
+        wb.zoomMeetingRecordId AS zoomMeetingRecordId,
+        wb.joinUrl AS joinUrl,
+        wb.dayOfWeek AS dayOfWeek,
+        wb.startTime AS startTime,
+        wb.endTime AS endTime,
+        wb.startDate AS startDate,
+        wb.endDate AS endDate
+      FROM workshop_application_students was
+      INNER JOIN workshop_application_groups wag ON wag.id = was.groupId
+      INNER JOIN workshop_applications wa ON wa.id = was.applicationId
+      INNER JOIN workshop_group_schedule_blocks wb ON wb.groupId = wag.sourceGroupId
+      WHERE was.studentId = ?
+        AND wa.periodId = ?
+        AND wa.id = (
+          SELECT wa2.id
+          FROM workshop_applications wa2
+          WHERE wa2.workshopId = wa.workshopId
+          ORDER BY wa2.createdAt DESC, wa2.id DESC
+          LIMIT 1
+        )
+      ORDER BY wb.dayOfWeek ASC, wb.startTime ASC, wa.name ASC
+      `,
+      [studentId, periodId]
+    );
+
+    return rows.map((row) => ({
+      id: String(row.scheduleBlockId),
+      kind: 'WORKSHOP' as const,
+      scheduleBlockId: String(row.scheduleBlockId),
+      zoomMeetingRecordId: row.zoomMeetingRecordId
+        ? String(row.zoomMeetingRecordId)
+        : null,
+      dayOfWeek: Number(row.dayOfWeek ?? 0),
+      startTime: this.toHHmm(row.startTime),
+      endTime: this.toHHmm(row.endTime),
+      courseName: String(row.workshopName ?? ''),
+      sectionName: row.groupName ? String(row.groupName) : 'Grupo',
+      sectionCourseId: null,
+      workshopId: String(row.workshopId),
+      applicationId: String(row.applicationId),
+      applicationGroupId: String(row.applicationGroupId),
+      groupName: row.groupName ? String(row.groupName) : null,
+      teacherName: row.responsibleTeacherName
+        ? String(row.responsibleTeacherName)
+        : null,
+      modality: row.deliveryMode ? String(row.deliveryMode) : null,
+      classroomCode: null,
+      classroomName: null,
+      joinUrl: row.joinUrl ? String(row.joinUrl) : null,
+      startUrl: null,
+      startDate: row.startDate ? this.toIsoDateOnly(row.startDate) : null,
+      endDate: row.endDate ? this.toIsoDateOnly(row.endDate) : null,
+      location:
+        String(row.deliveryMode ?? '').trim().toUpperCase() === 'PRESENCIAL'
+          ? row.venueCampusName
+            ? String(row.venueCampusName)
+            : null
+          : 'VIRTUAL',
+      referenceModality: row.deliveryMode ? String(row.deliveryMode) : null,
+      referenceClassroom:
+        String(row.deliveryMode ?? '').trim().toUpperCase() === 'PRESENCIAL'
+          ? row.venueCampusName
+            ? String(row.venueCampusName)
+            : null
+          : 'VIRTUAL',
     }));
   }
 
@@ -1931,6 +2056,15 @@ export class GradesService {
     const location = String(item.location ?? '').trim();
     if (location) return location;
     return 'Sin aula asignada';
+  }
+
+  private formatScheduleDateRange(startDate?: string | null, endDate?: string | null) {
+    const start = String(startDate ?? '').trim();
+    const end = String(endDate ?? '').trim();
+    if (start && end) {
+      return start === end ? start : `${start} a ${end}`;
+    }
+    return start || end || '-';
   }
 
   private createPdfDocument() {
