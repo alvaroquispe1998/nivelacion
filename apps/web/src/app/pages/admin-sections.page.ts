@@ -37,6 +37,11 @@ interface BulkApplyFromMotherResponse {
   removedBlocks?: number;
   createdBlocks?: number;
   skipped?: Array<{ sectionCourseId: string; reason: string }>;
+  warnings?: Array<{
+    sectionCourseId: string;
+    message: string;
+    summary?: { affectedStudents: number; totalConflicts: number };
+  }>;
 }
 
 interface ConfirmDialogOptions {
@@ -2063,10 +2068,20 @@ export class AdminSectionsPage {
       const skippedCount = Array.isArray(response.skipped)
         ? response.skipped.length
         : 0;
-      const suffix = skippedCount > 0 ? ` Omitidos: ${skippedCount}.` : "";
+      const warningsCount = Array.isArray(response.warnings)
+        ? response.warnings.length
+        : 0;
+      const suffix = [
+        warningsCount > 0 ? ` Alertas: ${warningsCount}.` : "",
+        skippedCount > 0 ? ` Omitidos: ${skippedCount}.` : "",
+      ].join("");
       this.success = `Horario sincronizado en ${Number(
         response.updatedSections ?? 0,
-      )} seccion(es).${suffix}`;
+      )} seccion(es).${suffix}${
+        warningsCount > 0
+          ? " Coordina con el encargado de taller el cambio de grupo de los alumnos afectados."
+          : ""
+      }`;
       this.workflowState.notifyWorkflowChanged({ reason: "schedule-saved" });
     } catch (e: any) {
       this.error = e?.error?.message ?? "No se pudo aplicar horario masivo";

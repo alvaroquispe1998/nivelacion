@@ -91,6 +91,7 @@ import {
           <table class="min-w-full text-xs">
             <thead class="bg-slate-50 text-left text-slate-700">
               <tr>
+                <th class="px-3 py-2">Taller</th>
                 <th class="px-3 py-2">Alumno</th>
                 <th class="px-3 py-2">Codigo</th>
                 <th class="px-3 py-2">Grupo</th>
@@ -101,6 +102,7 @@ import {
             </thead>
             <tbody>
               <tr *ngFor="let row of appliedView.currentConflicts" class="border-t border-slate-100">
+                <td class="px-3 py-2">{{ row.workshopName }}</td>
                 <td class="px-3 py-2">
                   <div class="font-semibold">{{ row.fullName }}</div>
                   <div class="text-[11px] text-slate-500">{{ row.dni || 'SIN DNI' }}</div>
@@ -120,7 +122,7 @@ import {
                 </td>
               </tr>
               <tr *ngIf="appliedView.currentConflicts.length === 0" class="border-t border-slate-100">
-                <td colspan="6" class="px-3 py-3 text-slate-500">
+                <td colspan="7" class="px-3 py-3 text-slate-500">
                   No hay cruces actuales entre taller y nivelacion.
                 </td>
               </tr>

@@ -71,6 +71,16 @@ export interface GroupScheduleBlockRow {
   startUrl?: string | null;
 }
 
+export interface WorkshopGroupScheduleSaveResponse {
+  blocks: GroupScheduleBlockRow[];
+  warnings?: {
+    code: string;
+    message: string;
+    workshopName?: string | null;
+    summary?: { affectedStudents: number; totalConflicts: number };
+  } | null;
+}
+
 export interface WorkshopAssignmentPreview {
   workshop: WorkshopRow;
   groupsConfigured: number;
@@ -206,6 +216,7 @@ export interface WorkshopAppliedView {
     totalConflicts: number;
   };
   currentConflicts: Array<{
+    workshopName: string;
     studentId: string;
     dni: string | null;
     codigoAlumno: string | null;
@@ -377,12 +388,13 @@ export class AdminWorkshopsService {
   saveGroupSchedule(
     workshopId: string,
     groupId: string,
-    blocks: GroupScheduleBlockRow[]
+    blocks: GroupScheduleBlockRow[],
+    forceConflicts = false
   ) {
     return firstValueFrom(
-      this.http.put<GroupScheduleBlockRow[]>(
+      this.http.put<WorkshopGroupScheduleSaveResponse>(
         `/api/admin/workshops/${encodeURIComponent(workshopId)}/groups/${encodeURIComponent(groupId)}/schedule`,
-        { blocks }
+        { blocks, forceConflicts }
       )
     );
   }

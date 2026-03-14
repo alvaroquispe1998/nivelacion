@@ -31,6 +31,44 @@ interface BulkApplyFromMotherResponse {
   removedBlocks?: number;
   createdBlocks?: number;
   skipped?: Array<{ sectionCourseId: string; reason: string }>;
+  warnings?: Array<{
+    sectionCourseId: string;
+    message: string;
+    summary?: { affectedStudents: number; totalConflicts: number };
+    students?: Array<{
+      studentId: string;
+      dni?: string | null;
+      codigoAlumno?: string | null;
+      fullName: string;
+      conflicts?: Array<{
+        kind?: 'COURSE' | 'WORKSHOP';
+        reason?: string;
+        candidateBlock?: string;
+        conflictingBlock?: string;
+      }>;
+    }>;
+  }>;
+}
+
+interface ScheduleBlockSaveResponse extends AdminScheduleBlock {
+  warnings?: {
+    code: string;
+    message: string;
+    workshops?: string[];
+    summary?: { affectedStudents: number; totalConflicts: number };
+    students?: Array<{
+      studentId: string;
+      dni?: string | null;
+      codigoAlumno?: string | null;
+      fullName: string;
+      conflicts?: Array<{
+        kind?: 'COURSE' | 'WORKSHOP';
+        reason?: string;
+        candidateBlock?: string;
+        conflictingBlock?: string;
+      }>;
+    }>;
+  } | null;
 }
 
 interface SectionZoomContext {
@@ -673,8 +711,8 @@ export class AdminSectionSchedulePage {
     this.success = null;
     try {
       const v = this.form.value;
-      await firstValueFrom(
-        this.http.post('/api/admin/schedule-blocks', {
+      const response = await firstValueFrom(
+        this.http.post<ScheduleBlockSaveResponse>('/api/admin/schedule-blocks', {
           sectionId: this.sectionId,
           courseName: this.selectedCourseName || String(v.courseName ?? '').trim(),
           dayOfWeek: Number(v.dayOfWeek ?? 1),
@@ -695,9 +733,13 @@ export class AdminSectionSchedulePage {
           scopeCourseName: this.effectiveScopeCourseName || null,
         })
       );
-      await this.applyWholeCourseFromMotherIfNeeded();
+      const bulkApplyMessage = await this.applyWholeCourseFromMotherIfNeeded();
       this.cancelEdit(false);
       await this.load();
+      this.success = this.composeScheduleSaveSuccessMessage(
+        response?.warnings ?? null,
+        bulkApplyMessage
+      );
       this.workflowState.notifyWorkflowChanged({ reason: 'schedule-saved' });
     } catch (e: any) {
       this.error = this.formatApiError(
@@ -716,8 +758,8 @@ export class AdminSectionSchedulePage {
     this.success = null;
     try {
       const v = this.form.value;
-      await firstValueFrom(
-        this.http.put(`/api/admin/schedule-blocks/${id}`, {
+      const response = await firstValueFrom(
+        this.http.put<ScheduleBlockSaveResponse>(`/api/admin/schedule-blocks/${id}`, {
           courseName: this.selectedCourseName || String(v.courseName ?? '').trim(),
           dayOfWeek: Number(v.dayOfWeek ?? 1),
           startTime: String(v.startTime ?? ''),
@@ -736,9 +778,13 @@ export class AdminSectionSchedulePage {
           scopeCourseName: this.effectiveScopeCourseName || null,
         })
       );
-      await this.applyWholeCourseFromMotherIfNeeded();
+      const bulkApplyMessage = await this.applyWholeCourseFromMotherIfNeeded();
       this.cancelEdit(false);
       await this.load();
+      this.success = this.composeScheduleSaveSuccessMessage(
+        response?.warnings ?? null,
+        bulkApplyMessage
+      );
       this.workflowState.notifyWorkflowChanged({ reason: 'schedule-saved' });
     } catch (e: any) {
       this.error = this.formatApiError(
@@ -1019,7 +1065,7 @@ export class AdminSectionSchedulePage {
   private async applyWholeCourseFromMotherIfNeeded() {
     const shouldApply = Boolean(this.form.value.applyToWholeCourse);
     const shouldApplyTeacher = Boolean(this.form.value.applyTeacherToWholeCourse);
-    if (!shouldApply) return;
+    if (!shouldApply) return null;
     if (!this.canApplyWholeCourse) {
       throw new BadRequestLikeError(
         'La sincronizacion masiva solo se permite desde la seccion madre de Bienvenida.'
@@ -1055,6 +1101,9 @@ export class AdminSectionSchedulePage {
     const scheduleSkipped = Array.isArray(scheduleResult.skipped)
       ? scheduleResult.skipped.length
       : 0;
+    const scheduleWarnings = Array.isArray(scheduleResult.warnings)
+      ? scheduleResult.warnings.length
+      : 0;
     const teacherUpdated = Number(teacherResult?.updatedCount ?? 0);
     const teacherSkipped = Array.isArray(teacherResult?.skipped)
       ? teacherResult!.skipped!.length
@@ -1062,6 +1111,7 @@ export class AdminSectionSchedulePage {
 
     const messageParts = [
       `Horario aplicado a ${scheduleUpdated} seccion(es)`,
+      scheduleWarnings > 0 ? `alertas ${scheduleWarnings}` : '',
       scheduleSkipped > 0 ? `omitidas ${scheduleSkipped}` : '',
       shouldApplyTeacher
         ? `docente aplicado a ${teacherUpdated} seccion(es)${
@@ -1069,10 +1119,14 @@ export class AdminSectionSchedulePage {
           }`
         : '',
     ].filter(Boolean);
-    this.success = `${messageParts.join(' | ')}.`;
     if (shouldApplyTeacher) {
       this.workflowState.notifyWorkflowChanged({ reason: 'teacher-saved' });
     }
+    const baseMessage = `${messageParts.join(' | ')}.`;
+    if (scheduleWarnings > 0) {
+      return `${baseMessage} Coordina con el encargado de taller el cambio de grupo de los alumnos afectados.`;
+    }
+    return baseMessage;
   }
 
   private courseKey(value: string) {
@@ -1118,6 +1172,35 @@ export class AdminSectionSchedulePage {
       })
       .join(' | ');
     return `${baseMessage} ${detail}`.trim();
+  }
+
+  private composeScheduleSaveSuccessMessage(
+    warning: ScheduleBlockSaveResponse['warnings'],
+    bulkApplyMessage: string | null
+  ) {
+    const parts = [bulkApplyMessage ?? 'Horario guardado.'];
+    const warningMessage = this.formatScheduleWarning(warning);
+    if (warningMessage) {
+      parts.push(warningMessage);
+    }
+    return parts.join(' ').trim();
+  }
+
+  private formatScheduleWarning(warning: ScheduleBlockSaveResponse['warnings']) {
+    if (!warning) return '';
+    const affectedStudents = Number(warning.summary?.affectedStudents ?? 0);
+    const workshops = Array.isArray(warning.workshops)
+      ? warning.workshops.map((item) => String(item ?? '').trim()).filter(Boolean)
+      : [];
+    const countText =
+      affectedStudents > 0
+        ? `${affectedStudents} alumno(s) tienen cruce con talleres.`
+        : 'Hay alumnos con cruce con talleres.';
+    const workshopText =
+      workshops.length > 0
+        ? ` Talleres involucrados: ${workshops.join(', ')}.`
+        : '';
+    return `${countText} Coordina con el encargado de taller para cambiarles de grupo y revisa Ver aplicado.${workshopText}`.trim();
   }
 
   private async loadReferenceDefaults(

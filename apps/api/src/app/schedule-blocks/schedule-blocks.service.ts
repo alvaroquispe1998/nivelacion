@@ -132,7 +132,26 @@ export class ScheduleBlocksService {
     scopeFacultyGroup?: string | null;
     scopeCampusName?: string | null;
     scopeCourseName?: string | null;
-  }) {
+  }): Promise<{
+    block: ScheduleBlockEntity;
+    warnings: {
+      code: string;
+      message: string;
+      summary: { affectedStudents: number; totalConflicts: number };
+      students: Array<{
+        studentId: string;
+        dni: string | null;
+        codigoAlumno: string | null;
+        fullName: string;
+        conflicts: Array<{
+          kind: 'WORKSHOP';
+          reason: string;
+          candidateBlock: string;
+          conflictingBlock: string;
+        }>;
+      }>;
+    } | null;
+  }> {
     if (body.startTime >= body.endTime) {
       throw new BadRequestException('La hora de inicio debe ser menor a la hora de fin');
     }
@@ -230,11 +249,24 @@ export class ScheduleBlocksService {
         endDate: body.endDate ?? null,
       },
     ];
-    await this.sectionsService.assertStudentsScheduleCompatibilityForSectionCourse({
+    const studentConflicts =
+      await this.sectionsService.findStudentsScheduleConflictsForSectionCourse({
       periodId: activePeriodId,
       sectionCourseId: sectionCourse.id,
       candidateBlocks: resultingBlocks,
     });
+    const blockingConflicts = this.filterStudentScheduleConflictsByKind(
+      studentConflicts,
+      'COURSE'
+    );
+    if (blockingConflicts.length > 0) {
+      throw new ConflictException(
+        this.buildStudentScheduleConflictPayload(blockingConflicts)
+      );
+    }
+    const warnings = this.buildWorkshopScheduleWarningPayload(
+      this.filterStudentScheduleConflictsByKind(studentConflicts, 'WORKSHOP')
+    );
 
     const block = this.blocksRepo.create({
       section,
@@ -252,7 +284,10 @@ export class ScheduleBlocksService {
       referenceModality,
       referenceClassroom,
     });
-    return this.blocksRepo.save(block);
+    return {
+      block: await this.blocksRepo.save(block),
+      warnings,
+    };
   }
 
   async update(
@@ -276,7 +311,26 @@ export class ScheduleBlocksService {
       scopeCampusName: string | null;
       scopeCourseName: string | null;
     }>
-  ) {
+  ): Promise<{
+    block: ScheduleBlockEntity;
+    warnings: {
+      code: string;
+      message: string;
+      summary: { affectedStudents: number; totalConflicts: number };
+      students: Array<{
+        studentId: string;
+        dni: string | null;
+        codigoAlumno: string | null;
+        fullName: string;
+        conflicts: Array<{
+          kind: 'WORKSHOP';
+          reason: string;
+          candidateBlock: string;
+          conflictingBlock: string;
+        }>;
+      }>;
+    } | null;
+  }> {
     const block = await this.blocksRepo.findOne({
       where: { id },
       relations: { section: true },
@@ -302,7 +356,10 @@ export class ScheduleBlocksService {
       if (body.referenceClassroom !== undefined) {
         block.referenceClassroom = body.referenceClassroom ?? null;
       }
-      return this.blocksRepo.save(block);
+      return {
+        block: await this.blocksRepo.save(block),
+        warnings: null,
+      };
     }
 
     const next = {
@@ -413,11 +470,24 @@ export class ScheduleBlocksService {
         endDate: next.endDate ?? null,
       },
     ];
-    await this.sectionsService.assertStudentsScheduleCompatibilityForSectionCourse({
+    const studentConflicts =
+      await this.sectionsService.findStudentsScheduleConflictsForSectionCourse({
       periodId: activePeriodId,
       sectionCourseId: nextSectionCourse.id,
       candidateBlocks: resultingBlocks,
     });
+    const blockingConflicts = this.filterStudentScheduleConflictsByKind(
+      studentConflicts,
+      'COURSE'
+    );
+    if (blockingConflicts.length > 0) {
+      throw new ConflictException(
+        this.buildStudentScheduleConflictPayload(blockingConflicts)
+      );
+    }
+    const warnings = this.buildWorkshopScheduleWarningPayload(
+      this.filterStudentScheduleConflictsByKind(studentConflicts, 'WORKSHOP')
+    );
 
     block.sectionCourseId = nextSectionCourse.id;
     block.courseName = nextSectionCourse.courseName;
@@ -433,7 +503,10 @@ export class ScheduleBlocksService {
     block.referenceModality = referenceModality;
     block.referenceClassroom = referenceClassroom;
 
-    return this.blocksRepo.save(block);
+    return {
+      block: await this.blocksRepo.save(block),
+      warnings,
+    };
   }
 
   private async loadSectionCourseBlocks(sectionCourseId: string, excludeBlockId?: string) {
@@ -661,5 +734,118 @@ export class ScheduleBlocksService {
 
   private courseKey(value: string | null | undefined) {
     return String(value ?? '').trim().toLocaleLowerCase();
+  }
+
+  private filterStudentScheduleConflictsByKind(
+    students: Array<{
+      studentId: string;
+      dni: string | null;
+      codigoAlumno: string | null;
+      fullName: string;
+      conflicts: Array<{
+        kind: 'COURSE' | 'WORKSHOP';
+        candidateBlock: string;
+        conflictingBlock: string;
+      }>;
+    }>,
+    kind: 'COURSE' | 'WORKSHOP'
+  ) {
+    return students
+      .map((student) => ({
+        ...student,
+        conflicts: student.conflicts.filter((conflict) => conflict.kind === kind),
+      }))
+      .filter((student) => student.conflicts.length > 0);
+  }
+
+  private buildStudentScheduleConflictPayload(
+    affectedStudents: Array<{
+      studentId: string;
+      dni: string | null;
+      codigoAlumno: string | null;
+      fullName: string;
+      conflicts: Array<{
+        kind: 'COURSE' | 'WORKSHOP';
+        candidateBlock: string;
+        conflictingBlock: string;
+      }>;
+    }>
+  ) {
+    const totalConflicts = affectedStudents.reduce(
+      (acc, student) => acc + student.conflicts.length,
+      0
+    );
+    return {
+      message:
+        affectedStudents.length === 1
+          ? 'No se puede guardar el horario del curso: 1 alumno presentaria cruce con otro curso de nivelacion.'
+          : `No se puede guardar el horario del curso: ${affectedStudents.length} alumnos presentarian cruces con otros cursos de nivelacion.`,
+      code: 'SECTION_COURSE_STUDENT_SCHEDULE_CONFLICT',
+      summary: {
+        affectedStudents: affectedStudents.length,
+        totalConflicts,
+      },
+      students: affectedStudents.slice(0, 10).map((student) => ({
+        studentId: student.studentId,
+        dni: student.dni,
+        codigoAlumno: student.codigoAlumno,
+        fullName: student.fullName,
+        conflicts: student.conflicts.slice(0, 5).map((conflict) => ({
+          kind: conflict.kind,
+          reason: `${conflict.candidateBlock} cruza con ${conflict.conflictingBlock}`,
+          candidateBlock: conflict.candidateBlock,
+          conflictingBlock: conflict.conflictingBlock,
+        })),
+      })),
+    };
+  }
+
+  private buildWorkshopScheduleWarningPayload(
+    affectedStudents: Array<{
+      studentId: string;
+      dni: string | null;
+      codigoAlumno: string | null;
+      fullName: string;
+      conflicts: Array<{
+        kind: 'COURSE' | 'WORKSHOP';
+        candidateBlock: string;
+        conflictingBlock: string;
+      }>;
+    }>
+  ) {
+    if (affectedStudents.length <= 0) return null;
+    const totalConflicts = affectedStudents.reduce(
+      (acc, student) => acc + student.conflicts.length,
+      0
+    );
+    return {
+      code: 'SECTION_COURSE_WORKSHOP_SCHEDULE_WARNING',
+      message:
+        'Horario guardado con alerta: hay alumnos con cruce con talleres. Coordina con el encargado de taller para gestionar el cambio de grupo.',
+      workshops: Array.from(
+        new Set(
+          affectedStudents
+            .flatMap((student) => student.conflicts)
+            .map((conflict) => String(conflict.conflictingBlock ?? '').split(' | ')[0]?.trim())
+            .filter(Boolean)
+        )
+      ).slice(0, 5),
+      summary: {
+        affectedStudents: affectedStudents.length,
+        totalConflicts,
+      },
+      students: affectedStudents.slice(0, 10).map((student) => ({
+        studentId: student.studentId,
+        dni: student.dni,
+        codigoAlumno: student.codigoAlumno,
+        fullName: student.fullName,
+        conflicts: student.conflicts.slice(0, 5).map((conflict) => ({
+          kind: 'WORKSHOP' as const,
+          reason: `${conflict.candidateBlock} cruza con ${conflict.conflictingBlock}`,
+          candidateBlock: conflict.candidateBlock,
+          conflictingBlock: conflict.conflictingBlock,
+        })),
+      })),
+    };
   }
 }

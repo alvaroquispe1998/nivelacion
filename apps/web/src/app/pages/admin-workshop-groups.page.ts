@@ -8,6 +8,7 @@ import {
   AdminWorkshopsService,
   GroupScheduleBlockRow,
   WorkshopGroupRow,
+  WorkshopGroupScheduleSaveResponse,
   WorkshopRow,
 } from './admin-workshops.service';
 
@@ -552,23 +553,52 @@ export class AdminWorkshopGroupsPage implements OnInit, OnDestroy {
       return;
     }
     try {
-      const rows = await this.workshopsService.saveGroupSchedule(
-        this.workshopId,
-        this.selectedGroupId,
-        normalizedBlocks
-      );
+      const response = await this.persistSelectedGroupSchedule(normalizedBlocks);
       this.groups = this.groups.map((group) =>
-        group.id === this.selectedGroupId ? { ...group, scheduleBlocks: rows ?? [] } : group
+        group.id === this.selectedGroupId
+          ? { ...group, scheduleBlocks: response.blocks ?? [] }
+          : group
       );
       this.selectGroup(this.selectedGroupId);
-      this.success = 'Horario del grupo guardado.';
+      this.success = this.buildGroupScheduleSuccessMessage(response);
     } catch (e: any) {
+      if (e instanceof Error && e.message === 'WORKSHOP_SCHEDULE_SAVE_CANCELLED') {
+        this.error = null;
+        this.success = null;
+        return;
+      }
       this.error = this.formatApiError(
         e?.error,
         e?.error?.message ?? 'No se pudo guardar el horario del grupo'
       );
     } finally {
       this.safeDetectChanges();
+    }
+  }
+
+  private async persistSelectedGroupSchedule(normalizedBlocks: GroupScheduleBlockRow[]) {
+    if (!this.workshopId || !this.selectedGroupId) {
+      throw new Error('WORKSHOP_SCHEDULE_SAVE_CANCELLED');
+    }
+    try {
+      return await this.workshopsService.saveGroupSchedule(
+        this.workshopId,
+        this.selectedGroupId,
+        normalizedBlocks
+      );
+    } catch (e: any) {
+      if (e?.error?.code !== 'WORKSHOP_GROUP_SCHEDULE_CONFIRMATION_REQUIRED') {
+        throw e;
+      }
+      if (!this.askForWorkshopScheduleConfirmation(e?.error)) {
+        throw new Error('WORKSHOP_SCHEDULE_SAVE_CANCELLED');
+      }
+      return this.workshopsService.saveGroupSchedule(
+        this.workshopId,
+        this.selectedGroupId,
+        normalizedBlocks,
+        true
+      );
     }
   }
 
@@ -609,6 +639,26 @@ export class AdminWorkshopGroupsPage implements OnInit, OnDestroy {
       })
       .join(' | ');
     return `${baseMessage} ${detail}`.trim();
+  }
+
+  private askForWorkshopScheduleConfirmation(errorBody: any) {
+    if (typeof window === 'undefined' || typeof window.confirm !== 'function') {
+      return false;
+    }
+    const workshopName =
+      String(errorBody?.workshopName ?? this.workshop?.name ?? '').trim() || 'este taller';
+    return window.confirm(
+      `El nuevo horario de ${workshopName} genera cruces con nivelacion. Desea continuar? Recuerde que luego debe cambiar de grupo a los alumnos con cruce de horario.`
+    );
+  }
+
+  private buildGroupScheduleSuccessMessage(response: WorkshopGroupScheduleSaveResponse) {
+    if (!response?.warnings) {
+      return 'Horario del grupo guardado.';
+    }
+    const workshopName =
+      String(response.warnings.workshopName ?? this.workshop?.name ?? '').trim() || 'el taller';
+    return `Horario del grupo guardado con alerta. Revise ${workshopName} en Ver aplicado y cambie de grupo a los alumnos con cruce de horario.`;
   }
 
   private patchSelectedBlockMeetingLinks(

@@ -820,7 +820,8 @@ export class WorkshopsService {
   async updateGroupSchedule(
     workshopId: string,
     groupId: string,
-    blocks: WorkshopScheduleBlockInput[]
+    blocks: WorkshopScheduleBlockInput[],
+    options?: { forceConflicts?: boolean }
   ) {
     await this.getGroupOrThrow(workshopId, groupId);
     const incoming = Array.isArray(blocks) ? blocks : [];
@@ -835,11 +836,19 @@ export class WorkshopsService {
         throw new BadRequestException('Bloque horario invalido (startTime/endTime)');
       }
     }
-    await this.assertWorkshopGroupScheduleHasNoStudentConflicts({
+    const conflictPayload = await this.findWorkshopGroupScheduleStudentConflicts({
       workshopId,
       groupId,
       blocks: incoming,
     });
+    if (conflictPayload && !options?.forceConflicts) {
+      throw new ConflictException({
+        ...conflictPayload,
+        code: 'WORKSHOP_GROUP_SCHEDULE_CONFIRMATION_REQUIRED',
+        message:
+          'Este cambio genera cruces de horario con nivelacion. Desea continuar? Recuerde que luego debe cambiar de grupo a los alumnos afectados.',
+      });
+    }
     await this.dataSource.transaction(async (manager) => {
       await manager.query(`DELETE FROM workshop_group_schedule_blocks WHERE groupId = ?`, [groupId]);
       if (incoming.length > 0) {
@@ -870,7 +879,18 @@ export class WorkshopsService {
         );
       }
     });
-    return this.listGroupSchedule(workshopId, groupId);
+    return {
+      blocks: await this.listGroupSchedule(workshopId, groupId),
+      warnings:
+        conflictPayload && options?.forceConflicts
+          ? {
+              ...conflictPayload,
+              code: 'WORKSHOP_GROUP_SCHEDULE_WARNING',
+              message:
+                'Horario del taller guardado con alerta. Recuerde cambiar de grupo a los alumnos con cruce de horario.',
+            }
+          : null,
+    };
   }
 
   async updateGroupScheduleBlockMeetingLinks(
@@ -1608,6 +1628,7 @@ export class WorkshopsService {
     }));
 
     const currentConflicts: Array<{
+      workshopName: string;
       studentId: string;
       dni: string | null;
       codigoAlumno: string | null;
@@ -1633,6 +1654,7 @@ export class WorkshopsService {
         );
         for (const overlap of overlaps) {
           currentConflicts.push({
+            workshopName: String(workshop.name ?? ''),
             studentId: student.studentId,
             dni: student.dni,
             codigoAlumno: student.codigoAlumno,
@@ -1676,11 +1698,12 @@ export class WorkshopsService {
     };
   }
 
-  private async assertWorkshopGroupScheduleHasNoStudentConflicts(params: {
+  private async findWorkshopGroupScheduleStudentConflicts(params: {
     workshopId: string;
     groupId: string;
     blocks: WorkshopScheduleBlockInput[];
   }) {
+    const workshop = await this.get(params.workshopId, false);
     const latestRun = await this.dataSource
       .query(
         `
@@ -1706,7 +1729,7 @@ export class WorkshopsService {
       )
       .then((rows) => rows[0] ?? null);
     if (!latestRun?.runId || !latestRun?.runGroupId) {
-      return;
+      return null;
     }
 
     const students: Array<{
@@ -1730,7 +1753,7 @@ export class WorkshopsService {
       [String(latestRun.runId), String(latestRun.runGroupId)]
     );
     if (students.length === 0 || params.blocks.length === 0) {
-      return;
+      return null;
     }
 
     const normalizedBlocks = params.blocks.map((block) => ({
@@ -1760,10 +1783,11 @@ export class WorkshopsService {
       .filter((student) => student.overlaps.length > 0);
 
     if (conflictStudents.length <= 0) {
-      return;
+      return null;
     }
 
-    throw new ConflictException({
+    return {
+      workshopName: String(workshop?.name ?? ''),
       message:
         conflictStudents.length === 1
           ? 'No se puede guardar el horario del grupo: 1 alumno presenta cruce con nivelacion.'
@@ -1789,7 +1813,7 @@ export class WorkshopsService {
           ),
         })),
       })),
-    });
+    };
   }
 
   async buildLatestAppliedGroupsExportWorkbook(workshopId: string) {

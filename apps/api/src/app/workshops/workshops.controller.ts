@@ -154,9 +154,12 @@ export class WorkshopsController {
         joinUrl?: string | null;
         startUrl?: string | null;
       }>;
+      forceConflicts?: boolean;
     }
   ) {
-    return this.workshopsService.updateGroupSchedule(id, groupId, body?.blocks ?? []);
+    return this.workshopsService.updateGroupSchedule(id, groupId, body?.blocks ?? [], {
+      forceConflicts: Boolean(body?.forceConflicts),
+    });
   }
 
   @Put(':id/groups/:groupId/schedule/:blockId/meeting-links')

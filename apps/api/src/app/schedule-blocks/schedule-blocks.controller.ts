@@ -54,7 +54,7 @@ export class ScheduleBlocksController {
 
   @Post()
   async create(@Body() dto: CreateScheduleBlockDto) {
-    const block = await this.blocksService.create({
+    const result = await this.blocksService.create({
       sectionId: dto.sectionId,
       sectionCourseId: dto.sectionCourseId ?? null,
       courseName: dto.courseName,
@@ -75,6 +75,7 @@ export class ScheduleBlocksController {
       scopeCampusName: dto.scopeCampusName ?? null,
       scopeCourseName: dto.scopeCourseName ?? null,
     });
+    const block = result.block;
     return {
       id: block.id,
       sectionId: block.section.id,
@@ -91,12 +92,13 @@ export class ScheduleBlocksController {
       location: block.location,
       referenceModality: block.referenceModality,
       referenceClassroom: block.referenceClassroom,
+      warnings: result.warnings,
     };
   }
 
   @Put(':id')
   async update(@Param('id') id: string, @Body() dto: UpdateScheduleBlockDto) {
-    const block = await this.blocksService.update(id, {
+    const result = await this.blocksService.update(id, {
       courseName: dto.courseName,
       dayOfWeek: dto.dayOfWeek,
       startTime: dto.startTime,
@@ -115,6 +117,7 @@ export class ScheduleBlocksController {
       scopeCampusName: dto.scopeCampusName,
       scopeCourseName: dto.scopeCourseName,
     });
+    const block = result.block;
     return {
       id: block.id,
       sectionId: block.section.id,
@@ -131,6 +134,7 @@ export class ScheduleBlocksController {
       location: block.location,
       referenceModality: block.referenceModality,
       referenceClassroom: block.referenceClassroom,
+      warnings: result.warnings,
     };
   }
 

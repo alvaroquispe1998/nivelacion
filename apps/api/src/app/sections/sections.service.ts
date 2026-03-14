@@ -1761,6 +1761,24 @@ export class SectionsService {
     }
 
     const skipped: Array<{ sectionCourseId: string; reason: string }> = [];
+    const warnings: Array<{
+      sectionCourseId: string;
+      code: string;
+      message: string;
+      summary: { affectedStudents: number; totalConflicts: number };
+      students: Array<{
+        studentId: string;
+        dni: string | null;
+        codigoAlumno: string | null;
+        fullName: string;
+        conflicts: Array<{
+          kind: 'COURSE' | 'WORKSHOP';
+          reason: string;
+          candidateBlock: string;
+          conflictingBlock: string;
+        }>;
+      }>;
+    }> = [];
     const toUpdate: typeof siblings = [];
 
     for (const item of siblings) {
@@ -1817,27 +1835,43 @@ export class SectionsService {
       }
 
       if (!blocked) {
-        try {
-          await this.assertStudentsScheduleCompatibilityForSectionCourse({
-            periodId: activePeriodId,
-            sectionCourseId: item.sectionCourseId,
-            candidateBlocks: motherBlocks.map((block) => ({
-              dayOfWeek: Number(block.dayOfWeek ?? 0),
-              startTime: String(block.startTime ?? ''),
-              endTime: String(block.endTime ?? ''),
-              startDate: this.toIsoDateOnly(block.startDate),
-              endDate: this.toIsoDateOnly(block.endDate),
-            })),
-          });
-        } catch (error: any) {
+        const affectedStudents = await this.findStudentsScheduleConflictsForSectionCourse({
+          periodId: activePeriodId,
+          sectionCourseId: item.sectionCourseId,
+          candidateBlocks: motherBlocks.map((block) => ({
+            dayOfWeek: Number(block.dayOfWeek ?? 0),
+            startTime: String(block.startTime ?? ''),
+            endTime: String(block.endTime ?? ''),
+            startDate: this.toIsoDateOnly(block.startDate),
+            endDate: this.toIsoDateOnly(block.endDate),
+          })),
+        });
+        const courseConflicts = this.filterStudentScheduleConflictsByKind(
+          affectedStudents,
+          'COURSE'
+        );
+        if (courseConflicts.length > 0) {
+          const payload = this.buildStudentScheduleConflictPayload(courseConflicts);
           skipped.push({
             sectionCourseId: item.sectionCourseId,
-            reason:
-              error?.response?.message ??
-              error?.message ??
-              'Cruce de horario de alumnos fuera del conjunto masivo',
+            reason: payload.message,
           });
           blocked = true;
+        } else {
+          const workshopConflicts = this.filterStudentScheduleConflictsByKind(
+            affectedStudents,
+            'WORKSHOP'
+          );
+          if (workshopConflicts.length > 0) {
+            warnings.push({
+              sectionCourseId: item.sectionCourseId,
+              ...this.buildStudentScheduleConflictPayload(workshopConflicts, {
+                code: 'SECTION_COURSE_WORKSHOP_SCHEDULE_WARNING',
+                message:
+                  'Horario sincronizado con alerta: hay alumnos con cruce con talleres. Coordina con el encargado de taller para gestionar el cambio de grupo.',
+              }),
+            });
+          }
         }
       }
 
@@ -1918,10 +1952,11 @@ export class SectionsService {
       removedBlocks,
       createdBlocks,
       skipped,
+      warnings,
     };
   }
 
-  async assertStudentsScheduleCompatibilityForSectionCourse(params: {
+  async findStudentsScheduleConflictsForSectionCourse(params: {
     periodId: string;
     sectionCourseId: string;
     candidateBlocks: Array<{
@@ -1943,7 +1978,7 @@ export class SectionsService {
       .filter((block) => block.dayOfWeek >= 1 && block.dayOfWeek <= 7);
 
     if (candidateBlocks.length <= 0) {
-      return;
+      return [];
     }
 
     const students: Array<{
@@ -1966,7 +2001,7 @@ export class SectionsService {
       [params.sectionCourseId]
     );
     if (students.length <= 0) {
-      return;
+      return [];
     }
 
     const studentIds = students.map((student) => String(student.studentId));
@@ -2025,31 +2060,97 @@ export class SectionsService {
       })
       .filter((student) => student.conflicts.length > 0);
 
+    return affectedStudents;
+  }
+
+  async assertStudentsScheduleCompatibilityForSectionCourse(params: {
+    periodId: string;
+    sectionCourseId: string;
+    candidateBlocks: Array<{
+      dayOfWeek: number;
+      startTime: string;
+      endTime: string;
+      startDate?: string | null;
+      endDate?: string | null;
+    }>;
+  }) {
+    const affectedStudents = await this.findStudentsScheduleConflictsForSectionCourse(params);
     if (affectedStudents.length <= 0) {
       return;
     }
 
-    throw new ConflictException({
+    throw new ConflictException(
+      this.buildStudentScheduleConflictPayload(affectedStudents)
+    );
+  }
+
+  private filterStudentScheduleConflictsByKind(
+    students: Array<{
+      studentId: string;
+      dni: string | null;
+      codigoAlumno: string | null;
+      fullName: string;
+      conflicts: Array<{
+        kind: 'COURSE' | 'WORKSHOP';
+        candidateBlock: string;
+        conflictingBlock: string;
+      }>;
+    }>,
+    kind: 'COURSE' | 'WORKSHOP'
+  ) {
+    return students
+      .map((student) => ({
+        ...student,
+        conflicts: student.conflicts.filter((conflict) => conflict.kind === kind),
+      }))
+      .filter((student) => student.conflicts.length > 0);
+  }
+
+  private buildStudentScheduleConflictPayload(
+    affectedStudents: Array<{
+      studentId: string;
+      dni: string | null;
+      codigoAlumno: string | null;
+      fullName: string;
+      conflicts: Array<{
+        kind: 'COURSE' | 'WORKSHOP';
+        candidateBlock: string;
+        conflictingBlock: string;
+      }>;
+    }>,
+    options?: {
+      code?: string;
+      message?: string;
+    }
+  ) {
+    const totalConflicts = affectedStudents.reduce(
+      (acc, student) => acc + student.conflicts.length,
+      0
+    );
+    return {
       message:
-        affectedStudents.length === 1
+        options?.message ??
+        (affectedStudents.length === 1
           ? 'No se puede guardar el horario del curso: 1 alumno presentaria cruce de horario.'
-          : `No se puede guardar el horario del curso: ${affectedStudents.length} alumnos presentarian cruces de horario.`,
-      code: 'SECTION_COURSE_STUDENT_SCHEDULE_CONFLICT',
+          : `No se puede guardar el horario del curso: ${affectedStudents.length} alumnos presentarian cruces de horario.`),
+      code: options?.code ?? 'SECTION_COURSE_STUDENT_SCHEDULE_CONFLICT',
       summary: {
         affectedStudents: affectedStudents.length,
-        totalConflicts: affectedStudents.reduce(
-          (total, student) => total + student.conflicts.length,
-          0
-        ),
+        totalConflicts,
       },
       students: affectedStudents.slice(0, 10).map((student) => ({
         studentId: student.studentId,
         dni: student.dni,
         codigoAlumno: student.codigoAlumno,
         fullName: student.fullName,
-        conflicts: student.conflicts.slice(0, 5),
+        conflicts: student.conflicts.slice(0, 5).map((conflict) => ({
+          kind: conflict.kind,
+          reason: `${conflict.candidateBlock} cruza con ${conflict.conflictingBlock}`,
+          candidateBlock: conflict.candidateBlock,
+          conflictingBlock: conflict.conflictingBlock,
+        })),
       })),
-    });
+    };
   }
 
   async assignClassroomByCourse(params: {
