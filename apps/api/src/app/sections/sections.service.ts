@@ -1817,6 +1817,31 @@ export class SectionsService {
       }
 
       if (!blocked) {
+        try {
+          await this.assertStudentsScheduleCompatibilityForSectionCourse({
+            periodId: activePeriodId,
+            sectionCourseId: item.sectionCourseId,
+            candidateBlocks: motherBlocks.map((block) => ({
+              dayOfWeek: Number(block.dayOfWeek ?? 0),
+              startTime: String(block.startTime ?? ''),
+              endTime: String(block.endTime ?? ''),
+              startDate: this.toIsoDateOnly(block.startDate),
+              endDate: this.toIsoDateOnly(block.endDate),
+            })),
+          });
+        } catch (error: any) {
+          skipped.push({
+            sectionCourseId: item.sectionCourseId,
+            reason:
+              error?.response?.message ??
+              error?.message ??
+              'Cruce de horario de alumnos fuera del conjunto masivo',
+          });
+          blocked = true;
+        }
+      }
+
+      if (!blocked) {
         toUpdate.push(item);
       }
     }
@@ -1894,6 +1919,137 @@ export class SectionsService {
       createdBlocks,
       skipped,
     };
+  }
+
+  async assertStudentsScheduleCompatibilityForSectionCourse(params: {
+    periodId: string;
+    sectionCourseId: string;
+    candidateBlocks: Array<{
+      dayOfWeek: number;
+      startTime: string;
+      endTime: string;
+      startDate?: string | null;
+      endDate?: string | null;
+    }>;
+  }) {
+    const candidateBlocks = (params.candidateBlocks ?? [])
+      .map((block) => ({
+        dayOfWeek: Number(block.dayOfWeek ?? 0),
+        startTime: String(block.startTime ?? '').slice(0, 5),
+        endTime: String(block.endTime ?? '').slice(0, 5),
+        startDate: this.toIsoDateOnly(block.startDate),
+        endDate: this.toIsoDateOnly(block.endDate),
+      }))
+      .filter((block) => block.dayOfWeek >= 1 && block.dayOfWeek <= 7);
+
+    if (candidateBlocks.length <= 0) {
+      return;
+    }
+
+    const students: Array<{
+      studentId: string;
+      dni: string | null;
+      codigoAlumno: string | null;
+      fullName: string;
+    }> = await this.sectionsRepo.manager.query(
+      `
+      SELECT DISTINCT
+        ssc.studentId AS studentId,
+        u.dni AS dni,
+        u.codigoAlumno AS codigoAlumno,
+        u.fullName AS fullName
+      FROM section_student_courses ssc
+      INNER JOIN users u ON u.id = ssc.studentId
+      WHERE ssc.sectionCourseId = ?
+      ORDER BY u.fullName ASC, u.dni ASC
+      `,
+      [params.sectionCourseId]
+    );
+    if (students.length <= 0) {
+      return;
+    }
+
+    const studentIds = students.map((student) => String(student.studentId));
+    const studentCourseBlocks = await this.loadStudentOtherCourseBlocks({
+      periodId: params.periodId,
+      studentIds,
+      excludedSectionCourseId: params.sectionCourseId,
+    });
+    const studentWorkshopBlocks = await this.loadStudentWorkshopBlocks({
+      periodId: params.periodId,
+      studentIds,
+    });
+
+    const affectedStudents = students
+      .map((student) => {
+        const conflicts: Array<{
+          kind: 'COURSE' | 'WORKSHOP';
+          candidateBlock: string;
+          conflictingBlock: string;
+        }> = [];
+        const otherCourseBlocks = studentCourseBlocks.get(student.studentId) ?? [];
+        const workshopBlocks = studentWorkshopBlocks.get(student.studentId) ?? [];
+
+        for (const candidateBlock of candidateBlocks) {
+          for (const otherBlock of otherCourseBlocks) {
+            if (!this.scheduleWindowsOverlap(candidateBlock, otherBlock)) continue;
+            conflicts.push({
+              kind: 'COURSE',
+              candidateBlock: this.formatScheduleWindow(candidateBlock),
+              conflictingBlock: this.formatScheduleWindow(
+                otherBlock,
+                `${otherBlock.courseName} | ${otherBlock.sectionName}`
+              ),
+            });
+          }
+          for (const workshopBlock of workshopBlocks) {
+            if (!this.scheduleWindowsOverlap(candidateBlock, workshopBlock)) continue;
+            conflicts.push({
+              kind: 'WORKSHOP',
+              candidateBlock: this.formatScheduleWindow(candidateBlock),
+              conflictingBlock: this.formatScheduleWindow(
+                workshopBlock,
+                `${workshopBlock.workshopName} | ${workshopBlock.groupName}`
+              ),
+            });
+          }
+        }
+
+        return {
+          studentId: String(student.studentId),
+          dni: student.dni ? String(student.dni) : null,
+          codigoAlumno: student.codigoAlumno ? String(student.codigoAlumno) : null,
+          fullName: String(student.fullName ?? ''),
+          conflicts,
+        };
+      })
+      .filter((student) => student.conflicts.length > 0);
+
+    if (affectedStudents.length <= 0) {
+      return;
+    }
+
+    throw new ConflictException({
+      message:
+        affectedStudents.length === 1
+          ? 'No se puede guardar el horario del curso: 1 alumno presentaria cruce de horario.'
+          : `No se puede guardar el horario del curso: ${affectedStudents.length} alumnos presentarian cruces de horario.`,
+      code: 'SECTION_COURSE_STUDENT_SCHEDULE_CONFLICT',
+      summary: {
+        affectedStudents: affectedStudents.length,
+        totalConflicts: affectedStudents.reduce(
+          (total, student) => total + student.conflicts.length,
+          0
+        ),
+      },
+      students: affectedStudents.slice(0, 10).map((student) => ({
+        studentId: student.studentId,
+        dni: student.dni,
+        codigoAlumno: student.codigoAlumno,
+        fullName: student.fullName,
+        conflicts: student.conflicts.slice(0, 5),
+      })),
+    });
   }
 
   async assignClassroomByCourse(params: {
@@ -4123,6 +4279,216 @@ export class SectionsService {
       map.set(String(row.id), name);
     }
     return map;
+  }
+
+  private async loadStudentOtherCourseBlocks(params: {
+    periodId: string;
+    studentIds: string[];
+    excludedSectionCourseId: string;
+  }) {
+    const uniqueStudentIds = Array.from(
+      new Set(
+        (params.studentIds ?? [])
+          .map((id) => String(id ?? '').trim())
+          .filter(Boolean)
+      )
+    );
+    const byStudent = new Map<
+      string,
+      Array<{
+        dayOfWeek: number;
+        startTime: string;
+        endTime: string;
+        startDate: string | null;
+        endDate: string | null;
+        courseName: string;
+        sectionName: string;
+      }>
+    >();
+    if (uniqueStudentIds.length <= 0) {
+      return byStudent;
+    }
+
+    const rows: Array<{
+      studentId: string;
+      dayOfWeek: number;
+      startTime: string;
+      endTime: string;
+      startDate: string | null;
+      endDate: string | null;
+      courseName: string;
+      sectionName: string;
+    }> = await this.sectionsRepo.manager.query(
+      `
+      SELECT
+        ssc.studentId AS studentId,
+        sb.dayOfWeek AS dayOfWeek,
+        sb.startTime AS startTime,
+        sb.endTime AS endTime,
+        sb.startDate AS startDate,
+        sb.endDate AS endDate,
+        c.name AS courseName,
+        COALESCE(s.code, s.name) AS sectionName
+      FROM section_student_courses ssc
+      INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
+      INNER JOIN schedule_blocks sb ON sb.sectionCourseId = sc.id
+      INNER JOIN courses c ON c.id = sc.courseId
+      INNER JOIN sections s ON s.id = sc.sectionId
+      WHERE ssc.studentId IN (${uniqueStudentIds.map(() => '?').join(', ')})
+        AND sc.periodId = ?
+        AND sc.id <> ?
+      ORDER BY ssc.studentId ASC, sb.dayOfWeek ASC, sb.startTime ASC
+      `,
+      [...uniqueStudentIds, params.periodId, params.excludedSectionCourseId]
+    );
+
+    for (const row of rows) {
+      const studentId = String(row.studentId);
+      if (!byStudent.has(studentId)) byStudent.set(studentId, []);
+      byStudent.get(studentId)!.push({
+        dayOfWeek: Number(row.dayOfWeek ?? 0),
+        startTime: String(row.startTime ?? '').slice(0, 5),
+        endTime: String(row.endTime ?? '').slice(0, 5),
+        startDate: this.toIsoDateOnly(row.startDate),
+        endDate: this.toIsoDateOnly(row.endDate),
+        courseName: String(row.courseName ?? ''),
+        sectionName: String(row.sectionName ?? ''),
+      });
+    }
+    return byStudent;
+  }
+
+  private async loadStudentWorkshopBlocks(params: {
+    periodId: string;
+    studentIds: string[];
+  }) {
+    const uniqueStudentIds = Array.from(
+      new Set(
+        (params.studentIds ?? [])
+          .map((id) => String(id ?? '').trim())
+          .filter(Boolean)
+      )
+    );
+    const byStudent = new Map<
+      string,
+      Array<{
+        dayOfWeek: number;
+        startTime: string;
+        endTime: string;
+        startDate: string | null;
+        endDate: string | null;
+        workshopName: string;
+        groupName: string;
+      }>
+    >();
+    if (uniqueStudentIds.length <= 0) {
+      return byStudent;
+    }
+
+    const rows: Array<{
+      studentId: string;
+      dayOfWeek: number;
+      startTime: string;
+      endTime: string;
+      startDate: string | null;
+      endDate: string | null;
+      workshopName: string;
+      groupName: string | null;
+    }> = await this.sectionsRepo.manager.query(
+      `
+      SELECT
+        was.studentId AS studentId,
+        wb.dayOfWeek AS dayOfWeek,
+        wb.startTime AS startTime,
+        wb.endTime AS endTime,
+        wb.startDate AS startDate,
+        wb.endDate AS endDate,
+        wa.name AS workshopName,
+        COALESCE(wag.groupName, wag.groupCode, 'Grupo') AS groupName
+      FROM workshop_application_students was
+      INNER JOIN workshop_application_groups wag ON wag.id = was.groupId
+      INNER JOIN workshop_applications wa ON wa.id = was.applicationId
+      INNER JOIN workshop_group_schedule_blocks wb ON wb.groupId = wag.sourceGroupId
+      WHERE was.studentId IN (${uniqueStudentIds.map(() => '?').join(', ')})
+        AND wa.periodId = ?
+        AND wa.id = (
+          SELECT wa2.id
+          FROM workshop_applications wa2
+          WHERE wa2.workshopId = wa.workshopId
+          ORDER BY wa2.createdAt DESC, wa2.id DESC
+          LIMIT 1
+        )
+      ORDER BY was.studentId ASC, wb.dayOfWeek ASC, wb.startTime ASC
+      `,
+      [...uniqueStudentIds, params.periodId]
+    );
+
+    for (const row of rows) {
+      const studentId = String(row.studentId);
+      if (!byStudent.has(studentId)) byStudent.set(studentId, []);
+      byStudent.get(studentId)!.push({
+        dayOfWeek: Number(row.dayOfWeek ?? 0),
+        startTime: String(row.startTime ?? '').slice(0, 5),
+        endTime: String(row.endTime ?? '').slice(0, 5),
+        startDate: this.toIsoDateOnly(row.startDate),
+        endDate: this.toIsoDateOnly(row.endDate),
+        workshopName: String(row.workshopName ?? ''),
+        groupName: row.groupName ? String(row.groupName) : 'Grupo',
+      });
+    }
+    return byStudent;
+  }
+
+  private scheduleWindowsOverlap(
+    a: {
+      dayOfWeek: number;
+      startTime: string;
+      endTime: string;
+      startDate?: string | null;
+      endDate?: string | null;
+    },
+    b: {
+      dayOfWeek: number;
+      startTime: string;
+      endTime: string;
+      startDate?: string | null;
+      endDate?: string | null;
+    }
+  ) {
+    if (Number(a.dayOfWeek) !== Number(b.dayOfWeek)) return false;
+    if (!(String(a.startTime) < String(b.endTime) && String(a.endTime) > String(b.startTime))) {
+      return false;
+    }
+    const aStart = this.toIsoDateOnly(a.startDate) ?? '1000-01-01';
+    const aEnd = this.toIsoDateOnly(a.endDate) ?? '9999-12-31';
+    const bStart = this.toIsoDateOnly(b.startDate) ?? '1000-01-01';
+    const bEnd = this.toIsoDateOnly(b.endDate) ?? '9999-12-31';
+    return aStart <= bEnd && bStart <= aEnd;
+  }
+
+  private formatScheduleWindow(
+    block: {
+      dayOfWeek: number;
+      startTime: string;
+      endTime: string;
+      startDate?: string | null;
+      endDate?: string | null;
+    },
+    label?: string | null
+  ) {
+    const base = `${this.dayShort(Number(block.dayOfWeek ?? 0))} ${String(
+      block.startTime ?? ''
+    ).slice(0, 5)}-${String(block.endTime ?? '').slice(0, 5)}`;
+    const startDate = this.toIsoDateOnly(block.startDate);
+    const endDate = this.toIsoDateOnly(block.endDate);
+    const datePart =
+      startDate && endDate
+        ? startDate === endDate
+          ? startDate
+          : `${startDate} a ${endDate}`
+        : startDate || endDate || '';
+    const text = datePart ? `${base} (${datePart})` : base;
+    return label ? `${label} ${text}` : text;
   }
 
   private async resolveCourseByName(courseName: string) {

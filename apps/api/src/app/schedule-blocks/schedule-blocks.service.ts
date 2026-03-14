@@ -219,6 +219,23 @@ export class ScheduleBlocksService {
       });
     }
 
+    const activePeriodId = await this.loadActivePeriodIdOrThrow();
+    const resultingBlocks = [
+      ...(await this.loadSectionCourseBlocks(sectionCourse.id)),
+      {
+        dayOfWeek: body.dayOfWeek,
+        startTime: body.startTime,
+        endTime: body.endTime,
+        startDate: body.startDate ?? null,
+        endDate: body.endDate ?? null,
+      },
+    ];
+    await this.sectionsService.assertStudentsScheduleCompatibilityForSectionCourse({
+      periodId: activePeriodId,
+      sectionCourseId: sectionCourse.id,
+      candidateBlocks: resultingBlocks,
+    });
+
     const block = this.blocksRepo.create({
       section,
       sectionCourseId: sectionCourse.id,
@@ -385,6 +402,23 @@ export class ScheduleBlocksService {
       });
     }
 
+    const activePeriodId = await this.loadActivePeriodIdOrThrow();
+    const resultingBlocks = [
+      ...(await this.loadSectionCourseBlocks(nextSectionCourse.id, block.id)),
+      {
+        dayOfWeek: next.dayOfWeek,
+        startTime: next.startTime,
+        endTime: next.endTime,
+        startDate: next.startDate ?? null,
+        endDate: next.endDate ?? null,
+      },
+    ];
+    await this.sectionsService.assertStudentsScheduleCompatibilityForSectionCourse({
+      periodId: activePeriodId,
+      sectionCourseId: nextSectionCourse.id,
+      candidateBlocks: resultingBlocks,
+    });
+
     block.sectionCourseId = nextSectionCourse.id;
     block.courseName = nextSectionCourse.courseName;
     block.dayOfWeek = next.dayOfWeek;
@@ -400,6 +434,37 @@ export class ScheduleBlocksService {
     block.referenceClassroom = referenceClassroom;
 
     return this.blocksRepo.save(block);
+  }
+
+  private async loadSectionCourseBlocks(sectionCourseId: string, excludeBlockId?: string) {
+    const rows: Array<{
+      dayOfWeek: number;
+      startTime: string;
+      endTime: string;
+      startDate: string | null;
+      endDate: string | null;
+    }> = await this.blocksRepo.manager.query(
+      `
+      SELECT
+        dayOfWeek,
+        startTime,
+        endTime,
+        startDate,
+        endDate
+      FROM schedule_blocks
+      WHERE sectionCourseId = ?
+        AND (? IS NULL OR id <> ?)
+      ORDER BY dayOfWeek ASC, startTime ASC
+      `,
+      [sectionCourseId, excludeBlockId ?? null, excludeBlockId ?? null]
+    );
+    return rows.map((row) => ({
+      dayOfWeek: Number(row.dayOfWeek ?? 0),
+      startTime: String(row.startTime ?? ''),
+      endTime: String(row.endTime ?? ''),
+      startDate: row.startDate ? String(row.startDate) : null,
+      endDate: row.endDate ? String(row.endDate) : null,
+    }));
   }
 
   private isMetadataOnlyUpdate(

@@ -563,7 +563,10 @@ export class AdminWorkshopGroupsPage implements OnInit, OnDestroy {
       this.selectGroup(this.selectedGroupId);
       this.success = 'Horario del grupo guardado.';
     } catch (e: any) {
-      this.error = e?.error?.message ?? 'No se pudo guardar el horario del grupo';
+      this.error = this.formatApiError(
+        e?.error,
+        e?.error?.message ?? 'No se pudo guardar el horario del grupo'
+      );
     } finally {
       this.safeDetectChanges();
     }
@@ -588,6 +591,24 @@ export class AdminWorkshopGroupsPage implements OnInit, OnDestroy {
     const m = String(now.getMonth() + 1).padStart(2, '0');
     const d = String(now.getDate()).padStart(2, '0');
     return `${y}-${m}-${d}`;
+  }
+
+  private formatApiError(errorBody: any, fallback: string) {
+    const baseMessage = String(errorBody?.message ?? fallback ?? '').trim() || fallback;
+    const students = Array.isArray(errorBody?.students) ? errorBody.students.slice(0, 3) : [];
+    if (students.length <= 0) return baseMessage;
+    const detail = students
+      .map((student: any) => {
+        const firstConflict = Array.isArray(student?.conflicts) ? student.conflicts[0] : null;
+        const reason =
+          firstConflict?.reason ||
+          firstConflict?.levelingBlock ||
+          firstConflict?.conflictingBlock ||
+          '-';
+        return `${student?.fullName || 'Alumno'}: ${reason}`;
+      })
+      .join(' | ');
+    return `${baseMessage} ${detail}`.trim();
   }
 
   private patchSelectedBlockMeetingLinks(

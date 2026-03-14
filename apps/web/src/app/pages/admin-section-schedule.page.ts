@@ -700,7 +700,10 @@ export class AdminSectionSchedulePage {
       await this.load();
       this.workflowState.notifyWorkflowChanged({ reason: 'schedule-saved' });
     } catch (e: any) {
-      this.error = e?.error?.message ?? 'No se pudo crear bloque';
+      this.error = this.formatApiError(
+        e?.error,
+        e?.error?.message ?? 'No se pudo crear bloque'
+      );
     } finally {
       this.loading = false;
       this.cdr.detectChanges();
@@ -738,7 +741,10 @@ export class AdminSectionSchedulePage {
       await this.load();
       this.workflowState.notifyWorkflowChanged({ reason: 'schedule-saved' });
     } catch (e: any) {
-      this.error = e?.error?.message ?? 'No se pudo actualizar bloque';
+      this.error = this.formatApiError(
+        e?.error,
+        e?.error?.message ?? 'No se pudo actualizar bloque'
+      );
     } finally {
       this.loading = false;
       this.cdr.detectChanges();
@@ -1094,6 +1100,24 @@ export class AdminSectionSchedulePage {
     const value = String(courseName ?? '').trim();
     if (!value) return;
     window.localStorage.setItem(COURSE_CONTEXT_STORAGE_KEY, value);
+  }
+
+  private formatApiError(errorBody: any, fallback: string) {
+    const baseMessage = String(errorBody?.message ?? fallback ?? '').trim() || fallback;
+    const students = Array.isArray(errorBody?.students) ? errorBody.students.slice(0, 3) : [];
+    if (students.length <= 0) return baseMessage;
+    const detail = students
+      .map((student: any) => {
+        const firstConflict = Array.isArray(student?.conflicts) ? student.conflicts[0] : null;
+        const reason =
+          firstConflict?.reason ||
+          firstConflict?.levelingBlock ||
+          firstConflict?.conflictingBlock ||
+          '-';
+        return `${student?.fullName || 'Alumno'}: ${reason}`;
+      })
+      .join(' | ');
+    return `${baseMessage} ${detail}`.trim();
   }
 
   private async loadReferenceDefaults(

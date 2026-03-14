@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -69,6 +70,15 @@ interface WorkshopAttendanceSaveItem {
   studentId: string;
   status: AttendanceStatus;
   notes?: string | null;
+}
+
+interface StudentScheduleWindow {
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+  startDate?: string | null;
+  endDate?: string | null;
+  label?: string | null;
 }
 
 @Injectable()
@@ -825,6 +835,11 @@ export class WorkshopsService {
         throw new BadRequestException('Bloque horario invalido (startTime/endTime)');
       }
     }
+    await this.assertWorkshopGroupScheduleHasNoStudentConflicts({
+      workshopId,
+      groupId,
+      blocks: incoming,
+    });
     await this.dataSource.transaction(async (manager) => {
       await manager.query(`DELETE FROM workshop_group_schedule_blocks WHERE groupId = ?`, [groupId]);
       if (incoming.length > 0) {
@@ -1139,6 +1154,231 @@ export class WorkshopsService {
     };
   }
 
+  async getLatestAppliedView(workshopId: string) {
+    const workshop = await this.get(workshopId, false);
+    const run = await this.getLatestAssignmentRunOrThrow(workshopId);
+    return this.buildAppliedRunView(workshop, run);
+  }
+
+  async getAssignmentRunStudentGroupOptions(
+    workshopId: string,
+    runId: string,
+    studentId: string
+  ) {
+    const run = await this.getAssignmentRunRowOrThrow(workshopId, runId);
+    const normalizedStudentId = this.normalize(studentId);
+    if (!normalizedStudentId) {
+      throw new BadRequestException('Alumno invalido');
+    }
+
+    const assignment = await this.dataSource
+      .query(
+        `
+        SELECT
+          was.groupId AS currentRunGroupId,
+          u.id AS studentId,
+          u.dni AS dni,
+          u.codigoAlumno AS codigoAlumno,
+          u.fullName AS fullName,
+          se.careerName AS careerName,
+          se.campusName AS campusName
+        FROM workshop_application_students was
+        INNER JOIN users u ON BINARY u.id = BINARY was.studentId
+        LEFT JOIN student_enrollments se
+          ON BINARY se.studentId = BINARY was.studentId
+         AND BINARY se.periodId = BINARY ?
+        WHERE BINARY was.applicationId = BINARY ?
+          AND BINARY was.studentId = BINARY ?
+        LIMIT 1
+        `,
+        [run.periodId, run.id, normalizedStudentId]
+      )
+      .then((rows) => rows[0] ?? null);
+    if (!assignment?.studentId || !assignment?.currentRunGroupId) {
+      throw new NotFoundException('Alumno no asignado en la aplicacion del taller');
+    }
+
+    const appliedRun = await this.buildAppliedRunView(
+      await this.get(workshopId, false),
+      run
+    );
+    const loadByStudent = await this.loadStudentLevelingSchedule([normalizedStudentId], run.periodId);
+    const studentLoad = loadByStudent.get(normalizedStudentId) ?? {
+      blocks: [] as StudentScheduleWindow[],
+      loadCourses: 0,
+    };
+
+    const groups = appliedRun.groups.map((group) => {
+      const overlaps = this.findOverlappingBlocks(
+        studentLoad.blocks,
+        group.scheduleBlocks ?? []
+      );
+      const isCurrent = group.runGroupId === String(assignment.currentRunGroupId);
+      const nextAssignedCount = isCurrent ? group.assignedCount : group.assignedCount + 1;
+      const wouldBeOverCapacity =
+        group.capacity !== null &&
+        group.capacity !== undefined &&
+        nextAssignedCount > Number(group.capacity);
+      const conflictDetail =
+        overlaps.length > 0
+          ? overlaps
+              .map((overlap) => {
+                const workshopBlock = this.formatScheduleBlock(overlap.groupBlock);
+                const studentBlock = this.formatScheduleBlock(
+                  overlap.studentBlock,
+                  overlap.studentBlock.label
+                );
+                return `${workshopBlock} cruza con ${studentBlock}`;
+              })
+              .join(' | ')
+          : null;
+      return {
+        runGroupId: group.runGroupId,
+        sourceGroupId: group.sourceGroupId,
+        code: group.code,
+        displayName: group.displayName,
+        assignedCount: group.assignedCount,
+        capacity: group.capacity,
+        wouldBeOverCapacity,
+        scheduleBlocks: group.scheduleBlocks ?? [],
+        hasConflict: overlaps.length > 0,
+        conflictDetail,
+        selectable: !isCurrent && overlaps.length === 0,
+        isCurrent,
+      };
+    });
+
+    return {
+      runId: run.id,
+      workshopId: run.workshopId,
+      student: {
+        studentId: String(assignment.studentId),
+        dni: assignment.dni ? String(assignment.dni) : null,
+        codigoAlumno: assignment.codigoAlumno ? String(assignment.codigoAlumno) : null,
+        fullName: String(assignment.fullName ?? ''),
+        careerName: assignment.careerName ? String(assignment.careerName) : null,
+        campusName: assignment.campusName ? String(assignment.campusName) : null,
+      },
+      currentRunGroupId: String(assignment.currentRunGroupId),
+      groups,
+    };
+  }
+
+  async changeAssignmentRunStudentGroup(
+    workshopId: string,
+    runId: string,
+    studentId: string,
+    body: { targetRunGroupId?: string | null }
+  ) {
+    const run = await this.getAssignmentRunRowOrThrow(workshopId, runId);
+    const normalizedStudentId = this.normalize(studentId);
+    const targetRunGroupId = this.normalize(body?.targetRunGroupId);
+    if (!normalizedStudentId || !targetRunGroupId) {
+      throw new BadRequestException('Alumno o grupo destino invalido');
+    }
+
+    const currentAssignment = await this.dataSource
+      .query(
+        `
+        SELECT groupId
+        FROM workshop_application_students
+        WHERE applicationId = ?
+          AND studentId = ?
+        LIMIT 1
+        `,
+        [run.id, normalizedStudentId]
+      )
+      .then((rows) => rows[0] ?? null);
+    if (!currentAssignment?.groupId) {
+      throw new NotFoundException('Alumno no asignado en la aplicacion del taller');
+    }
+    if (String(currentAssignment.groupId) === targetRunGroupId) {
+      throw new BadRequestException('El alumno ya pertenece al grupo seleccionado');
+    }
+
+    const targetGroup = await this.dataSource
+      .query(
+        `
+        SELECT id
+        FROM workshop_application_groups
+        WHERE id = ?
+          AND applicationId = ?
+        LIMIT 1
+        `,
+        [targetRunGroupId, run.id]
+      )
+      .then((rows) => rows[0] ?? null);
+    if (!targetGroup?.id) {
+      throw new NotFoundException('Grupo destino no encontrado en la aplicacion');
+    }
+
+    const options = await this.getAssignmentRunStudentGroupOptions(
+      workshopId,
+      runId,
+      normalizedStudentId
+    );
+    const selectedGroup = options.groups.find((group) => group.runGroupId === targetRunGroupId);
+    if (!selectedGroup) {
+      throw new NotFoundException('Grupo destino no encontrado en la aplicacion');
+    }
+    if (selectedGroup.hasConflict) {
+      throw new ConflictException({
+        message: 'El grupo destino genera cruce de horario con nivelacion',
+        code: 'WORKSHOP_GROUP_CHANGE_CONFLICT',
+        summary: {
+          affectedStudents: 1,
+          totalConflicts: 1,
+        },
+        students: [
+          {
+            studentId: options.student.studentId,
+            fullName: options.student.fullName,
+            codigoAlumno: options.student.codigoAlumno,
+            conflicts: [
+              {
+                reason: selectedGroup.conflictDetail,
+                groupName: selectedGroup.displayName || selectedGroup.code || 'Grupo',
+              },
+            ],
+          },
+        ],
+      });
+    }
+
+    await this.dataSource.transaction(async (manager) => {
+      await manager.query(
+        `
+        UPDATE workshop_application_students
+        SET groupId = ?
+        WHERE applicationId = ?
+          AND studentId = ?
+        `,
+        [targetRunGroupId, run.id, normalizedStudentId]
+      );
+
+      await manager.query(
+        `
+        UPDATE workshop_application_groups wag
+        SET studentCount = (
+          SELECT COUNT(*)
+          FROM workshop_application_students was
+          WHERE was.groupId = wag.id
+        )
+        WHERE wag.id IN (?, ?)
+        `,
+        [String(currentAssignment.groupId), targetRunGroupId]
+      );
+    });
+
+    return {
+      ok: true,
+      runId: run.id,
+      workshopId: run.workshopId,
+      studentId: normalizedStudentId,
+      targetRunGroupId,
+    };
+  }
+
   async getAssignmentRunPending(workshopId: string, runId: string) {
     const run = await this.dataSource
       .query(
@@ -1189,6 +1429,367 @@ export class WorkshopsService {
       reasonCode: String(row.reasonCode ?? '') as PendingReasonCode,
       reasonDetail: row.reasonDetail ? String(row.reasonDetail) : null,
     }));
+  }
+
+  private async getLatestAssignmentRunOrThrow(workshopId: string) {
+    const row = await this.dataSource
+      .query(
+        `
+        SELECT *
+        FROM workshop_applications
+        WHERE workshopId = ?
+        ORDER BY createdAt DESC, id DESC
+        LIMIT 1
+        `,
+        [workshopId]
+      )
+      .then((rows) => rows[0] ?? null);
+    if (!row?.id) {
+      throw new BadRequestException('El taller aun no tiene una aplicacion');
+    }
+    return {
+      id: String(row.id),
+      workshopId: String(row.workshopId),
+      periodId: String(row.periodId),
+      name: String(row.name ?? ''),
+      createdAt: row.createdAt,
+      totalStudents: Number(row.totalStudents ?? 0),
+      deliveryMode: String(row.deliveryMode ?? 'VIRTUAL'),
+      venueCampusName: row.venueCampusName ? String(row.venueCampusName) : null,
+      responsibleTeacherId: row.responsibleTeacherId
+        ? String(row.responsibleTeacherId)
+        : null,
+      responsibleTeacherDni: row.responsibleTeacherDni
+        ? String(row.responsibleTeacherDni)
+        : null,
+      responsibleTeacherName: row.responsibleTeacherName
+        ? String(row.responsibleTeacherName)
+        : null,
+    };
+  }
+
+  private async getAssignmentRunRowOrThrow(workshopId: string, runId: string) {
+    const row = await this.dataSource
+      .query(
+        `
+        SELECT *
+        FROM workshop_applications
+        WHERE id = ? AND workshopId = ?
+        LIMIT 1
+        `,
+        [runId, workshopId]
+      )
+      .then((rows) => rows[0] ?? null);
+    if (!row?.id) {
+      throw new NotFoundException('Run de taller no encontrado');
+    }
+    return {
+      id: String(row.id),
+      workshopId: String(row.workshopId),
+      periodId: String(row.periodId),
+      name: String(row.name ?? ''),
+      createdAt: row.createdAt,
+      totalStudents: Number(row.totalStudents ?? 0),
+      deliveryMode: String(row.deliveryMode ?? 'VIRTUAL'),
+      venueCampusName: row.venueCampusName ? String(row.venueCampusName) : null,
+      responsibleTeacherId: row.responsibleTeacherId
+        ? String(row.responsibleTeacherId)
+        : null,
+      responsibleTeacherDni: row.responsibleTeacherDni
+        ? String(row.responsibleTeacherDni)
+        : null,
+      responsibleTeacherName: row.responsibleTeacherName
+        ? String(row.responsibleTeacherName)
+        : null,
+    };
+  }
+
+  private async buildAppliedRunView(
+    workshop: any,
+    run: {
+      id: string;
+      workshopId: string;
+      periodId: string;
+      name: string;
+      createdAt: unknown;
+      totalStudents: number;
+      deliveryMode: string;
+      venueCampusName: string | null;
+      responsibleTeacherId: string | null;
+      responsibleTeacherDni: string | null;
+      responsibleTeacherName: string | null;
+    }
+  ) {
+    const groupRows: any[] = await this.dataSource.query(
+      `
+      SELECT
+        wag.id AS runGroupId,
+        wag.sourceGroupId AS sourceGroupId,
+        wag.groupCode AS groupCode,
+        wag.groupName AS groupName,
+        wag.groupIndex AS groupIndex,
+        wag.studentCount AS studentCount,
+        wag.capacitySnapshot AS capacitySnapshot
+      FROM workshop_application_groups wag
+      WHERE wag.applicationId = ?
+      ORDER BY wag.groupIndex ASC, wag.createdAt ASC
+      `,
+      [run.id]
+    );
+
+    const assignedRows: any[] = await this.dataSource.query(
+      `
+      SELECT
+        was.groupId AS runGroupId,
+        was.studentId AS studentId,
+        u.dni AS dni,
+        u.codigoAlumno AS codigoAlumno,
+        u.fullName AS fullName,
+        se.careerName AS careerName,
+        se.campusName AS campusName
+      FROM workshop_application_students was
+      INNER JOIN users u ON BINARY u.id = BINARY was.studentId
+      LEFT JOIN student_enrollments se
+        ON BINARY se.studentId = BINARY was.studentId
+       AND BINARY se.periodId = BINARY ?
+      WHERE BINARY was.applicationId = BINARY ?
+      ORDER BY u.fullName ASC, u.dni ASC
+      `,
+      [run.periodId, run.id]
+    );
+
+    const scheduleBySourceGroup = await this.loadScheduleBlocksBySourceGroup(
+      Array.from(
+        new Set(
+          groupRows
+            .map((row) => this.normalize(row.sourceGroupId))
+            .filter(Boolean)
+        )
+      )
+    );
+    const pending = await this.getAssignmentRunPending(workshop.id, run.id);
+
+    const studentsByGroup = new Map<string, any[]>();
+    for (const row of assignedRows) {
+      const key = String(row.runGroupId);
+      if (!studentsByGroup.has(key)) studentsByGroup.set(key, []);
+      studentsByGroup.get(key)!.push({
+        studentId: String(row.studentId),
+        dni: row.dni ? String(row.dni) : null,
+        codigoAlumno: row.codigoAlumno ? String(row.codigoAlumno) : null,
+        fullName: String(row.fullName ?? ''),
+        careerName: row.careerName ? String(row.careerName) : null,
+        campusName: row.campusName ? String(row.campusName) : null,
+      });
+    }
+
+    const loadByStudent = await this.loadStudentLevelingSchedule(
+      assignedRows.map((row) => String(row.studentId)),
+      run.periodId
+    );
+
+    const groups = groupRows.map((row) => ({
+      runGroupId: String(row.runGroupId),
+      sourceGroupId: row.sourceGroupId ? String(row.sourceGroupId) : null,
+      code: row.groupCode ? String(row.groupCode) : null,
+      displayName: row.groupName ? String(row.groupName) : null,
+      index: Number(row.groupIndex ?? 0),
+      assignedCount: Number(row.studentCount ?? 0),
+      capacity: row.capacitySnapshot === null ? null : Number(row.capacitySnapshot),
+      scheduleBlocks:
+        scheduleBySourceGroup.get(String(row.sourceGroupId ?? ''))?.map((block) => ({
+          dayOfWeek: block.dayOfWeek,
+          startTime: block.startTime,
+          endTime: block.endTime,
+          startDate: block.startDate,
+          endDate: block.endDate,
+        })) ?? [],
+      students: studentsByGroup.get(String(row.runGroupId)) ?? [],
+    }));
+
+    const currentConflicts: Array<{
+      studentId: string;
+      dni: string | null;
+      codigoAlumno: string | null;
+      fullName: string;
+      careerName: string | null;
+      campusName: string | null;
+      runGroupId: string;
+      sourceGroupId: string | null;
+      groupName: string | null;
+      workshopBlockText: string;
+      levelingBlockText: string;
+    }> = [];
+
+    for (const group of groups) {
+      for (const student of group.students) {
+        const studentLoad = loadByStudent.get(student.studentId) ?? {
+          blocks: [] as StudentScheduleWindow[],
+          loadCourses: 0,
+        };
+        const overlaps = this.findOverlappingBlocks(
+          studentLoad.blocks,
+          group.scheduleBlocks ?? []
+        );
+        for (const overlap of overlaps) {
+          currentConflicts.push({
+            studentId: student.studentId,
+            dni: student.dni,
+            codigoAlumno: student.codigoAlumno,
+            fullName: student.fullName,
+            careerName: student.careerName ?? null,
+            campusName: student.campusName ?? null,
+            runGroupId: group.runGroupId,
+            sourceGroupId: group.sourceGroupId,
+            groupName: group.displayName || group.code || null,
+            workshopBlockText: this.formatScheduleBlock(overlap.groupBlock),
+            levelingBlockText: this.formatScheduleBlock(
+              overlap.studentBlock,
+              overlap.studentBlock.label
+            ),
+          });
+        }
+      }
+    }
+
+    const affectedStudents = new Set(currentConflicts.map((row) => row.studentId)).size;
+
+    return {
+      workshop,
+      run: {
+        runId: run.id,
+        workshopId: run.workshopId,
+        periodId: run.periodId,
+        createdAt: run.createdAt,
+        totalCandidates: Number(run.totalStudents ?? 0),
+      },
+      groups,
+      pending,
+      summary: {
+        assignedCount: assignedRows.length,
+        pendingCount: pending.length,
+        groupsCount: groups.length,
+        conflictingStudents: affectedStudents,
+        totalConflicts: currentConflicts.length,
+      },
+      currentConflicts,
+    };
+  }
+
+  private async assertWorkshopGroupScheduleHasNoStudentConflicts(params: {
+    workshopId: string;
+    groupId: string;
+    blocks: WorkshopScheduleBlockInput[];
+  }) {
+    const latestRun = await this.dataSource
+      .query(
+        `
+        SELECT
+          wa.id AS runId,
+          wa.periodId AS periodId,
+          wag.id AS runGroupId
+        FROM workshop_applications wa
+        INNER JOIN workshop_application_groups wag
+          ON wag.applicationId = wa.id
+        WHERE wa.workshopId = ?
+          AND wag.sourceGroupId = ?
+          AND wa.id = (
+            SELECT wa2.id
+            FROM workshop_applications wa2
+            WHERE wa2.workshopId = wa.workshopId
+            ORDER BY wa2.createdAt DESC, wa2.id DESC
+            LIMIT 1
+          )
+        LIMIT 1
+        `,
+        [params.workshopId, params.groupId]
+      )
+      .then((rows) => rows[0] ?? null);
+    if (!latestRun?.runId || !latestRun?.runGroupId) {
+      return;
+    }
+
+    const students: Array<{
+      studentId: string;
+      dni: string | null;
+      codigoAlumno: string | null;
+      fullName: string;
+    }> = await this.dataSource.query(
+      `
+      SELECT
+        was.studentId AS studentId,
+        u.dni AS dni,
+        u.codigoAlumno AS codigoAlumno,
+        u.fullName AS fullName
+      FROM workshop_application_students was
+      INNER JOIN users u ON BINARY u.id = BINARY was.studentId
+      WHERE BINARY was.applicationId = BINARY ?
+        AND BINARY was.groupId = BINARY ?
+      ORDER BY u.fullName ASC, u.dni ASC
+      `,
+      [String(latestRun.runId), String(latestRun.runGroupId)]
+    );
+    if (students.length === 0 || params.blocks.length === 0) {
+      return;
+    }
+
+    const normalizedBlocks = params.blocks.map((block) => ({
+      dayOfWeek: Number(block.dayOfWeek),
+      startTime: this.toHHmm(String(block.startTime ?? '')),
+      endTime: this.toHHmm(String(block.endTime ?? '')),
+      startDate: this.normalizeIsoDateOnly(block.startDate) ?? null,
+      endDate: this.normalizeIsoDateOnly(block.endDate) ?? null,
+    }));
+    const loadByStudent = await this.loadStudentLevelingSchedule(
+      students.map((student) => student.studentId),
+      String(latestRun.periodId)
+    );
+
+    const conflictStudents = students
+      .map((student) => {
+        const studentLoad = loadByStudent.get(student.studentId) ?? {
+          blocks: [] as StudentScheduleWindow[],
+          loadCourses: 0,
+        };
+        const overlaps = this.findOverlappingBlocks(studentLoad.blocks, normalizedBlocks);
+        return {
+          ...student,
+          overlaps,
+        };
+      })
+      .filter((student) => student.overlaps.length > 0);
+
+    if (conflictStudents.length <= 0) {
+      return;
+    }
+
+    throw new ConflictException({
+      message:
+        conflictStudents.length === 1
+          ? 'No se puede guardar el horario del grupo: 1 alumno presenta cruce con nivelacion.'
+          : `No se puede guardar el horario del grupo: ${conflictStudents.length} alumnos presentan cruces con nivelacion.`,
+      code: 'WORKSHOP_GROUP_SCHEDULE_CONFLICT',
+      summary: {
+        affectedStudents: conflictStudents.length,
+        totalConflicts: conflictStudents.reduce(
+          (total, student) => total + student.overlaps.length,
+          0
+        ),
+      },
+      students: conflictStudents.slice(0, 10).map((student) => ({
+        studentId: student.studentId,
+        dni: student.dni,
+        codigoAlumno: student.codigoAlumno,
+        fullName: student.fullName,
+        conflicts: student.overlaps.slice(0, 5).map((overlap) => ({
+          workshopBlock: this.formatScheduleBlock(overlap.groupBlock),
+          levelingBlock: this.formatScheduleBlock(
+            overlap.studentBlock,
+            overlap.studentBlock.label
+          ),
+        })),
+      })),
+    });
   }
 
   async buildLatestAppliedGroupsExportWorkbook(workshopId: string) {

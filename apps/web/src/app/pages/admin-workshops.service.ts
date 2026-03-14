@@ -164,6 +164,96 @@ export interface WorkshopAssignmentRun {
   };
 }
 
+export interface WorkshopAppliedView {
+  workshop: WorkshopRow;
+  run: {
+    runId: string;
+    workshopId: string;
+    periodId: string;
+    createdAt: string;
+    totalCandidates: number;
+  };
+  groups: Array<{
+    runGroupId: string;
+    sourceGroupId: string | null;
+    code: string | null;
+    displayName: string | null;
+    index: number;
+    assignedCount: number;
+    capacity: number | null;
+    scheduleBlocks: Array<{
+      dayOfWeek: number;
+      startTime: string;
+      endTime: string;
+      startDate?: string | null;
+      endDate?: string | null;
+    }>;
+    students: Array<{
+      studentId: string;
+      dni: string | null;
+      codigoAlumno: string | null;
+      fullName: string;
+      careerName: string | null;
+      campusName: string | null;
+    }>;
+  }>;
+  pending: WorkshopAssignmentRun['pending'];
+  summary: {
+    assignedCount: number;
+    pendingCount: number;
+    groupsCount: number;
+    conflictingStudents: number;
+    totalConflicts: number;
+  };
+  currentConflicts: Array<{
+    studentId: string;
+    dni: string | null;
+    codigoAlumno: string | null;
+    fullName: string;
+    careerName: string | null;
+    campusName: string | null;
+    runGroupId: string;
+    sourceGroupId: string | null;
+    groupName: string | null;
+    workshopBlockText: string;
+    levelingBlockText: string;
+  }>;
+}
+
+export interface WorkshopStudentGroupOptionsResponse {
+  runId: string;
+  workshopId: string;
+  student: {
+    studentId: string;
+    dni: string | null;
+    codigoAlumno: string | null;
+    fullName: string;
+    careerName: string | null;
+    campusName: string | null;
+  };
+  currentRunGroupId: string;
+  groups: Array<{
+    runGroupId: string;
+    sourceGroupId: string | null;
+    code: string | null;
+    displayName: string | null;
+    assignedCount: number;
+    capacity: number | null;
+    wouldBeOverCapacity: boolean;
+    scheduleBlocks: Array<{
+      dayOfWeek: number;
+      startTime: string;
+      endTime: string;
+      startDate?: string | null;
+      endDate?: string | null;
+    }>;
+    hasConflict: boolean;
+    conflictDetail: string | null;
+    selectable: boolean;
+    isCurrent: boolean;
+  }>;
+}
+
 export interface WorkshopOptionsResponse {
   faculties: string[];
   campuses: string[];
@@ -350,6 +440,40 @@ export class AdminWorkshopsService {
     return firstValueFrom(
       this.http.get<WorkshopAssignmentRun>(
         `/api/admin/workshops/${encodeURIComponent(workshopId)}/assignments/${encodeURIComponent(runId)}`
+      )
+    );
+  }
+
+  getLatestAppliedView(workshopId: string) {
+    return firstValueFrom(
+      this.http.get<WorkshopAppliedView>(
+        `/api/admin/workshops/${encodeURIComponent(workshopId)}/assignments/latest/applied-view`
+      )
+    );
+  }
+
+  getAssignmentRunStudentGroupOptions(
+    workshopId: string,
+    runId: string,
+    studentId: string
+  ) {
+    return firstValueFrom(
+      this.http.get<WorkshopStudentGroupOptionsResponse>(
+        `/api/admin/workshops/${encodeURIComponent(workshopId)}/assignments/${encodeURIComponent(runId)}/students/${encodeURIComponent(studentId)}/group-options`
+      )
+    );
+  }
+
+  changeAssignmentRunStudentGroup(
+    workshopId: string,
+    runId: string,
+    studentId: string,
+    targetRunGroupId: string
+  ) {
+    return firstValueFrom(
+      this.http.post<{ ok: boolean }>(
+        `/api/admin/workshops/${encodeURIComponent(workshopId)}/assignments/${encodeURIComponent(runId)}/students/${encodeURIComponent(studentId)}/change-group`,
+        { targetRunGroupId }
       )
     );
   }

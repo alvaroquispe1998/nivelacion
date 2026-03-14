@@ -129,6 +129,14 @@ import { AdminWorkshopsService, WorkshopRow } from './admin-workshops.service';
                   >
                     Preview / aplicar
                   </a>
+                  <a
+                    class="rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-50"
+                    [class.opacity-50]="!workshop.lastApplicationId"
+                    [routerLink]="workshop.lastApplicationId ? ['/admin/workshops', workshop.id, 'applied'] : null"
+                    (click)="!workshop.lastApplicationId && $event.preventDefault()"
+                  >
+                    Ver aplicado
+                  </a>
                   <button
                     class="rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-50 disabled:opacity-50"
                     [disabled]="!workshop.lastApplicationId || downloadingExportId === workshop.id"

@@ -202,6 +202,36 @@ export class WorkshopsController {
     return this.workshopsService.getAssignmentRun(id, runId);
   }
 
+  @Get(':id/assignments/latest/applied-view')
+  getLatestAppliedView(@Param('id') id: string) {
+    return this.workshopsService.getLatestAppliedView(id);
+  }
+
+  @Get(':id/assignments/:runId/students/:studentId/group-options')
+  getAssignmentRunStudentGroupOptions(
+    @Param('id') id: string,
+    @Param('runId') runId: string,
+    @Param('studentId') studentId: string
+  ) {
+    return this.workshopsService.getAssignmentRunStudentGroupOptions(
+      id,
+      runId,
+      studentId
+    );
+  }
+
+  @Post(':id/assignments/:runId/students/:studentId/change-group')
+  changeAssignmentRunStudentGroup(
+    @Param('id') id: string,
+    @Param('runId') runId: string,
+    @Param('studentId') studentId: string,
+    @Body() body: { targetRunGroupId: string }
+  ) {
+    return this.workshopsService.changeAssignmentRunStudentGroup(id, runId, studentId, {
+      targetRunGroupId: body?.targetRunGroupId,
+    });
+  }
+
   @Get(':id/assignments/:runId/pending')
   getAssignmentRunPending(@Param('id') id: string, @Param('runId') runId: string) {
     return this.workshopsService.getAssignmentRunPending(id, runId);

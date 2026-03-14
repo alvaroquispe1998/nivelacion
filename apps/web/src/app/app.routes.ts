@@ -379,6 +379,15 @@ export const appRoutes: Route[] = [
           ),
       },
       {
+        path: 'admin/workshops/:id/applied',
+        canActivate: [roleGuard],
+        data: { roles: ADMIN_BACKOFFICE_ROLES },
+        loadComponent: () =>
+          import('./pages/admin-workshop-applied.page').then(
+            (m) => m.AdminWorkshopAppliedPage
+          ),
+      },
+      {
         path: 'admin/sections/:id/attendance',
         canActivate: [roleGuard],
         data: { roles: ADMIN_BACKOFFICE_ROLES },
