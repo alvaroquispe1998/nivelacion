@@ -4,12 +4,18 @@ import { provideRouter } from '@angular/router';
 import { appRoutes } from './app.routes';
 import { AuthInterceptor } from './core/auth/auth.interceptor';
 import { AdminPeriodInterceptor } from './core/workflow/admin-period.interceptor';
+import { ApiBaseUrlInterceptor } from './core/http/api-base-url.interceptor';
 
 export const appConfig: ApplicationConfig = {
   providers: [
     provideBrowserGlobalErrorListeners(),
     provideRouter(appRoutes),
     provideHttpClient(withInterceptorsFromDi()),
+    {
+      provide: HTTP_INTERCEPTORS,
+      useClass: ApiBaseUrlInterceptor,
+      multi: true,
+    },
     {
       provide: HTTP_INTERCEPTORS,
       useClass: AuthInterceptor,

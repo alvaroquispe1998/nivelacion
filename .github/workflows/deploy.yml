@@ -1,0 +1,117 @@
+name: Deploy Nivelacion
+
+on:
+  push:
+    branches:
+      - production
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  deploy-frontend:
+    name: Build & Deploy Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install & Build
+        run: |
+          npm install -g pnpm
+          pnpm install --frozen-lockfile
+          npx nx build web --configuration=production
+
+      - name: Copy frontend to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          port: ${{ secrets.SERVER_SSH_PORT }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: "dist/apps/web/browser/*"
+          target: "/home/autonomadeica/public_html/software-uai/nivelacion-frontend/"
+          strip_components: 4
+          rm: true
+
+      - name: Fix permissions & create htaccess
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          port: ${{ secrets.SERVER_SSH_PORT }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            FRONTEND_DIR="/home/autonomadeica/public_html/software-uai/nivelacion-frontend"
+            chown -R autonomadeica:autonomadeica $FRONTEND_DIR
+            chmod -R 755 $FRONTEND_DIR
+            cat > $FRONTEND_DIR/.htaccess << 'EOF'
+            <IfModule mod_rewrite.c>
+              RewriteEngine On
+              RewriteBase /
+
+              RewriteCond %{REQUEST_FILENAME} -f [OR]
+              RewriteCond %{REQUEST_FILENAME} -d
+              RewriteRule ^ - [L]
+
+              RewriteRule ^ index.html [L]
+            </IfModule>
+
+            # php -- BEGIN cPanel-generated handler, do not edit
+            <IfModule mime_module>
+              AddHandler application/x-httpd-ea-php81 .php .php8 .phtml
+            </IfModule>
+            # php -- END cPanel-generated handler, do not edit
+            EOF
+            chown autonomadeica:autonomadeica $FRONTEND_DIR/.htaccess
+            chmod 644 $FRONTEND_DIR/.htaccess
+            echo "✅ Frontend desplegado con .htaccess"
+
+  deploy-backend:
+    name: Build & Deploy Backend
+    runs-on: ubuntu-latest
+    needs: deploy-frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install & Build
+        run: |
+          npm install -g pnpm
+          pnpm install --frozen-lockfile
+          npx tsc -b libs/shared/tsconfig.lib.json
+          npx nx build api --configuration=production
+
+      - name: Copy backend to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          port: ${{ secrets.SERVER_SSH_PORT }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: "apps/api/dist/*"
+          target: "/home/autonomadeica/software-uai/nivelacion/api/dist/"
+          strip_components: 3
+          rm: true
+
+      - name: Fix permissions & restart API
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          port: ${{ secrets.SERVER_SSH_PORT }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            chown -R autonomadeica:autonomadeica /home/autonomadeica/software-uai/nivelacion/api/dist/
+            chmod -R 755 /home/autonomadeica/software-uai/nivelacion/api/dist/
+
+            cd /home/autonomadeica/software-uai/nivelacion/api
+            pm2 restart nivelacion-api || pm2 start dist/main.js --name nivelacion-api
+            pm2 save
+            echo "✅ Backend desplegado, permisos corregidos y API reiniciada"
