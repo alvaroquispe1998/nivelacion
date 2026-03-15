@@ -61,7 +61,6 @@ jobs:
             </IfModule>
 
             # php -- BEGIN cPanel-generated handler, do not edit
-            # Configure el paquete "ea-php81" como el lenguaje de programación predeterminado "PHP".
             <IfModule mime_module>
               AddHandler application/x-httpd-ea-php81 .php .php8 .phtml
             </IfModule>
