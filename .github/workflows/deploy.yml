@@ -1,0 +1,88 @@
+name: Deploy Nivelacion
+
+on:
+  push:
+    branches:
+      - production
+
+jobs:
+  deploy-frontend:
+    name: Build & Deploy Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install & Build
+        run: |
+          npm install -g pnpm
+          pnpm install --frozen-lockfile
+          npx nx build web --configuration=production
+
+      - name: Copy frontend to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: "dist/apps/web/*"
+          target: "/home/autonomadeica/public_html/software-uai/nivelacion-frontend/"
+          strip_components: 3
+          rm: true
+
+      - name: Fix frontend permissions
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            chown -R autonomadeica:autonomadeica /home/autonomadeica/public_html/software-uai/nivelacion-frontend/
+            chmod -R 755 /home/autonomadeica/public_html/software-uai/nivelacion-frontend/
+            echo "✅ Frontend desplegado y permisos corregidos"
+
+  deploy-backend:
+    name: Build & Deploy Backend
+    runs-on: ubuntu-latest
+    needs: deploy-frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install & Build
+        run: |
+          npm install -g pnpm
+          pnpm install --frozen-lockfile
+          npx nx build api --configuration=production
+
+      - name: Copy backend to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: "apps/api/dist/*"
+          target: "/home/autonomadeica/software-uai/nivelacion/api/dist/"
+          strip_components: 3
+          rm: true
+
+      - name: Fix permissions & restart API
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            chown -R autonomadeica:autonomadeica /home/autonomadeica/software-uai/nivelacion/api/dist/
+            chmod -R 755 /home/autonomadeica/software-uai/nivelacion/api/dist/
+
+            cd /home/autonomadeica/software-uai/nivelacion/api
+            pm2 restart nivelacion-api || pm2 start dist/main.js --name nivelacion-api
+            pm2 save
+            echo "✅ Backend desplegado, permisos corregidos y API reiniciada"
