@@ -30,7 +30,7 @@ jobs:
         with:
           host: ${{ secrets.SERVER_HOST }}
           port: ${{ secrets.SERVER_SSH_PORT }}
-          username: root
+          username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           source: "dist/apps/web/browser/*"
           target: "/home/autonomadeica/public_html/software-uai/nivelacion-frontend/"
@@ -42,11 +42,10 @@ jobs:
         with:
           host: ${{ secrets.SERVER_HOST }}
           port: ${{ secrets.SERVER_SSH_PORT }}
-          username: root
+          username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
             FRONTEND_DIR="/home/autonomadeica/public_html/software-uai/nivelacion-frontend"
-            chown -R autonomadeica:autonomadeica $FRONTEND_DIR
             chmod -R 755 $FRONTEND_DIR
             cat > $FRONTEND_DIR/.htaccess << 'EOF'
             <IfModule mod_rewrite.c>
@@ -66,7 +65,6 @@ jobs:
             </IfModule>
             # php -- END cPanel-generated handler, do not edit
             EOF
-            chown autonomadeica:autonomadeica $FRONTEND_DIR/.htaccess
             chmod 644 $FRONTEND_DIR/.htaccess
             echo "✅ Frontend desplegado con .htaccess"
 
@@ -93,7 +91,7 @@ jobs:
         with:
           host: ${{ secrets.SERVER_HOST }}
           port: ${{ secrets.SERVER_SSH_PORT }}
-          username: root
+          username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           source: "apps/api/dist/*"
           target: "/home/autonomadeica/software-uai/nivelacion/api/dist/"
@@ -105,13 +103,12 @@ jobs:
         with:
           host: ${{ secrets.SERVER_HOST }}
           port: ${{ secrets.SERVER_SSH_PORT }}
-          username: root
+          username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
-            chown -R autonomadeica:autonomadeica /home/autonomadeica/software-uai/nivelacion/api/dist/
             chmod -R 755 /home/autonomadeica/software-uai/nivelacion/api/dist/
 
             cd /home/autonomadeica/software-uai/nivelacion/api
             pm2 restart nivelacion-api || pm2 start dist/main.js --name nivelacion-api
             pm2 save
-            echo "✅ Backend desplegado, permisos corregidos y API reiniciada"
+            echo "✅ Backend desplegado y API reiniciada"
