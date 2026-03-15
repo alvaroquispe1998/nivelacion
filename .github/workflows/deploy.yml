@@ -64,6 +64,7 @@ jobs:
         run: |
           npm install -g pnpm
           pnpm install --frozen-lockfile
+          npx nx build shared
           npx nx build api --configuration=production
 
       - name: Copy backend to server
