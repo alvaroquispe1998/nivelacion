@@ -163,8 +163,14 @@ export class SectionsController {
       fromSectionCourseId: dto.fromSectionCourseId,
       toSectionCourseId: dto.toSectionCourseId,
       confirmOverCapacity: Boolean(dto.confirmOverCapacity),
+      confirmWorkshopWarning: Boolean(dto.confirmWorkshopWarning),
       reason: String(dto.reason ?? '').trim() || null,
       changedBy: String(user?.sub ?? '').trim() || null,
+      actor: {
+        userId: String(user?.sub ?? '').trim() || null,
+        fullName: String(user?.fullName ?? '').trim() || null,
+        role: String(user?.role ?? '').trim() || null,
+      },
     });
   }
 
@@ -360,12 +366,18 @@ export class SectionsController {
   @Patch('section-courses/:sectionCourseId/capacity')
   async updateSectionCourseCapacity(
     @Param('sectionCourseId') sectionCourseId: string,
-    @Body() dto: UpdateSectionCourseCapacityDto
+    @Body() dto: UpdateSectionCourseCapacityDto,
+    @CurrentUser() user: JwtUser
   ) {
     return this.sectionsService.updateSectionCourseCapacity({
       sectionCourseId,
       initialCapacity: dto.initialCapacity,
       maxExtraCapacity: dto.maxExtraCapacity,
+      actor: {
+        userId: String(user?.sub ?? '').trim() || null,
+        fullName: String(user?.fullName ?? '').trim() || null,
+        role: String(user?.role ?? '').trim() || null,
+      },
     });
   }
 
@@ -383,13 +395,19 @@ export class SectionsController {
   @Patch(':id/course-capacity')
   async updateCourseCapacityByCourseName(
     @Param('id') sectionId: string,
-    @Body() dto: UpdateSectionCourseCapacityByCourseNameDto
+    @Body() dto: UpdateSectionCourseCapacityByCourseNameDto,
+    @CurrentUser() user: JwtUser
   ) {
     return this.sectionsService.updateCourseCapacityBySectionAndCourseName({
       sectionId,
       courseName: dto.courseName,
       initialCapacity: dto.initialCapacity,
       maxExtraCapacity: dto.maxExtraCapacity,
+      actor: {
+        userId: String(user?.sub ?? '').trim() || null,
+        fullName: String(user?.fullName ?? '').trim() || null,
+        role: String(user?.role ?? '').trim() || null,
+      },
     });
   }
 
@@ -410,44 +428,72 @@ export class SectionsController {
   @Patch(':id/course-teacher')
   assignTeacherByCourse(
     @Param('id') sectionId: string,
-    @Body() dto: AssignSectionCourseTeacherDto
+    @Body() dto: AssignSectionCourseTeacherDto,
+    @CurrentUser() user: JwtUser
   ) {
     return this.sectionsService.assignTeacherByCourse({
       sectionId,
       courseName: dto.courseName,
       teacherId: dto.teacherId ?? null,
+      actor: {
+        userId: String(user?.sub ?? '').trim() || null,
+        fullName: String(user?.fullName ?? '').trim() || null,
+        role: String(user?.role ?? '').trim() || null,
+      },
     });
   }
 
   @Post('course-teacher/bulk-apply-from-mother')
-  bulkApplyCourseTeacherFromMother(@Body() dto: BulkApplyFromMotherDto) {
+  bulkApplyCourseTeacherFromMother(
+    @Body() dto: BulkApplyFromMotherDto,
+    @CurrentUser() user: JwtUser
+  ) {
     return this.sectionsService.bulkApplyCourseTeacherFromMother({
       facultyGroup: dto.facultyGroup,
       campusName: dto.campusName,
       courseName: dto.courseName,
       modality: dto.modality ?? null,
+      actor: {
+        userId: String(user?.sub ?? '').trim() || null,
+        fullName: String(user?.fullName ?? '').trim() || null,
+        role: String(user?.role ?? '').trim() || null,
+      },
     });
   }
 
   @Post('course-schedule/bulk-apply-from-mother')
-  bulkApplyCourseScheduleFromMother(@Body() dto: BulkApplyFromMotherDto) {
+  bulkApplyCourseScheduleFromMother(
+    @Body() dto: BulkApplyFromMotherDto,
+    @CurrentUser() user: JwtUser
+  ) {
     return this.sectionsService.bulkApplyCourseScheduleFromMother({
       facultyGroup: dto.facultyGroup,
       campusName: dto.campusName,
       courseName: dto.courseName,
       modality: dto.modality ?? null,
+      actor: {
+        userId: String(user?.sub ?? '').trim() || null,
+        fullName: String(user?.fullName ?? '').trim() || null,
+        role: String(user?.role ?? '').trim() || null,
+      },
     });
   }
 
   @Patch(':id/course-classroom')
   assignClassroomByCourse(
     @Param('id') sectionId: string,
-    @Body() dto: AssignSectionCourseClassroomDto
+    @Body() dto: AssignSectionCourseClassroomDto,
+    @CurrentUser() user: JwtUser
   ) {
     return this.sectionsService.assignClassroomByCourse({
       sectionId,
       courseName: dto.courseName,
       classroomId: dto.classroomId ?? null,
+      actor: {
+        userId: String(user?.sub ?? '').trim() || null,
+        fullName: String(user?.fullName ?? '').trim() || null,
+        role: String(user?.role ?? '').trim() || null,
+      },
     });
   }
 }

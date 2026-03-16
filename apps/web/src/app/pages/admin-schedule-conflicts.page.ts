@@ -33,6 +33,9 @@ import { DAYS } from '../shared/days';
     <div *ngIf="error" class="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
       {{ error }}
     </div>
+    <div *ngIf="success" class="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+      {{ success }}
+    </div>
 
     <div class="mt-5 rounded-2xl border border-slate-200 bg-white p-4">
       <div class="grid gap-2 sm:grid-cols-4">
@@ -228,19 +231,25 @@ import { DAYS } from '../shared/days';
                 </td>
                 <td class="px-3 py-2 text-xs">
                   <span
-                    *ngIf="opt.createsConflict"
+                    *ngIf="opt.hasCourseConflict"
                     class="inline-block rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-700"
                   >
-                    Genera cruce
+                    Genera cruce con curso
                   </span>
                   <span
-                    *ngIf="!opt.createsConflict && opt.overCapacity"
+                    *ngIf="!opt.hasCourseConflict && opt.hasWorkshopConflict"
+                    class="inline-block rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-700"
+                  >
+                    Cruce con taller
+                  </span>
+                  <span
+                    *ngIf="!opt.hasCourseConflict && opt.overCapacity"
                     class="inline-block rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800"
                   >
                     Sobre aforo
                   </span>
                   <span
-                    *ngIf="!opt.createsConflict && !opt.overCapacity"
+                    *ngIf="!opt.hasCourseConflict && !opt.hasWorkshopConflict && !opt.overCapacity"
                     class="inline-block rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700"
                   >
                     Ok
@@ -268,19 +277,19 @@ import { DAYS } from '../shared/days';
           <button
             type="button"
             class="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
-            [disabled]="reassigning || !selectedTarget || selectedTarget.createsConflict"
-            (click)="submitReassign(false)"
+            [disabled]="reassigning || !selectedTarget || selectedTarget.hasCourseConflict"
+            (click)="submitReassign(false, false)"
           >
             {{ reassigning ? 'Guardando...' : 'Reubicar' }}
           </button>
           <button
-            *ngIf="needsOverCapacityConfirmation"
+            *ngIf="needsConfirmation"
             type="button"
             class="rounded-lg bg-amber-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
-            [disabled]="reassigning || !selectedTarget || selectedTarget.createsConflict"
-            (click)="submitReassign(true)"
+            [disabled]="reassigning || !selectedTarget || selectedTarget.hasCourseConflict"
+            (click)="submitReassign(true, true)"
           >
-            Confirmar sobreaforo
+            Confirmar y continuar
           </button>
         </div>
       </div>
@@ -305,6 +314,7 @@ export class AdminScheduleConflictsPage {
   conflicts: AdminScheduleConflictItem[] = [];
   loading = false;
   error: string | null = null;
+  success: string | null = null;
 
   modalOpen = false;
   modalStudentId = '';
@@ -318,12 +328,17 @@ export class AdminScheduleConflictsPage {
   modalError: string | null = null;
   modalWarning: string | null = null;
   needsOverCapacityConfirmation = false;
+  needsWorkshopConfirmation = false;
 
   get selectedTarget() {
     return (
       this.modalOptions.find((opt) => opt.sectionCourseId === this.selectedTargetSectionCourseId) ??
       null
     );
+  }
+
+  get needsConfirmation() {
+    return this.needsOverCapacityConfirmation || this.needsWorkshopConfirmation;
   }
 
   async ngOnInit() {
@@ -430,6 +445,7 @@ export class AdminScheduleConflictsPage {
   async loadConflicts() {
     this.loading = true;
     this.error = null;
+    this.success = null;
     try {
       let params = new HttpParams();
       if (this.facultyFilter) params = params.set('facultyGroup', this.facultyFilter);
@@ -465,6 +481,7 @@ export class AdminScheduleConflictsPage {
     this.modalError = null;
     this.modalWarning = null;
     this.needsOverCapacityConfirmation = false;
+    this.needsWorkshopConfirmation = false;
     this.reassigning = false;
 
     try {
@@ -477,7 +494,7 @@ export class AdminScheduleConflictsPage {
           { params }
         )
       );
-      const firstUsable = this.modalOptions.find((x) => !x.createsConflict);
+      const firstUsable = this.modalOptions.find((x) => x.selectable);
       this.selectedTargetSectionCourseId = firstUsable?.sectionCourseId ?? '';
     } catch (e: any) {
       this.modalError = this.getErrorMessage(e, 'No se pudo cargar opciones de reubicacion');
@@ -499,13 +516,28 @@ export class AdminScheduleConflictsPage {
     this.modalError = null;
     this.modalWarning = null;
     this.needsOverCapacityConfirmation = false;
+    this.needsWorkshopConfirmation = false;
   }
 
-  async submitReassign(confirmOverCapacity: boolean) {
+  async submitReassign(
+    confirmOverCapacity: boolean,
+    confirmWorkshopWarning = false
+  ) {
     const target = this.selectedTarget;
     if (!target) return;
-    if (target.createsConflict) {
+    if (target.hasCourseConflict) {
       this.modalError = 'Selecciona una seccion destino que no genere nuevos cruces.';
+      this.cdr.detectChanges();
+      return;
+    }
+    const needsWorkshopConfirmation =
+      target.hasWorkshopConflict && !confirmWorkshopWarning;
+    const needsOverCapacityConfirmation =
+      target.overCapacity && !confirmOverCapacity;
+    if (needsWorkshopConfirmation || needsOverCapacityConfirmation) {
+      this.needsWorkshopConfirmation = needsWorkshopConfirmation;
+      this.needsOverCapacityConfirmation = needsOverCapacityConfirmation;
+      this.modalWarning = this.buildConfirmationMessage(target);
       this.cdr.detectChanges();
       return;
     }
@@ -514,20 +546,33 @@ export class AdminScheduleConflictsPage {
     this.modalError = null;
     this.modalWarning = null;
     try {
-      await firstValueFrom(
+      const response = await firstValueFrom(
         this.http.post<AdminReassignmentResult>('/api/admin/sections/schedule-conflicts/reassign', {
           studentId: this.modalStudentId,
           fromSectionCourseId: this.modalFromSectionCourseId,
           toSectionCourseId: target.sectionCourseId,
           confirmOverCapacity,
+          confirmWorkshopWarning,
         })
       );
       this.closeReassignModal();
       await this.loadConflicts();
+      if (response.warnings?.length) {
+        this.success =
+          'Cambio realizado. Recuerda avisar al encargado de taller para cambiar al alumno de grupo.';
+      }
     } catch (e: any) {
       const status = Number(e?.status ?? 0);
+      const code = String(e?.error?.code ?? '').trim();
       const message = this.getErrorMessage(e, 'No se pudo reubicar al alumno');
-      if (status === 409 && message.toLowerCase().includes('exceeds capacity')) {
+      if (code === 'SECTION_REASSIGN_WORKSHOP_WARNING_CONFIRMATION_REQUIRED') {
+        this.needsWorkshopConfirmation = true;
+        this.modalWarning = message;
+      } else if (
+        status === 409 &&
+        (message.toLowerCase().includes('capacidad') ||
+          message.toLowerCase().includes('sobreaforo'))
+      ) {
         this.needsOverCapacityConfirmation = true;
         this.modalWarning = message;
       } else {
@@ -544,6 +589,23 @@ export class AdminScheduleConflictsPage {
     this.modalError = null;
     this.modalWarning = null;
     this.needsOverCapacityConfirmation = false;
+    this.needsWorkshopConfirmation = false;
+  }
+
+  private buildConfirmationMessage(option: AdminReassignmentOption) {
+    const parts: string[] = [];
+    if (option.hasWorkshopConflict) {
+      parts.push(
+        option.workshopWarning ||
+          'El alumno tiene cruce con taller. Desea continuar? Recuerde avisar al encargado para cambiarlo de grupo.'
+      );
+    }
+    if (option.overCapacity) {
+      parts.push(
+        'El destino seleccionado excede su capacidad fisica. Confirma para continuar con sobreaforo.'
+      );
+    }
+    return parts.join(' ');
   }
 
   private async loadCampuses() {

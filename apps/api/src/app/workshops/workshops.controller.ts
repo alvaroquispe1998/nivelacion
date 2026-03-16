@@ -17,6 +17,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { WorkshopsService } from './workshops.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import type { JwtUser } from '../common/decorators/current-user.decorator';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -155,10 +156,16 @@ export class WorkshopsController {
         startUrl?: string | null;
       }>;
       forceConflicts?: boolean;
-    }
+    },
+    @CurrentUser() user: JwtUser
   ) {
     return this.workshopsService.updateGroupSchedule(id, groupId, body?.blocks ?? [], {
       forceConflicts: Boolean(body?.forceConflicts),
+      actor: {
+        userId: String(user?.sub ?? '').trim() || null,
+        fullName: String(user?.fullName ?? '').trim() || null,
+        role: String(user?.role ?? '').trim() || null,
+      },
     });
   }
 
@@ -196,8 +203,12 @@ export class WorkshopsController {
   }
 
   @Post(':id/assignments/run')
-  runAssignments(@Param('id') id: string, @CurrentUser() user: any) {
-    return this.workshopsService.runAssignments(id, String(user?.sub ?? '').trim() || null);
+  runAssignments(@Param('id') id: string, @CurrentUser() user: JwtUser) {
+    return this.workshopsService.runAssignments(id, {
+      userId: String(user?.sub ?? '').trim() || null,
+      fullName: String(user?.fullName ?? '').trim() || null,
+      role: String(user?.role ?? '').trim() || null,
+    });
   }
 
   @Get(':id/assignments/:runId')
@@ -258,7 +269,11 @@ export class WorkshopsController {
   }
 
   @Post(':id/apply')
-  apply(@Param('id') id: string, @CurrentUser() user: any) {
-    return this.workshopsService.apply(id, String(user?.sub ?? '').trim() || null);
+  apply(@Param('id') id: string, @CurrentUser() user: JwtUser) {
+    return this.workshopsService.apply(id, {
+      userId: String(user?.sub ?? '').trim() || null,
+      fullName: String(user?.fullName ?? '').trim() || null,
+      role: String(user?.role ?? '').trim() || null,
+    });
   }
 }

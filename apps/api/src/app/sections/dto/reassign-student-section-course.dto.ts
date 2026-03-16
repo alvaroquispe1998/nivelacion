@@ -25,6 +25,10 @@ export class ReassignStudentSectionCourseDto {
   confirmOverCapacity?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  confirmWorkshopWarning?: boolean;
+
+  @IsOptional()
   @IsString()
   @MaxLength(500)
   reason?: string;

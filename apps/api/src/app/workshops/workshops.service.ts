@@ -10,6 +10,7 @@ import * as XLSX from 'xlsx';
 import { PeriodsService } from '../periods/periods.service';
 import { AttendanceStatus, Role } from '@uai/shared';
 import { MeetingsService } from '../management-zoom/meetings.service';
+import { AuditActor, AuditService } from '../audit/audit.service';
 
 type WorkshopMode = 'BY_SIZE' | 'SINGLE';
 type SelectionMode = 'ALL' | 'MANUAL';
@@ -86,7 +87,8 @@ export class WorkshopsService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly periodsService: PeriodsService,
-    private readonly meetingsService: MeetingsService
+    private readonly meetingsService: MeetingsService,
+    private readonly auditService: AuditService
   ) { }
 
   private normalize(value: string | null | undefined) {
@@ -821,9 +823,10 @@ export class WorkshopsService {
     workshopId: string,
     groupId: string,
     blocks: WorkshopScheduleBlockInput[],
-    options?: { forceConflicts?: boolean }
+    options?: { forceConflicts?: boolean; actor?: AuditActor | null }
   ) {
     await this.getGroupOrThrow(workshopId, groupId);
+    const currentBlocks = await this.listGroupSchedule(workshopId, groupId);
     const incoming = Array.isArray(blocks) ? blocks : [];
     for (const block of incoming) {
       const day = Number(block.dayOfWeek);
@@ -879,8 +882,29 @@ export class WorkshopsService {
         );
       }
     });
+    const savedBlocks = await this.listGroupSchedule(workshopId, groupId);
+    await this.auditService.recordChange({
+      moduleName: 'WORKSHOPS',
+      entityType: 'WORKSHOP_GROUP_SCHEDULE',
+      entityId: groupId,
+      entityLabel: workshopId,
+      action: 'REPLACE',
+      actor: options?.actor ?? null,
+      before: {
+        blocks: currentBlocks.map((block) => this.toAuditScheduleBlock(block)),
+      },
+      after: {
+        blocks: savedBlocks.map((block) => this.toAuditScheduleBlock(block)),
+      },
+      metadata: conflictPayload && options?.forceConflicts
+        ? {
+            forcedWithConflicts: true,
+            warningCode: 'WORKSHOP_GROUP_SCHEDULE_WARNING',
+          }
+        : null,
+    });
     return {
-      blocks: await this.listGroupSchedule(workshopId, groupId),
+      blocks: savedBlocks,
       warnings:
         conflictPayload && options?.forceConflicts
           ? {
@@ -968,8 +992,8 @@ export class WorkshopsService {
     return this.previewAssignments(workshopId);
   }
 
-  async apply(workshopId: string, changedById: string | null) {
-    return this.runAssignments(workshopId, changedById);
+  async apply(workshopId: string, actor: AuditActor | null) {
+    return this.runAssignments(workshopId, actor);
   }
 
   async previewAssignments(workshopId: string) {
@@ -984,7 +1008,7 @@ export class WorkshopsService {
     return this.buildAssignmentPreview(workshop, students, groups, loadByStudent);
   }
 
-  async runAssignments(workshopId: string, changedById: string | null) {
+  async runAssignments(workshopId: string, actor: AuditActor | null) {
     const preview = await this.previewAssignments(workshopId);
     if (!String((preview.workshop as any).responsibleTeacherId ?? '').trim()) {
       throw new BadRequestException(
@@ -1024,7 +1048,7 @@ export class WorkshopsService {
           preview.workshop.venueCampusName ?? null,
           filtersJson,
           preview.totalCandidates,
-          changedById ?? null,
+          actor?.userId ?? null,
           (preview.workshop as any).responsibleTeacherId ?? null,
           (preview.workshop as any).responsibleTeacherDni ?? null,
           (preview.workshop as any).responsibleTeacherName ?? null,
@@ -1089,6 +1113,25 @@ export class WorkshopsService {
           [randomUUID(), runId, pending.studentId, pending.reasonCode, pending.reasonDetail ?? null]
         );
       }
+    });
+
+    await this.auditService.recordChange({
+      moduleName: 'WORKSHOPS',
+      entityType: 'WORKSHOP_APPLICATION',
+      entityId: runId,
+      entityLabel: preview.workshop.name,
+      action: 'APPLY',
+      actor: actor ?? null,
+      before: null,
+      after: {
+        workshopId,
+        runId,
+        assignedCount: preview.groups.reduce(
+          (acc: number, group: any) => acc + Number(group.assignedCount ?? 0),
+          0
+        ),
+        pendingCount: Array.isArray(preview.pending) ? preview.pending.length : 0,
+      },
     });
 
     return { ok: true, runId, runStatus: 'APPLIED', ...preview };
@@ -3276,6 +3319,16 @@ export class WorkshopsService {
       lastApplicationAt: row.lastApplicationAt ? String(row.lastApplicationAt) : null,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
+    };
+  }
+
+  private toAuditScheduleBlock(block: Partial<GroupScheduleBlock>) {
+    return {
+      dayOfWeek: Number(block.dayOfWeek ?? 0),
+      startTime: block.startTime ? this.toHHmm(String(block.startTime)) : null,
+      endTime: block.endTime ? this.toHHmm(String(block.endTime)) : null,
+      startDate: block.startDate ? this.normalizeIsoDateOnly(block.startDate) : null,
+      endDate: block.endDate ? this.normalizeIsoDateOnly(block.endDate) : null,
     };
   }
 }

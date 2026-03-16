@@ -14,6 +14,7 @@ import { SectionCourseTeacherEntity } from './section-course-teacher.entity';
 import { SectionEntity } from './section.entity';
 import { UserEntity } from '../users/user.entity';
 import { PeriodsService } from '../periods/periods.service';
+import { AuditActor, AuditService } from '../audit/audit.service';
 
 @Injectable()
 export class SectionsService {
@@ -26,7 +27,8 @@ export class SectionsService {
     private readonly classroomsRepo: Repository<ClassroomEntity>,
     @InjectRepository(SectionCourseTeacherEntity)
     private readonly sectionCourseTeachersRepo: Repository<SectionCourseTeacherEntity>,
-    private readonly periodsService: PeriodsService
+    private readonly periodsService: PeriodsService,
+    private readonly auditService: AuditService
   ) { }
 
   async list(): Promise<Array<{ section: SectionEntity; studentCount: number }>> {
@@ -868,6 +870,11 @@ export class SectionsService {
       candidateSectionCourseIds: candidateIds,
       periodId: activePeriodId,
     });
+    const workshopImpacts = await this.evaluateWorkshopConflictsForCandidateSectionCourses({
+      periodId: activePeriodId,
+      studentId: params.studentId,
+      candidateSectionCourseIds: candidateIds,
+    });
 
     return rows.map((row) => {
       const currentStudents = Number(row.currentStudents ?? 0);
@@ -885,8 +892,12 @@ export class SectionsService {
         maxExtraCapacity,
         projectedStudents,
       });
+      const candidateId = String(row.sectionCourseId);
+      const hasCourseConflict = conflictingCandidateIds.has(candidateId);
+      const workshopImpact = workshopImpacts.get(candidateId) ?? null;
+      const hasWorkshopConflict = Boolean(workshopImpact?.hasWorkshopConflict);
       return {
-        sectionCourseId: String(row.sectionCourseId),
+        sectionCourseId: candidateId,
         sectionId: String(row.sectionId),
         sectionCode: row.sectionCode ? String(row.sectionCode) : null,
         sectionName: String(row.sectionName ?? ''),
@@ -913,7 +924,11 @@ export class SectionsService {
           ? String(row.classroomLevelName)
           : null,
         capacitySource: String(row.capacitySource ?? '').trim() || null,
-        createsConflict: conflictingCandidateIds.has(String(row.sectionCourseId)),
+        hasCourseConflict,
+        hasWorkshopConflict,
+        workshopWarning: workshopImpact?.workshopWarning ?? null,
+        selectable: !hasCourseConflict,
+        createsConflict: hasCourseConflict,
         overCapacity,
       };
     });
@@ -924,8 +939,10 @@ export class SectionsService {
     fromSectionCourseId: string;
     toSectionCourseId: string;
     confirmOverCapacity?: boolean;
+    confirmWorkshopWarning?: boolean;
     reason?: string | null;
     changedBy?: string | null;
+    actor?: AuditActor | null;
   }) {
     const activePeriodId = await this.periodsService.getOperationalPeriodIdOrThrow();
     const fromMembership = await this.loadStudentMembershipBySectionCourseOrThrow({
@@ -968,16 +985,32 @@ export class SectionsService {
       throw new BadRequestException('El alumno ya esta asignado a la seccion-curso destino');
     }
 
-    const createsConflict = await this.candidateCreatesConflict({
+    const scheduleImpact = await this.evaluateStudentReassignmentImpact({
       studentId: params.studentId,
-      candidateSectionCourseId: toSectionCourse.sectionCourseId,
       excludeSectionCourseId: fromMembership.sectionCourseId,
+      candidateSectionCourseId: toSectionCourse.sectionCourseId,
       periodId: activePeriodId,
     });
-    if (createsConflict) {
+    if (scheduleImpact.hasCourseConflict) {
       throw new ConflictException(
         'La seccion-curso destino genera cruce de horario para este alumno'
       );
+    }
+    if (scheduleImpact.hasWorkshopConflict && !params.confirmWorkshopWarning) {
+      throw new ConflictException({
+        code: 'SECTION_REASSIGN_WORKSHOP_WARNING_CONFIRMATION_REQUIRED',
+        message:
+          scheduleImpact.workshopWarning ??
+          'El alumno tiene cruce con taller. Desea continuar? Recuerde avisar al encargado para cambiarlo de grupo.',
+        warnings: [
+          {
+            kind: 'WORKSHOP',
+            message:
+              scheduleImpact.workshopWarning ??
+              'El alumno tiene cruce con taller. Desea continuar? Recuerde avisar al encargado para cambiarlo de grupo.',
+          },
+        ],
+      });
     }
 
     const targetCurrentRows: Array<{ c: number }> = await this.sectionsRepo.manager.query(
@@ -1060,6 +1093,35 @@ export class SectionsService {
       );
     });
 
+    await this.auditService.recordChange({
+      moduleName: 'SECTIONS',
+      entityType: 'SECTION_STUDENT_REASSIGNMENT',
+      entityId: params.studentId,
+      entityLabel: fromMembership.courseName,
+      action: 'REASSIGN',
+      actor: params.actor ?? null,
+      before: {
+        studentId: params.studentId,
+        sectionCourseId: fromMembership.sectionCourseId,
+        sectionId: fromMembership.sectionId,
+        courseId: fromMembership.courseId,
+        courseName: fromMembership.courseName,
+      },
+      after: {
+        studentId: params.studentId,
+        sectionCourseId: toSectionCourse.sectionCourseId,
+        sectionId: toSectionCourse.sectionId,
+        courseId: toSectionCourse.courseId,
+        courseName: toSectionCourse.courseName,
+      },
+      metadata: {
+        reason: String(params.reason ?? '').trim() || null,
+        overCapacity,
+        projectedStudents,
+        hasWorkshopWarning: scheduleImpact.hasWorkshopConflict,
+      },
+    });
+
     return {
       ok: true,
       studentId: params.studentId,
@@ -1067,6 +1129,16 @@ export class SectionsService {
       toSectionCourseId: toSectionCourse.sectionCourseId,
       overCapacity,
       projectedStudents,
+      warnings: scheduleImpact.hasWorkshopConflict
+        ? [
+            {
+              kind: 'WORKSHOP' as const,
+              message:
+                scheduleImpact.workshopWarning ??
+                'Recuerde avisar al encargado de taller para cambiar al alumno de grupo.',
+            },
+          ]
+        : [],
     };
   }
 
@@ -1442,6 +1514,7 @@ export class SectionsService {
     sectionCourseId: string;
     initialCapacity: number;
     maxExtraCapacity: number;
+    actor?: AuditActor | null;
   }) {
     const activePeriodId = await this.periodsService.getOperationalPeriodIdOrThrow();
     const context = await this.getSectionCourseContextOrThrow({
@@ -1474,7 +1547,7 @@ export class SectionsService {
     );
     const assignedStudents = Number(rows[0]?.c ?? 0);
 
-    return {
+    const response = {
       sectionCourseId: context.sectionCourseId,
       sectionId: context.sectionId,
       courseId: context.courseId,
@@ -1488,6 +1561,23 @@ export class SectionsService {
         projectedStudents: assignedStudents,
       }),
     };
+    await this.auditService.recordChange({
+      moduleName: 'SECTIONS',
+      entityType: 'SECTION_COURSE_CAPACITY',
+      entityId: context.sectionCourseId,
+      entityLabel: `${context.courseName} | ${context.sectionCourseId}`,
+      action: 'UPDATE',
+      actor: params.actor ?? null,
+      before: {
+        initialCapacity: context.initialCapacity,
+        maxExtraCapacity: context.maxExtraCapacity,
+      },
+      after: {
+        initialCapacity,
+        maxExtraCapacity,
+      },
+    });
+    return response;
   }
 
   async getByIdOrThrow(id: string): Promise<SectionEntity> {
@@ -1538,6 +1628,7 @@ export class SectionsService {
     sectionId: string;
     courseName: string;
     teacherId?: string | null;
+    actor?: AuditActor | null;
   }) {
     const section = await this.getByIdOrThrow(params.sectionId);
     const course = await this.resolveCourseByName(params.courseName);
@@ -1555,6 +1646,24 @@ export class SectionsService {
       if (existing) {
         await this.sectionCourseTeachersRepo.remove(existing);
       }
+      await this.auditService.recordChange({
+        moduleName: 'SECTIONS',
+        entityType: 'SECTION_COURSE_TEACHER',
+        entityId: sectionCourse.id,
+        entityLabel: `${course.name} | ${section.code ?? section.name}`,
+        action: 'UPDATE',
+        actor: params.actor ?? null,
+        before: {
+          teacherId: existing?.teacher?.id ?? null,
+          teacherDni: existing?.teacher?.dni ?? null,
+          teacherName: existing?.teacher?.fullName ?? null,
+        },
+        after: {
+          teacherId: null,
+          teacherDni: null,
+          teacherName: null,
+        },
+      });
       return {
         sectionId: section.id,
         courseName: course.name,
@@ -1585,6 +1694,24 @@ export class SectionsService {
       } as SectionCourseTeacherEntity);
     row.teacher = teacher;
     const saved = await this.sectionCourseTeachersRepo.save(row);
+    await this.auditService.recordChange({
+      moduleName: 'SECTIONS',
+      entityType: 'SECTION_COURSE_TEACHER',
+      entityId: sectionCourse.id,
+      entityLabel: `${course.name} | ${section.code ?? section.name}`,
+      action: 'UPDATE',
+      actor: params.actor ?? null,
+      before: {
+        teacherId: existing?.teacher?.id ?? null,
+        teacherDni: existing?.teacher?.dni ?? null,
+        teacherName: existing?.teacher?.fullName ?? null,
+      },
+      after: {
+        teacherId: saved.teacher?.id ?? null,
+        teacherDni: saved.teacher?.dni ?? null,
+        teacherName: saved.teacher?.fullName ?? null,
+      },
+    });
 
     return {
       sectionId: section.id,
@@ -1601,6 +1728,7 @@ export class SectionsService {
     campusName: string;
     courseName: string;
     modality?: string | null;
+    actor?: AuditActor | null;
   }) {
     const activePeriodId = await this.periodsService.getOperationalPeriodIdOrThrow();
     const scope = await this.resolveMotherAndSiblings({
@@ -1699,6 +1827,27 @@ export class SectionsService {
       }
     });
 
+    for (const item of toUpdate) {
+      await this.auditService.recordChange({
+        moduleName: 'SECTIONS',
+        entityType: 'SECTION_COURSE_TEACHER',
+        entityId: item.sectionCourseId,
+        entityLabel: `${params.courseName} | ${item.sectionCode ?? item.sectionName}`,
+        action: 'BULK_UPDATE',
+        actor: params.actor ?? null,
+        before: {
+          teacherId: item.teacherId ?? null,
+        },
+        after: {
+          teacherId: teacher.id,
+        },
+        metadata: {
+          source: 'BULK_FROM_MOTHER',
+          motherSectionCourseId: mother.sectionCourseId,
+        },
+      });
+    }
+
     return {
       motherSectionCourseId: mother.sectionCourseId,
       updatedCount: toUpdate.length,
@@ -1711,6 +1860,7 @@ export class SectionsService {
     campusName: string;
     courseName: string;
     modality?: string | null;
+    actor?: AuditActor | null;
   }) {
     const activePeriodId = await this.periodsService.getOperationalPeriodIdOrThrow();
     const scope = await this.resolveMotherAndSiblings({
@@ -1882,6 +2032,7 @@ export class SectionsService {
 
     let removedBlocks = 0;
     let createdBlocks = 0;
+    const batchId = this.uuid();
     await this.sectionsRepo.manager.transaction(async (manager) => {
       for (const item of toUpdate) {
         const countRows: Array<{ c: number }> = await manager.query(
@@ -1945,6 +2096,34 @@ export class SectionsService {
         }
       }
     });
+
+    for (const item of toUpdate) {
+      await this.auditService.recordChange({
+        moduleName: 'SCHEDULES',
+        entityType: 'SECTION_COURSE_SCHEDULE',
+        entityId: item.sectionCourseId,
+        entityLabel: `${params.courseName} | ${item.sectionCode ?? item.sectionName}`,
+        action: 'BULK_UPDATE',
+        actor: params.actor ?? null,
+        before: null,
+        after: {
+          blocks: motherBlocks.map((block) => ({
+            dayOfWeek: Number(block.dayOfWeek ?? 0),
+            startTime: String(block.startTime ?? '').slice(0, 5),
+            endTime: String(block.endTime ?? '').slice(0, 5),
+            startDate: this.toIsoDateOnly(block.startDate),
+            endDate: this.toIsoDateOnly(block.endDate),
+            referenceModality: block.referenceModality ?? null,
+            referenceClassroom: block.referenceClassroom ?? null,
+          })),
+        },
+        metadata: {
+          source: 'BULK_FROM_MOTHER',
+          motherSectionCourseId: mother.sectionCourseId,
+        },
+        batchId,
+      });
+    }
 
     return {
       motherSectionCourseId: mother.sectionCourseId,
@@ -2157,6 +2336,7 @@ export class SectionsService {
     sectionId: string;
     courseName: string;
     classroomId?: string | null;
+    actor?: AuditActor | null;
   }) {
     const activePeriodId = await this.periodsService.getOperationalPeriodIdOrThrow();
     const section = await this.getByIdOrThrow(params.sectionId);
@@ -2185,6 +2365,24 @@ export class SectionsService {
         `,
         [sectionCourse.id]
       );
+      await this.auditService.recordChange({
+        moduleName: 'SECTIONS',
+        entityType: 'SECTION_COURSE_CLASSROOM',
+        entityId: sectionCourse.id,
+        entityLabel: `${course.name} | ${section.code ?? section.name}`,
+        action: 'UPDATE',
+        actor: params.actor ?? null,
+        before: {
+          classroomId: scContext.classroomId ?? null,
+          classroomCode: scContext.classroomCode ?? null,
+          classroomName: scContext.classroomName ?? null,
+        },
+        after: {
+          classroomId: null,
+          classroomCode: null,
+          classroomName: null,
+        },
+      });
       return {
         sectionId: section.id,
         sectionCourseId: sectionCourse.id,
@@ -2211,6 +2409,24 @@ export class SectionsService {
         `,
         [sectionCourse.id]
       );
+      await this.auditService.recordChange({
+        moduleName: 'SECTIONS',
+        entityType: 'SECTION_COURSE_CLASSROOM',
+        entityId: sectionCourse.id,
+        entityLabel: `${course.name} | ${section.code ?? section.name}`,
+        action: 'UPDATE',
+        actor: params.actor ?? null,
+        before: {
+          classroomId: scContext.classroomId ?? null,
+          classroomCode: scContext.classroomCode ?? null,
+          classroomName: scContext.classroomName ?? null,
+        },
+        after: {
+          classroomId: null,
+          classroomCode: null,
+          classroomName: null,
+        },
+      });
       return {
         sectionId: section.id,
         sectionCourseId: sectionCourse.id,
@@ -2274,6 +2490,24 @@ export class SectionsService {
       `,
       [classroom.id, sectionCourse.id]
     );
+    await this.auditService.recordChange({
+      moduleName: 'SECTIONS',
+      entityType: 'SECTION_COURSE_CLASSROOM',
+      entityId: sectionCourse.id,
+      entityLabel: `${course.name} | ${section.code ?? section.name}`,
+      action: 'UPDATE',
+      actor: params.actor ?? null,
+      before: {
+        classroomId: scContext.classroomId ?? null,
+        classroomCode: scContext.classroomCode ?? null,
+        classroomName: scContext.classroomName ?? null,
+      },
+      after: {
+        classroomId: classroom.id,
+        classroomCode: classroom.code,
+        classroomName: classroom.name,
+      },
+    });
 
     const pavilionRows: Array<{ code: string | null; name: string | null }> =
       await this.sectionsRepo.manager.query(
@@ -2679,6 +2913,7 @@ export class SectionsService {
     courseName: string;
     initialCapacity: number;
     maxExtraCapacity: number;
+    actor?: AuditActor | null;
   }) {
     const course = await this.resolveCourseByName(params.courseName);
     if (!course) {
@@ -2689,6 +2924,7 @@ export class SectionsService {
       sectionCourseId: sectionCourse.id,
       initialCapacity: params.initialCapacity,
       maxExtraCapacity: params.maxExtraCapacity,
+      actor: params.actor ?? null,
     });
   }
 
@@ -4364,6 +4600,148 @@ export class SectionsService {
       periodId: params.periodId,
     });
     return ids.has(params.candidateSectionCourseId);
+  }
+
+  private async evaluateStudentReassignmentImpact(params: {
+    studentId: string;
+    excludeSectionCourseId: string;
+    candidateSectionCourseId: string;
+    periodId: string;
+  }) {
+    const hasCourseConflict = await this.candidateCreatesConflict({
+      studentId: params.studentId,
+      candidateSectionCourseId: params.candidateSectionCourseId,
+      excludeSectionCourseId: params.excludeSectionCourseId,
+      periodId: params.periodId,
+    });
+    const workshopImpacts = await this.evaluateWorkshopConflictsForCandidateSectionCourses({
+      periodId: params.periodId,
+      studentId: params.studentId,
+      candidateSectionCourseIds: [params.candidateSectionCourseId],
+    });
+    const workshopImpact =
+      workshopImpacts.get(params.candidateSectionCourseId) ?? null;
+    return {
+      hasCourseConflict,
+      hasWorkshopConflict: Boolean(workshopImpact?.hasWorkshopConflict),
+      workshopWarning: workshopImpact?.workshopWarning ?? null,
+    };
+  }
+
+  private async evaluateWorkshopConflictsForCandidateSectionCourses(params: {
+    periodId: string;
+    studentId: string;
+    candidateSectionCourseIds: string[];
+  }) {
+    const candidateIds = Array.from(
+      new Set(
+        (params.candidateSectionCourseIds ?? [])
+          .map((id) => String(id ?? '').trim())
+          .filter(Boolean)
+      )
+    );
+    const result = new Map<
+      string,
+      { hasWorkshopConflict: boolean; workshopWarning: string | null }
+    >();
+    if (candidateIds.length <= 0) {
+      return result;
+    }
+
+    const candidateBlocksBySectionCourse =
+      await this.loadScheduleBlocksBySectionCourseIds(candidateIds);
+    const workshopBlocksByStudent = await this.loadStudentWorkshopBlocks({
+      periodId: params.periodId,
+      studentIds: [params.studentId],
+    });
+    const studentWorkshopBlocks =
+      workshopBlocksByStudent.get(String(params.studentId)) ?? [];
+
+    for (const candidateId of candidateIds) {
+      const candidateBlocks =
+        candidateBlocksBySectionCourse.get(candidateId) ?? [];
+      const overlaps: string[] = [];
+      for (const candidateBlock of candidateBlocks) {
+        for (const workshopBlock of studentWorkshopBlocks) {
+          if (!this.scheduleWindowsOverlap(candidateBlock, workshopBlock)) continue;
+          overlaps.push(
+            this.formatScheduleWindow(
+              workshopBlock,
+              `${workshopBlock.workshopName} | ${workshopBlock.groupName}`
+            )
+          );
+        }
+      }
+      const uniqueOverlaps = Array.from(new Set(overlaps));
+      result.set(candidateId, {
+        hasWorkshopConflict: uniqueOverlaps.length > 0,
+        workshopWarning:
+          uniqueOverlaps.length > 0
+            ? `El alumno tiene cruce con taller (${uniqueOverlaps
+                .slice(0, 2)
+                .join(', ')}). Desea continuar? Recuerde avisar al encargado para cambiarlo de grupo.`
+            : null,
+      });
+    }
+
+    return result;
+  }
+
+  private async loadScheduleBlocksBySectionCourseIds(sectionCourseIds: string[]) {
+    const ids = Array.from(
+      new Set((sectionCourseIds ?? []).map((id) => String(id ?? '').trim()).filter(Boolean))
+    );
+    const bySectionCourse = new Map<
+      string,
+      Array<{
+        dayOfWeek: number;
+        startTime: string;
+        endTime: string;
+        startDate: string | null;
+        endDate: string | null;
+      }>
+    >();
+    if (ids.length <= 0) {
+      return bySectionCourse;
+    }
+
+    const rows: Array<{
+      sectionCourseId: string;
+      dayOfWeek: number;
+      startTime: string;
+      endTime: string;
+      startDate: string | null;
+      endDate: string | null;
+    }> = await this.sectionsRepo.manager.query(
+      `
+      SELECT
+        sectionCourseId,
+        dayOfWeek,
+        startTime,
+        endTime,
+        startDate,
+        endDate
+      FROM schedule_blocks
+      WHERE sectionCourseId IN (${ids.map(() => '?').join(', ')})
+      ORDER BY sectionCourseId ASC, dayOfWeek ASC, startTime ASC
+      `,
+      ids
+    );
+
+    for (const row of rows) {
+      const sectionCourseId = String(row.sectionCourseId ?? '').trim();
+      if (!sectionCourseId) continue;
+      if (!bySectionCourse.has(sectionCourseId)) bySectionCourse.set(sectionCourseId, []);
+      bySectionCourse.get(sectionCourseId)!.push({
+        dayOfWeek: Number(row.dayOfWeek ?? 0),
+        startTime: String(row.startTime ?? '').slice(0, 5),
+        endTime: String(row.endTime ?? '').slice(0, 5),
+        startDate: this.toIsoDateOnly(row.startDate),
+        endDate: this.toIsoDateOnly(row.endDate),
+      });
+    }
+
+    return bySectionCourse;
   }
 
   private async loadCourseLookup() {

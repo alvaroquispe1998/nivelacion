@@ -332,7 +332,11 @@ export interface AdminReassignmentOption {
   classroomPavilionName?: string | null;
   classroomLevelName?: string | null;
   capacitySource?: 'VIRTUAL' | 'AULA' | 'SIN_AULA' | 'AULA_INACTIVA' | null;
-  createsConflict: boolean;
+  hasCourseConflict: boolean;
+  hasWorkshopConflict: boolean;
+  workshopWarning?: string | null;
+  selectable: boolean;
+  createsConflict?: boolean;
   overCapacity: boolean;
 }
 
@@ -343,6 +347,10 @@ export interface AdminReassignmentResult {
   toSectionCourseId: Uuid;
   overCapacity: boolean;
   projectedStudents: number;
+  warnings?: Array<{
+    kind: 'WORKSHOP';
+    message: string;
+  }>;
 }
 
 export interface AdminScheduleBlock {

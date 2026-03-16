@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ManagementZoomModule } from '../management-zoom/management-zoom.module';
 import { PeriodsModule } from '../periods/periods.module';
 import { SectionsModule } from '../sections/sections.module';
+import { AuditModule } from '../audit/audit.module';
 import { ScheduleBlockEntity } from './schedule-block.entity';
 import { ScheduleBlocksController } from './schedule-blocks.controller';
 import { ScheduleBlocksService } from './schedule-blocks.service';
@@ -13,6 +14,7 @@ import { ScheduleBlocksService } from './schedule-blocks.service';
     ManagementZoomModule,
     SectionsModule,
     PeriodsModule,
+    AuditModule,
   ],
   controllers: [ScheduleBlocksController],
   providers: [ScheduleBlocksService],
