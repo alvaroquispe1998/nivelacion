@@ -9,6 +9,7 @@ import { ClassroomScheduleController } from './classroom-schedule.controller';
 import { SupportClassroomScheduleController } from './support-classroom-schedule.controller';
 import { PeriodsModule } from '../periods/periods.module';
 import { UserEntity } from '../users/user.entity';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { UserEntity } from '../users/user.entity';
       ClassroomEntity,
     ]),
     PeriodsModule,
+    AuditModule,
   ],
   controllers: [
     SectionsController,

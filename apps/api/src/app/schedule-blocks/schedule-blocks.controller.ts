@@ -17,6 +17,8 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { CreateScheduleBlockDto } from './dto/create-schedule-block.dto';
 import { UpdateScheduleBlockDto } from './dto/update-schedule-block.dto';
 import { ScheduleBlocksService } from './schedule-blocks.service';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import type { JwtUser } from '../common/decorators/current-user.decorator';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -53,7 +55,7 @@ export class ScheduleBlocksController {
   }
 
   @Post()
-  async create(@Body() dto: CreateScheduleBlockDto) {
+  async create(@Body() dto: CreateScheduleBlockDto, @CurrentUser() user: JwtUser) {
     const result = await this.blocksService.create({
       sectionId: dto.sectionId,
       sectionCourseId: dto.sectionCourseId ?? null,
@@ -74,6 +76,11 @@ export class ScheduleBlocksController {
       scopeFacultyGroup: dto.scopeFacultyGroup ?? null,
       scopeCampusName: dto.scopeCampusName ?? null,
       scopeCourseName: dto.scopeCourseName ?? null,
+      actor: {
+        userId: String(user?.sub ?? '').trim() || null,
+        fullName: String(user?.fullName ?? '').trim() || null,
+        role: String(user?.role ?? '').trim() || null,
+      },
     });
     const block = result.block;
     return {
@@ -97,7 +104,11 @@ export class ScheduleBlocksController {
   }
 
   @Put(':id')
-  async update(@Param('id') id: string, @Body() dto: UpdateScheduleBlockDto) {
+  async update(
+    @Param('id') id: string,
+    @Body() dto: UpdateScheduleBlockDto,
+    @CurrentUser() user: JwtUser
+  ) {
     const result = await this.blocksService.update(id, {
       courseName: dto.courseName,
       dayOfWeek: dto.dayOfWeek,
@@ -116,6 +127,11 @@ export class ScheduleBlocksController {
       scopeFacultyGroup: dto.scopeFacultyGroup,
       scopeCampusName: dto.scopeCampusName,
       scopeCourseName: dto.scopeCourseName,
+      actor: {
+        userId: String(user?.sub ?? '').trim() || null,
+        fullName: String(user?.fullName ?? '').trim() || null,
+        role: String(user?.role ?? '').trim() || null,
+      },
     });
     const block = result.block;
     return {
@@ -139,8 +155,12 @@ export class ScheduleBlocksController {
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.blocksService.remove(id);
+  remove(@Param('id') id: string, @CurrentUser() user: JwtUser) {
+    return this.blocksService.remove(id, {
+      userId: String(user?.sub ?? '').trim() || null,
+      fullName: String(user?.fullName ?? '').trim() || null,
+      role: String(user?.role ?? '').trim() || null,
+    });
   }
 
   @Post(':id/refresh-meeting-links')

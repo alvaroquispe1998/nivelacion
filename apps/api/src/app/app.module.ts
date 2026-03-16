@@ -24,6 +24,7 @@ import { UsersModule } from './users/users.module';
 import { ManagementZoomModule } from './management-zoom/management-zoom.module';
 import { AppController } from './app.controller';
 import { WorkshopsModule } from './workshops/workshops.module';
+import { AuditModule } from './audit/audit.module';
 
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { WorkshopsModule } from './workshops/workshops.module';
     TeacherModule,
     ManagementZoomModule,
     WorkshopsModule,
+    AuditModule,
   ],
   controllers: [AppController],
   providers: [AdminPeriodContextMiddleware],

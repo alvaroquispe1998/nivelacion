@@ -11,6 +11,7 @@ import { PeriodsService } from '../periods/periods.service';
 import { SectionsService } from '../sections/sections.service';
 import { timesOverlap } from '../common/utils/time.util';
 import { ScheduleBlockEntity } from './schedule-block.entity';
+import { AuditActor, AuditService } from '../audit/audit.service';
 
 @Injectable()
 export class ScheduleBlocksService {
@@ -19,7 +20,8 @@ export class ScheduleBlocksService {
     private readonly blocksRepo: Repository<ScheduleBlockEntity>,
     private readonly meetingsService: MeetingsService,
     private readonly sectionsService: SectionsService,
-    private readonly periodsService: PeriodsService
+    private readonly periodsService: PeriodsService,
+    private readonly auditService: AuditService
   ) {}
 
   async listBySection(sectionId: string, courseName?: string) {
@@ -132,6 +134,7 @@ export class ScheduleBlocksService {
     scopeFacultyGroup?: string | null;
     scopeCampusName?: string | null;
     scopeCourseName?: string | null;
+    actor?: AuditActor | null;
   }): Promise<{
     block: ScheduleBlockEntity;
     warnings: {
@@ -284,8 +287,19 @@ export class ScheduleBlocksService {
       referenceModality,
       referenceClassroom,
     });
+    const savedBlock = await this.blocksRepo.save(block);
+    await this.auditService.recordChange({
+      moduleName: 'SCHEDULES',
+      entityType: 'SECTION_SCHEDULE_BLOCK',
+      entityId: savedBlock.id,
+      entityLabel: `${savedBlock.courseName} | ${savedBlock.section?.id ?? body.sectionId}`,
+      action: 'CREATE',
+      actor: body.actor ?? null,
+      before: null,
+      after: this.toAuditSnapshot(savedBlock),
+    });
     return {
-      block: await this.blocksRepo.save(block),
+      block: savedBlock,
       warnings,
     };
   }
@@ -310,6 +324,7 @@ export class ScheduleBlocksService {
       scopeFacultyGroup: string | null;
       scopeCampusName: string | null;
       scopeCourseName: string | null;
+      actor: AuditActor | null;
     }>
   ): Promise<{
     block: ScheduleBlockEntity;
@@ -489,6 +504,7 @@ export class ScheduleBlocksService {
       this.filterStudentScheduleConflictsByKind(studentConflicts, 'WORKSHOP')
     );
 
+    const beforeSnapshot = this.toAuditSnapshot(block);
     block.sectionCourseId = nextSectionCourse.id;
     block.courseName = nextSectionCourse.courseName;
     block.dayOfWeek = next.dayOfWeek;
@@ -503,8 +519,19 @@ export class ScheduleBlocksService {
     block.referenceModality = referenceModality;
     block.referenceClassroom = referenceClassroom;
 
+    const savedBlock = await this.blocksRepo.save(block);
+    await this.auditService.recordChange({
+      moduleName: 'SCHEDULES',
+      entityType: 'SECTION_SCHEDULE_BLOCK',
+      entityId: savedBlock.id,
+      entityLabel: `${savedBlock.courseName} | ${savedBlock.section?.id ?? block.section.id}`,
+      action: 'UPDATE',
+      actor: body.actor ?? null,
+      before: beforeSnapshot,
+      after: this.toAuditSnapshot(savedBlock),
+    });
     return {
-      block: await this.blocksRepo.save(block),
+      block: savedBlock,
       warnings,
     };
   }
@@ -577,10 +604,21 @@ export class ScheduleBlocksService {
     return !touchesScheduleShape;
   }
 
-  async remove(id: string) {
+  async remove(id: string, actor?: AuditActor | null) {
     const block = await this.blocksRepo.findOne({ where: { id } });
     if (!block) throw new NotFoundException('Schedule block not found');
+    const beforeSnapshot = this.toAuditSnapshot(block);
     await this.blocksRepo.remove(block);
+    await this.auditService.recordChange({
+      moduleName: 'SCHEDULES',
+      entityType: 'SECTION_SCHEDULE_BLOCK',
+      entityId: id,
+      entityLabel: `${block.courseName} | ${(block as any).sectionId ?? block.section?.id ?? ''}`,
+      action: 'DELETE',
+      actor: actor ?? null,
+      before: beforeSnapshot,
+      after: null,
+    });
     return { ok: true };
   }
 
@@ -846,6 +884,23 @@ export class ScheduleBlocksService {
           conflictingBlock: conflict.conflictingBlock,
         })),
       })),
+    };
+  }
+
+  private toAuditSnapshot(block: Partial<ScheduleBlockEntity>) {
+    const sectionId = (block as any).sectionId ?? block.section?.id ?? null;
+    return {
+      sectionId,
+      sectionCourseId: block.sectionCourseId ?? null,
+      courseName: block.courseName ?? null,
+      dayOfWeek: Number(block.dayOfWeek ?? 0),
+      startTime: block.startTime ? String(block.startTime).slice(0, 5) : null,
+      endTime: block.endTime ? String(block.endTime).slice(0, 5) : null,
+      startDate: block.startDate ? String(block.startDate).slice(0, 10) : null,
+      endDate: block.endDate ? String(block.endDate).slice(0, 10) : null,
+      referenceModality: block.referenceModality ?? null,
+      referenceClassroom: block.referenceClassroom ?? null,
+      location: block.location ?? null,
     };
   }
 }

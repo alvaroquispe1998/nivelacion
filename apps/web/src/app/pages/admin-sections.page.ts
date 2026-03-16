@@ -874,7 +874,7 @@ interface ConfirmDialogOptions {
                   trackBy: trackReassignOption
                 "
                 [value]="option.sectionCourseId"
-                [disabled]="option.createsConflict"
+                [disabled]="!option.selectable"
               >
                 {{ reassignOptionLabel(option) }}
               </option>
@@ -918,18 +918,18 @@ interface ConfirmDialogOptions {
               type="button"
               class="rounded-lg border border-slate-900 bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
               [disabled]="reassigning || !selectedReassignTargetSectionCourseId"
-              (click)="submitReassign(false)"
+              (click)="submitReassign(false, false)"
             >
               {{ reassigning ? "Guardando..." : "Guardar cambio" }}
             </button>
             <button
               type="button"
               class="rounded-lg border border-amber-500 bg-amber-500 px-3 py-2 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-60"
-              *ngIf="reassignNeedsOverCapacityConfirm"
+              *ngIf="reassignNeedsConfirmation"
               [disabled]="reassigning"
-              (click)="submitReassign(true)"
+              (click)="submitReassign(true, true)"
             >
-              Confirmar sobreaforo
+              Confirmar y continuar
             </button>
           </div>
         </div>
@@ -1011,6 +1011,7 @@ export class AdminSectionsPage {
   reassignReason = "";
   reassigning = false;
   reassignNeedsOverCapacityConfirm = false;
+  reassignNeedsWorkshopConfirm = false;
   reassignError: string | null = null;
   reassignWarning: string | null = null;
 
@@ -1073,6 +1074,12 @@ export class AdminSectionsPage {
         (option) =>
           option.sectionCourseId === this.selectedReassignTargetSectionCourseId,
       ) ?? null
+    );
+  }
+
+  get reassignNeedsConfirmation() {
+    return (
+      this.reassignNeedsOverCapacityConfirm || this.reassignNeedsWorkshopConfirm
     );
   }
 
@@ -1803,6 +1810,7 @@ export class AdminSectionsPage {
     this.reassignReason = "";
     this.reassigning = false;
     this.reassignNeedsOverCapacityConfirm = false;
+    this.reassignNeedsWorkshopConfirm = false;
     this.reassignError = null;
     this.reassignWarning = null;
 
@@ -1817,7 +1825,7 @@ export class AdminSectionsPage {
         ),
       );
       this.reassignOptions = options;
-      const firstValid = options.find((option) => !option.createsConflict);
+      const firstValid = options.find((option) => option.selectable);
       this.selectedReassignTargetSectionCourseId =
         firstValid?.sectionCourseId ?? "";
       if (!firstValid) {
@@ -1840,6 +1848,7 @@ export class AdminSectionsPage {
     this.reassignReason = "";
     this.reassigning = false;
     this.reassignNeedsOverCapacityConfirm = false;
+    this.reassignNeedsWorkshopConfirm = false;
     this.reassignError = null;
     this.reassignWarning = null;
   }
@@ -1855,14 +1864,24 @@ export class AdminSectionsPage {
     } else {
       capacityLabel = "Sin aula";
     }
-    const marks: string[] = [];
-    if (option.createsConflict) marks.push("Con cruce");
-    if (option.overCapacity) marks.push("Sobreaforo");
+    const marks = this.reassignOptionStatuses(option);
     const suffix = marks.length > 0 ? ` | ${marks.join(" | ")}` : "";
     return `${sectionLabel} | ${modality} | ${capacityLabel} | ${option.currentStudents}->${option.projectedStudents}${suffix}`;
   }
 
-  async submitReassign(forceOverCapacityConfirm: boolean) {
+  reassignOptionStatuses(option: AdminReassignmentOption) {
+    const marks: string[] = [];
+    if (option.hasCourseConflict) marks.push("Genera cruce con curso");
+    if (option.hasWorkshopConflict) marks.push("Cruce con taller");
+    if (option.overCapacity) marks.push("Sobre aforo");
+    if (marks.length === 0) marks.push("Ok");
+    return marks;
+  }
+
+  async submitReassign(
+    forceOverCapacityConfirm: boolean,
+    forceWorkshopConfirm = false,
+  ) {
     if (
       !this.reassignStudentRow ||
       !this.reassignStudentRow.sectionCourseId ||
@@ -1878,15 +1897,19 @@ export class AdminSectionsPage {
       this.cdr.detectChanges();
       return;
     }
-    if (target.createsConflict) {
+    if (target.hasCourseConflict) {
       this.reassignError = "El destino seleccionado genera cruce de horario.";
       this.cdr.detectChanges();
       return;
     }
-    if (target.overCapacity && !forceOverCapacityConfirm) {
-      this.reassignNeedsOverCapacityConfirm = true;
-      this.reassignWarning =
-        "El destino seleccionado excede su capacidad fisica. Confirma para continuar con sobreaforo.";
+    const needsWorkshopConfirm =
+      target.hasWorkshopConflict && !forceWorkshopConfirm;
+    const needsOverCapacityConfirm =
+      target.overCapacity && !forceOverCapacityConfirm;
+    if (needsWorkshopConfirm || needsOverCapacityConfirm) {
+      this.reassignNeedsWorkshopConfirm = needsWorkshopConfirm;
+      this.reassignNeedsOverCapacityConfirm = needsOverCapacityConfirm;
+      this.reassignWarning = this.buildReassignConfirmationMessage(target);
       this.cdr.detectChanges();
       return;
     }
@@ -1895,7 +1918,7 @@ export class AdminSectionsPage {
     this.reassignError = null;
     this.reassignWarning = null;
     try {
-      await firstValueFrom(
+      const response = await firstValueFrom(
         this.http.post<AdminReassignmentResult>(
           "/api/admin/sections/schedule-conflicts/reassign",
           {
@@ -1904,6 +1927,8 @@ export class AdminSectionsPage {
             toSectionCourseId: this.selectedReassignTargetSectionCourseId,
             confirmOverCapacity:
               forceOverCapacityConfirm || target.overCapacity,
+            confirmWorkshopWarning:
+              forceWorkshopConfirm || target.hasWorkshopConflict,
             reason: String(this.reassignReason ?? "").trim() || null,
           },
         ),
@@ -1911,17 +1936,50 @@ export class AdminSectionsPage {
       await this.loadSections();
       await this.reloadStudentsModalRows();
       this.workflowState.notifyWorkflowChanged({ reason: "generic" });
+      if (response.warnings?.length) {
+        this.success =
+          "Cambio realizado. Recuerda avisar al encargado de taller para cambiar al alumno de grupo.";
+      }
       this.closeReassignModal();
     } catch (e: any) {
+      const errorCode = String(e?.error?.code ?? "").trim();
       const message = String(e?.error?.message ?? "No se pudo reubicar alumno");
-      this.reassignError = message;
-      if (message.toUpperCase().includes("SOBREAFORO")) {
+      if (
+        errorCode ===
+        "SECTION_REASSIGN_WORKSHOP_WARNING_CONFIRMATION_REQUIRED"
+      ) {
+        this.reassignNeedsWorkshopConfirm = true;
+        this.reassignWarning = message;
+        this.reassignError = null;
+      } else {
+        this.reassignError = message;
+      }
+      if (
+        message.toUpperCase().includes("SOBREAFORO") ||
+        message.toUpperCase().includes("CAPACIDAD")
+      ) {
         this.reassignNeedsOverCapacityConfirm = true;
       }
     } finally {
       this.reassigning = false;
       this.cdr.detectChanges();
     }
+  }
+
+  private buildReassignConfirmationMessage(option: AdminReassignmentOption) {
+    const parts: string[] = [];
+    if (option.hasWorkshopConflict) {
+      parts.push(
+        option.workshopWarning ||
+          "El alumno tiene cruce con taller. Desea continuar? Recuerde avisar al encargado para cambiarlo de grupo.",
+      );
+    }
+    if (option.overCapacity) {
+      parts.push(
+        "El destino seleccionado excede su capacidad fisica. Confirma para continuar con sobreaforo.",
+      );
+    }
+    return parts.join(" ");
   }
 
   openTeacherModal(section: AdminSection) {
