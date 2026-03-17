@@ -24,6 +24,11 @@ export class AttendanceController {
       scheduleBlockId: dto.scheduleBlockId,
       sessionDate: dto.sessionDate,
       actorUserId: user.sub,
+      actor: {
+        userId: String(user?.sub ?? '').trim() || null,
+        fullName: String(user?.fullName ?? '').trim() || null,
+        role: String(user?.role ?? '').trim() || null,
+      },
     });
     return {
       id: session.id,
@@ -56,7 +61,12 @@ export class AttendanceController {
         status: x.status,
         notes: x.notes ?? null,
       })),
-      user.sub
+      user.sub,
+      {
+        userId: String(user?.sub ?? '').trim() || null,
+        fullName: String(user?.fullName ?? '').trim() || null,
+        role: String(user?.role ?? '').trim() || null,
+      }
     );
   }
 }

@@ -324,7 +324,7 @@ export class WorkshopsService {
     venueCampusName?: string | null;
     responsibleTeacherId?: string | null;
     studentIds?: string[];
-  }) {
+  }, actor?: AuditActor | null) {
     this.validatePayload(payload);
     const responsibleTeacher = await this.resolveResponsibleTeacherOrThrow(
       payload.responsibleTeacherId ?? null
@@ -365,7 +365,18 @@ export class WorkshopsService {
         await this.saveStudentIds(manager, id, payload.studentIds ?? []);
       }
     });
-    return this.get(id);
+    const created = await this.get(id);
+    await this.auditService.recordChange({
+      moduleName: 'WORKSHOPS',
+      entityType: 'WORKSHOP',
+      entityId: id,
+      entityLabel: created.name,
+      action: 'CREATE',
+      actor: actor ?? null,
+      before: null,
+      after: this.toAuditWorkshopSnapshot(created),
+    });
+    return created;
   }
 
   async update(id: string, payload: Partial<{
@@ -383,7 +394,7 @@ export class WorkshopsService {
     venueCampusName?: string | null;
     responsibleTeacherId?: string | null;
     studentIds?: string[];
-  }>) {
+  }>, actor?: AuditActor | null) {
     const existing = await this.get(id);
     const merged = { ...existing, ...payload };
     this.validatePayload(merged as any);
@@ -425,11 +436,33 @@ export class WorkshopsService {
         await this.saveStudentIds(manager, id, merged.studentIds ?? []);
       }
     });
-    return this.get(id);
+    const updated = await this.get(id);
+    await this.auditService.recordChange({
+      moduleName: 'WORKSHOPS',
+      entityType: 'WORKSHOP',
+      entityId: id,
+      entityLabel: updated.name,
+      action: 'UPDATE',
+      actor: actor ?? null,
+      before: this.toAuditWorkshopSnapshot(existing),
+      after: this.toAuditWorkshopSnapshot(updated),
+    });
+    return updated;
   }
 
-  async delete(id: string) {
+  async delete(id: string, actor?: AuditActor | null) {
+    const existing = await this.get(id, false);
     await this.dataSource.query(`DELETE FROM workshops WHERE id = ?`, [id]);
+    await this.auditService.recordChange({
+      moduleName: 'WORKSHOPS',
+      entityType: 'WORKSHOP',
+      entityId: id,
+      entityLabel: existing.name,
+      action: 'DELETE',
+      actor: actor ?? null,
+      before: this.toAuditWorkshopSnapshot(existing),
+      after: null,
+    });
     return { ok: true };
   }
 
@@ -670,8 +703,13 @@ export class WorkshopsService {
     }));
   }
 
-  async upsertGroups(workshopId: string, groups: WorkshopGroupInput[]) {
+  async upsertGroups(
+    workshopId: string,
+    groups: WorkshopGroupInput[],
+    actor?: AuditActor | null
+  ) {
     await this.get(workshopId, false);
+    const beforeGroups = await this.listGroups(workshopId);
     const incoming = Array.isArray(groups) ? groups : [];
     await this.dataSource.transaction(async (manager) => {
       const existingRows: Array<{ id: string }> = await manager.query(
@@ -737,10 +775,25 @@ export class WorkshopsService {
         keptIds.add(id);
       }
     });
-    return this.listGroups(workshopId);
+    const savedGroups = await this.listGroups(workshopId);
+    await this.auditService.recordChange({
+      moduleName: 'WORKSHOPS',
+      entityType: 'WORKSHOP_GROUPS',
+      entityId: workshopId,
+      entityLabel: workshopId,
+      action: 'REPLACE',
+      actor: actor ?? null,
+      before: {
+        groups: beforeGroups.map((group) => this.toAuditGroupSnapshot(group)),
+      },
+      after: {
+        groups: savedGroups.map((group) => this.toAuditGroupSnapshot(group)),
+      },
+    });
+    return savedGroups;
   }
 
-  async regenerateGroups(workshopId: string) {
+  async regenerateGroups(workshopId: string, actor?: AuditActor | null) {
     const workshop = await this.get(workshopId);
     // Borramos grupos existentes para evitar colisiones de UNIQUE (workshopId, code)
     // El ON DELETE CASCADE se encarga de los bloques horarios.
@@ -779,7 +832,7 @@ export class WorkshopsService {
       }
     }
 
-    return this.upsertGroups(workshopId, groups);
+    return this.upsertGroups(workshopId, groups, actor ?? null);
   }
 
   async listGroupSchedule(workshopId: string, groupId: string) {
@@ -925,9 +978,15 @@ export class WorkshopsService {
       zoomMeetingRecordId?: string | null;
       joinUrl?: string | null;
       startUrl?: string | null;
-    }
+    },
+    actor?: AuditActor | null
   ) {
     const block = await this.getWorkshopScheduleBlockOrThrow(workshopId, groupId, blockId);
+    const before = {
+      zoomMeetingRecordId: block.zoomMeetingRecordId ?? null,
+      joinUrl: block.joinUrl ?? null,
+      startUrl: block.startUrl ?? null,
+    };
     await this.dataSource.query(
       `
       UPDATE workshop_group_schedule_blocks
@@ -944,6 +1003,20 @@ export class WorkshopsService {
         block.id,
       ]
     );
+    await this.auditService.recordChange({
+      moduleName: 'WORKSHOPS',
+      entityType: 'WORKSHOP_GROUP_SCHEDULE_MEETING',
+      entityId: block.id,
+      entityLabel: `${workshopId} | ${groupId}`,
+      action: 'UPDATE',
+      actor: actor ?? null,
+      before,
+      after: {
+        zoomMeetingRecordId: this.normalize(body.zoomMeetingRecordId ?? null) || null,
+        joinUrl: this.normalize(body.joinUrl ?? null) || null,
+        startUrl: this.normalize(body.startUrl ?? null) || null,
+      },
+    });
     return this.listGroupSchedule(workshopId, groupId);
   }
 
@@ -3329,6 +3402,81 @@ export class WorkshopsService {
       endTime: block.endTime ? this.toHHmm(String(block.endTime)) : null,
       startDate: block.startDate ? this.normalizeIsoDateOnly(block.startDate) : null,
       endDate: block.endDate ? this.normalizeIsoDateOnly(block.endDate) : null,
+    };
+  }
+
+  private toAuditWorkshopSnapshot(workshop: Partial<{
+    name: string | null;
+    mode: WorkshopMode | null;
+    groupSize: number | null;
+    selectionMode: SelectionMode | null;
+    facultyGroups?: string[] | null;
+    campusNames?: string[] | null;
+    careerNames?: string[] | null;
+    deliveryMode?: DeliveryMode | null;
+    venueCampusName?: string | null;
+    responsibleTeacherId?: string | null;
+    responsibleTeacherName?: string | null;
+    selectedStudentsCount?: number | null;
+    studentIds?: string[] | null;
+  }>) {
+    return {
+      name: this.normalize(workshop.name ?? null) || null,
+      mode: workshop.mode ?? null,
+      groupSize:
+        workshop.groupSize === null || workshop.groupSize === undefined
+          ? null
+          : Number(workshop.groupSize),
+      selectionMode: workshop.selectionMode ?? null,
+      facultyGroups: Array.isArray(workshop.facultyGroups)
+        ? workshop.facultyGroups.slice()
+        : [],
+      campusNames: Array.isArray(workshop.campusNames)
+        ? workshop.campusNames.slice()
+        : [],
+      careerNames: Array.isArray(workshop.careerNames)
+        ? workshop.careerNames.slice()
+        : [],
+      deliveryMode: workshop.deliveryMode ?? null,
+      venueCampusName: workshop.venueCampusName ?? null,
+      responsibleTeacherId: workshop.responsibleTeacherId ?? null,
+      responsibleTeacherName: workshop.responsibleTeacherName ?? null,
+      selectedStudentsCount:
+        workshop.selectedStudentsCount === null ||
+        workshop.selectedStudentsCount === undefined
+          ? null
+          : Number(workshop.selectedStudentsCount),
+      studentIds: Array.isArray(workshop.studentIds) ? workshop.studentIds.slice() : [],
+    };
+  }
+
+  private toAuditGroupSnapshot(group: Partial<{
+    id: string | null;
+    code: string | null;
+    displayName: string | null;
+    capacity: number | null;
+    sortOrder: number | null;
+    isActive: boolean | null;
+    scheduleBlocks?: Array<Partial<GroupScheduleBlock>> | null;
+  }>) {
+    return {
+      id: group.id ?? null,
+      code: group.code ?? null,
+      displayName: group.displayName ?? null,
+      capacity:
+        group.capacity === null || group.capacity === undefined
+          ? null
+          : Number(group.capacity),
+      sortOrder:
+        group.sortOrder === null || group.sortOrder === undefined
+          ? null
+          : Number(group.sortOrder),
+      isActive: group.isActive ?? null,
+      scheduleBlocks: Array.isArray(group.scheduleBlocks)
+        ? group.scheduleBlocks.map((block: Partial<GroupScheduleBlock>) =>
+            this.toAuditScheduleBlock(block)
+          )
+        : [],
     };
   }
 }

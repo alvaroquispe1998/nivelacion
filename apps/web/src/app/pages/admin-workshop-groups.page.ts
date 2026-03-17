@@ -22,7 +22,7 @@ interface ZoomMeetingPrefillDraft {
   sourceType: 'WORKSHOP_BLOCK';
   sourceWorkshopId: string;
   sourceGroupId: string;
-  sourceWorkshopScheduleBlockId: string;
+  sourceWorkshopScheduleBlockId?: string;
 }
 
 @Component({
@@ -392,8 +392,8 @@ export class AdminWorkshopGroupsPage implements OnInit, OnDestroy {
   }
 
   async openZoomPrefillForBlock(block: GroupScheduleBlockRow) {
-    if (!this.workshopId || !this.selectedGroupId || !block.id || String(block.id).startsWith('local-')) {
-      this.error = 'Primero guarda el horario del grupo antes de crear la reunion Zoom.';
+    if (!this.workshopId || !this.selectedGroupId) {
+      this.error = 'No se pudo identificar el grupo del taller para crear la reunion Zoom.';
       this.success = null;
       this.safeDetectChanges();
       return;
@@ -428,7 +428,10 @@ export class AdminWorkshopGroupsPage implements OnInit, OnDestroy {
       sourceType: 'WORKSHOP_BLOCK',
       sourceWorkshopId: this.workshopId,
       sourceGroupId: this.selectedGroupId,
-      sourceWorkshopScheduleBlockId: String(block.id),
+      sourceWorkshopScheduleBlockId:
+        block.id && !String(block.id).startsWith('local-')
+          ? String(block.id)
+          : undefined,
     };
     await this.router.navigate(['/admin/zoom/meetings'], {
       state: { zoomMeetingPrefill: draft },

@@ -6,6 +6,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { AttendanceStatus, isAdminBackofficeRole, Role } from '@uai/shared';
 import { Repository } from 'typeorm';
+import { AuditActor, AuditService } from '../audit/audit.service';
 import { PeriodsService } from '../periods/periods.service';
 import { ScheduleBlockEntity } from '../schedule-blocks/schedule-block.entity';
 import { UsersService } from '../users/users.service';
@@ -22,13 +23,15 @@ export class AttendanceService {
     @InjectRepository(ScheduleBlockEntity)
     private readonly blocksRepo: Repository<ScheduleBlockEntity>,
     private readonly usersService: UsersService,
-    private readonly periodsService: PeriodsService
+    private readonly periodsService: PeriodsService,
+    private readonly auditService: AuditService
   ) {}
 
   async createSession(params: {
     scheduleBlockId: string;
     sessionDate: string;
     actorUserId: string;
+    actor?: AuditActor | null;
   }) {
     const block = await this.blocksRepo.findOne({
       where: { id: params.scheduleBlockId },
@@ -81,6 +84,25 @@ export class AttendanceService {
           })
         )
       );
+    }
+
+    if (isAdminBackofficeRole(actor.role)) {
+      await this.auditService.recordChange({
+        moduleName: 'ATTENDANCE',
+        entityType: 'ATTENDANCE_SESSION',
+        entityId: session.id,
+        entityLabel: `${block.courseName} | ${params.sessionDate}`,
+        action: 'CREATE',
+        actor:
+          params.actor ??
+          ({
+            userId: actor.id,
+            fullName: actor.fullName,
+            role: actor.role,
+          } satisfies AuditActor),
+        before: null,
+        after: await this.buildAttendanceAuditSnapshot(session.id),
+      });
     }
 
     return session;
@@ -144,12 +166,14 @@ export class AttendanceService {
   async updateRecords(
     sessionId: string,
     items: Array<{ studentId: string; status: AttendanceStatus; notes?: string | null }>,
-    actorUserId: string
+    actorUserId: string,
+    actorInput?: AuditActor | null
   ) {
     const session = await this.getSessionOrThrow(sessionId);
     const sectionCourseId = await this.resolveSectionCourseIdForBlockOrThrow(
       session.scheduleBlock
     );
+    const before = await this.buildAttendanceAuditSnapshot(session.id);
     const actor = await this.usersService.getByIdOrThrow(actorUserId);
     if (!(isAdminBackofficeRole(actor.role) || actor.role === Role.DOCENTE)) {
       throw new BadRequestException('actor must be ADMIN, ADMINISTRATIVO or DOCENTE');
@@ -187,6 +211,25 @@ export class AttendanceService {
       record.status = it.status;
       record.notes = it.notes ?? null;
       await this.recordsRepo.save(record);
+    }
+
+    if (isAdminBackofficeRole(actor.role)) {
+      await this.auditService.recordChange({
+        moduleName: 'ATTENDANCE',
+        entityType: 'ATTENDANCE_RECORDS',
+        entityId: session.id,
+        entityLabel: `${session.scheduleBlock.courseName} | ${this.toIsoDateOnly(session.sessionDate)}`,
+        action: 'UPDATE',
+        actor:
+          actorInput ??
+          ({
+            userId: actor.id,
+            fullName: actor.fullName,
+            role: actor.role,
+          } satisfies AuditActor),
+        before,
+        after: await this.buildAttendanceAuditSnapshot(session.id),
+      });
     }
 
     return { ok: true };
@@ -363,5 +406,56 @@ export class AttendanceService {
       .replace(/\s+/g, ' ')
       .trim()
       .toUpperCase();
+  }
+
+  private async buildAttendanceAuditSnapshot(sessionId: string) {
+    const rows: Array<{
+      sessionId: string;
+      sessionDate: string;
+      scheduleBlockId: string;
+      sectionCourseId: string | null;
+      courseName: string;
+      attendedCount: number;
+      absentCount: number;
+      otherCount: number;
+      notesCount: number;
+      totalRecords: number;
+    }> = await this.recordsRepo.manager.query(
+      `
+      SELECT
+        ses.id AS sessionId,
+        ses.sessionDate AS sessionDate,
+        sb.id AS scheduleBlockId,
+        sb.sectionCourseId AS sectionCourseId,
+        sb.courseName AS courseName,
+        SUM(CASE WHEN r.status = 'ASISTIO' THEN 1 ELSE 0 END) AS attendedCount,
+        SUM(CASE WHEN r.status = 'FALTO' THEN 1 ELSE 0 END) AS absentCount,
+        SUM(CASE WHEN r.status NOT IN ('ASISTIO', 'FALTO') THEN 1 ELSE 0 END) AS otherCount,
+        SUM(CASE WHEN COALESCE(NULLIF(TRIM(r.notes), ''), '') <> '' THEN 1 ELSE 0 END) AS notesCount,
+        COUNT(r.id) AS totalRecords
+      FROM attendance_sessions ses
+      INNER JOIN schedule_blocks sb ON sb.id = ses.scheduleBlockId
+      LEFT JOIN attendance_records r ON r.attendanceSessionId = ses.id
+      WHERE ses.id = ?
+      GROUP BY ses.id, ses.sessionDate, sb.id, sb.sectionCourseId, sb.courseName
+      `,
+      [sessionId]
+    );
+    const row = rows[0];
+    if (!row?.sessionId) {
+      return { sessionId };
+    }
+    return {
+      sessionId: String(row.sessionId),
+      sessionDate: this.toIsoDateOnly(row.sessionDate),
+      scheduleBlockId: String(row.scheduleBlockId),
+      sectionCourseId: row.sectionCourseId ? String(row.sectionCourseId) : null,
+      courseName: String(row.courseName ?? ''),
+      totalRecords: Number(row.totalRecords ?? 0),
+      attendedCount: Number(row.attendedCount ?? 0),
+      absentCount: Number(row.absentCount ?? 0),
+      otherCount: Number(row.otherCount ?? 0),
+      notesCount: Number(row.notesCount ?? 0),
+    };
   }
 }

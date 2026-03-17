@@ -10,8 +10,6 @@ import { hashInternalPassword, verifyStoredPassword } from '../users/passwords.u
 import { UsersService } from '../users/users.service';
 import { UserEntity } from '../users/user.entity';
 
-const ADMIN_LOGIN = 'administrador';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? 'Admin@UAI19';
 const LOGIN_TIMEOUT_MS = 3_000;
 
 @Injectable()
@@ -38,8 +36,6 @@ export class AuthService {
   }
 
   private async performLogin(usuario: string, password: string) {
-    const usuarioLower = usuario.toLowerCase();
-
     const user = await this.findUserForLogin(usuario);
 
     if (!user) throw new UnauthorizedException('Invalid credentials');
@@ -50,7 +46,6 @@ export class AuthService {
     const isValid = await this.validateLoginCredentials({
       user,
       password,
-      usuarioLower,
     });
     if (!isValid) {
       throw new UnauthorizedException('Invalid credentials');
@@ -91,7 +86,6 @@ export class AuthService {
     const isValidCurrentPassword = await this.validateLoginCredentials({
       user,
       password: currentPassword,
-      usuarioLower: String(user.dni ?? '').trim().toLowerCase(),
     });
 
     if (!isValidCurrentPassword) {
@@ -106,18 +100,11 @@ export class AuthService {
   private async validateLoginCredentials(params: {
     user: UserEntity;
     password: string;
-    usuarioLower: string;
   }) {
-    const { user, password, usuarioLower } = params;
+    const { user, password } = params;
 
     if (isInternalUserRole(user.role)) {
-      const matchesStoredPassword = await verifyStoredPassword(user.passwordHash, password);
-      const matchesLegacyAdminEnv =
-        usuarioLower === ADMIN_LOGIN &&
-        user.role === Role.ADMIN &&
-        password === ADMIN_PASSWORD;
-
-      return matchesStoredPassword || matchesLegacyAdminEnv;
+      return verifyStoredPassword(user.passwordHash, password);
     }
 
     if (user.role === Role.ALUMNO || user.role === Role.DOCENTE) {

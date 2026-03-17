@@ -12,6 +12,8 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ADMIN_BACKOFFICE_ROLES } from '@uai/shared';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import type { JwtUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -64,43 +66,66 @@ export class ClassroomsController {
   }
 
   @Post('pavilions')
-  createPavilion(@Body() dto: CreatePavilionDto) {
+  createPavilion(@Body() dto: CreatePavilionDto, @CurrentUser() user: JwtUser) {
     return this.classroomsService.createPavilion({
       campusId: dto.campusId,
       code: dto.code,
       name: dto.name,
       status: dto.status,
+      actor: {
+        userId: String(user?.sub ?? '').trim() || null,
+        fullName: String(user?.fullName ?? '').trim() || null,
+        role: String(user?.role ?? '').trim() || null,
+      },
     });
   }
 
   @Patch('pavilions/:id')
-  updatePavilion(@Param('id') id: string, @Body() dto: UpdatePavilionDto) {
+  updatePavilion(
+    @Param('id') id: string,
+    @Body() dto: UpdatePavilionDto,
+    @CurrentUser() user: JwtUser
+  ) {
     return this.classroomsService.updatePavilion(id, {
       campusId: dto.campusId,
       code: dto.code,
       name: dto.name,
       status: dto.status,
+      actor: {
+        userId: String(user?.sub ?? '').trim() || null,
+        fullName: String(user?.fullName ?? '').trim() || null,
+        role: String(user?.role ?? '').trim() || null,
+      },
     });
   }
 
   @Patch('pavilions/:id/status')
   updatePavilionStatus(
     @Param('id') id: string,
-    @Body() dto: UpdatePavilionStatusDto
+    @Body() dto: UpdatePavilionStatusDto,
+    @CurrentUser() user: JwtUser
   ) {
     if (!dto?.status) {
       throw new BadRequestException('status es requerido');
     }
-    return this.classroomsService.updatePavilionStatus(id, dto.status);
+    return this.classroomsService.updatePavilionStatus(id, dto.status, {
+      userId: String(user?.sub ?? '').trim() || null,
+      fullName: String(user?.fullName ?? '').trim() || null,
+      role: String(user?.role ?? '').trim() || null,
+    });
   }
 
   @Delete('pavilions/:id')
-  removePavilion(@Param('id') id: string) {
-    return this.classroomsService.removePavilion(id);
+  removePavilion(@Param('id') id: string, @CurrentUser() user: JwtUser) {
+    return this.classroomsService.removePavilion(id, {
+      userId: String(user?.sub ?? '').trim() || null,
+      fullName: String(user?.fullName ?? '').trim() || null,
+      role: String(user?.role ?? '').trim() || null,
+    });
   }
 
   @Post()
-  async create(@Body() dto: CreateClassroomDto) {
+  async create(@Body() dto: CreateClassroomDto, @CurrentUser() user: JwtUser) {
     const created = await this.classroomsService.create({
       campusId: dto.campusId,
       pavilionId: dto.pavilionId,
@@ -111,6 +136,11 @@ export class ClassroomsController {
       type: dto.type,
       status: dto.status,
       notes: dto.notes,
+      actor: {
+        userId: String(user?.sub ?? '').trim() || null,
+        fullName: String(user?.fullName ?? '').trim() || null,
+        role: String(user?.role ?? '').trim() || null,
+      },
     });
     return {
       id: created.id,
@@ -130,7 +160,11 @@ export class ClassroomsController {
   }
 
   @Patch(':id')
-  async update(@Param('id') id: string, @Body() dto: UpdateClassroomDto) {
+  async update(
+    @Param('id') id: string,
+    @Body() dto: UpdateClassroomDto,
+    @CurrentUser() user: JwtUser
+  ) {
     const updated = await this.classroomsService.update(id, {
       campusId: dto.campusId,
       pavilionId: dto.pavilionId,
@@ -141,6 +175,11 @@ export class ClassroomsController {
       type: dto.type,
       status: dto.status,
       notes: dto.notes,
+      actor: {
+        userId: String(user?.sub ?? '').trim() || null,
+        fullName: String(user?.fullName ?? '').trim() || null,
+        role: String(user?.role ?? '').trim() || null,
+      },
     });
     return {
       id: updated.id,
@@ -162,12 +201,17 @@ export class ClassroomsController {
   @Patch(':id/status')
   async updateStatus(
     @Param('id') id: string,
-    @Body() dto: UpdateClassroomStatusDto
+    @Body() dto: UpdateClassroomStatusDto,
+    @CurrentUser() user: JwtUser
   ) {
     if (!dto?.status) {
       throw new BadRequestException('status es requerido');
     }
-    const updated = await this.classroomsService.updateStatus(id, dto.status);
+    const updated = await this.classroomsService.updateStatus(id, dto.status, {
+      userId: String(user?.sub ?? '').trim() || null,
+      fullName: String(user?.fullName ?? '').trim() || null,
+      role: String(user?.role ?? '').trim() || null,
+    });
     return {
       id: updated.id,
       status: updated.status,
@@ -176,7 +220,11 @@ export class ClassroomsController {
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.classroomsService.remove(id);
+  remove(@Param('id') id: string, @CurrentUser() user: JwtUser) {
+    return this.classroomsService.remove(id, {
+      userId: String(user?.sub ?? '').trim() || null,
+      fullName: String(user?.fullName ?? '').trim() || null,
+      role: String(user?.role ?? '').trim() || null,
+    });
   }
 }

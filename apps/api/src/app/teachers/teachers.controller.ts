@@ -10,6 +10,8 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ADMIN_BACKOFFICE_ROLES } from '@uai/shared';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import type { JwtUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -36,10 +38,15 @@ export class TeachersController {
   }
 
   @Post()
-  async create(@Body() dto: CreateTeacherDto) {
+  async create(@Body() dto: CreateTeacherDto, @CurrentUser() user: JwtUser) {
     const created = await this.teachersService.create({
       dni: dto.dni,
       fullName: dto.fullName,
+      actor: {
+        userId: String(user?.sub ?? '').trim() || null,
+        fullName: String(user?.fullName ?? '').trim() || null,
+        role: String(user?.role ?? '').trim() || null,
+      },
     });
     return {
       id: created.id,
@@ -49,10 +56,19 @@ export class TeachersController {
   }
 
   @Patch(':id')
-  async update(@Param('id') id: string, @Body() dto: UpdateTeacherDto) {
+  async update(
+    @Param('id') id: string,
+    @Body() dto: UpdateTeacherDto,
+    @CurrentUser() user: JwtUser
+  ) {
     const updated = await this.teachersService.update(id, {
       dni: dto.dni,
       fullName: dto.fullName,
+      actor: {
+        userId: String(user?.sub ?? '').trim() || null,
+        fullName: String(user?.fullName ?? '').trim() || null,
+        role: String(user?.role ?? '').trim() || null,
+      },
     });
     return {
       id: updated.id,
@@ -62,7 +78,11 @@ export class TeachersController {
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.teachersService.remove(id);
+  remove(@Param('id') id: string, @CurrentUser() user: JwtUser) {
+    return this.teachersService.remove(id, {
+      userId: String(user?.sub ?? '').trim() || null,
+      fullName: String(user?.fullName ?? '').trim() || null,
+      role: String(user?.role ?? '').trim() || null,
+    });
   }
 }

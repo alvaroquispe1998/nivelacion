@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { AuditActor, AuditService } from '../audit/audit.service';
 import { AdminPeriodContextService } from '../common/context/admin-period-context.service';
 import { EntityManager, Repository } from 'typeorm';
 import { PeriodEntity } from './period.entity';
@@ -9,7 +10,8 @@ export class PeriodsService {
   constructor(
     @InjectRepository(PeriodEntity)
     private readonly periodsRepo: Repository<PeriodEntity>,
-    private readonly adminPeriodContext: AdminPeriodContextService
+    private readonly adminPeriodContext: AdminPeriodContextService,
+    private readonly auditService: AuditService
   ) { }
 
   async list() {
@@ -24,6 +26,7 @@ export class PeriodsService {
     kind?: 'NIVELACION' | 'REGULAR';
     startsAt?: string | null;
     endsAt?: string | null;
+    actor?: AuditActor | null;
   }) {
     const code = String(params.code || '').trim();
     const name = String(params.name || '').trim();
@@ -45,12 +48,29 @@ export class PeriodsService {
       startsAt: params.startsAt ?? null,
       endsAt: params.endsAt ?? null,
     });
-    return this.periodsRepo.save(period);
+    const saved = await this.periodsRepo.save(period);
+    await this.auditService.recordChange({
+      moduleName: 'PERIODS',
+      entityType: 'PERIOD',
+      entityId: saved.id,
+      entityLabel: `${saved.code} | ${saved.name}`,
+      action: 'CREATE',
+      actor: params.actor ?? null,
+      before: null,
+      after: this.toAuditSnapshot(saved),
+    });
+    return saved;
   }
 
-  async activate(id: string) {
+  async activate(id: string, actor?: AuditActor | null) {
     const target = await this.periodsRepo.findOne({ where: { id } });
     if (!target) throw new NotFoundException('Period not found');
+    const previousActive = await this.findActiveOrNull();
+    const previousActiveSnapshot =
+      previousActive && previousActive.id !== target.id
+        ? this.toAuditSnapshot(previousActive)
+        : null;
+    const before = this.toAuditSnapshot(target);
 
     await this.periodsRepo
       .createQueryBuilder()
@@ -60,7 +80,33 @@ export class PeriodsService {
       .execute();
 
     target.status = 'ACTIVE';
-    return this.periodsRepo.save(target);
+    const saved = await this.periodsRepo.save(target);
+    if (previousActiveSnapshot) {
+      await this.auditService.recordChange({
+        moduleName: 'PERIODS',
+        entityType: 'PERIOD_STATUS',
+        entityId: previousActiveSnapshot.id,
+        entityLabel: `${previousActiveSnapshot.code} | ${previousActiveSnapshot.name}`,
+        action: 'UPDATE',
+        actor: actor ?? null,
+        before: previousActiveSnapshot,
+        after: {
+          ...previousActiveSnapshot,
+          status: 'CLOSED',
+        },
+      });
+    }
+    await this.auditService.recordChange({
+      moduleName: 'PERIODS',
+      entityType: 'PERIOD_STATUS',
+      entityId: saved.id,
+      entityLabel: `${saved.code} | ${saved.name}`,
+      action: 'UPDATE',
+      actor: actor ?? null,
+      before,
+      after: this.toAuditSnapshot(saved),
+    });
+    return saved;
   }
 
   async update(
@@ -69,10 +115,12 @@ export class PeriodsService {
       name?: string;
       startsAt?: string | null;
       endsAt?: string | null;
+      actor?: AuditActor | null;
     }
   ) {
     const period = await this.periodsRepo.findOne({ where: { id } });
     if (!period) throw new NotFoundException('Period not found');
+    const before = this.toAuditSnapshot(period);
 
     const nextName =
       params.name === undefined ? period.name : String(params.name || '').trim();
@@ -88,23 +136,51 @@ export class PeriodsService {
     period.name = nextName;
     period.startsAt = nextStartsAt;
     period.endsAt = nextEndsAt;
-    return this.periodsRepo.save(period);
+    const saved = await this.periodsRepo.save(period);
+    await this.auditService.recordChange({
+      moduleName: 'PERIODS',
+      entityType: 'PERIOD',
+      entityId: saved.id,
+      entityLabel: `${saved.code} | ${saved.name}`,
+      action: 'UPDATE',
+      actor: params.actor ?? null,
+      before,
+      after: this.toAuditSnapshot(saved),
+    });
+    return saved;
   }
 
-  async clearData(id: string) {
+  async clearData(id: string, actor?: AuditActor | null) {
     const period = await this.periodsRepo.findOne({ where: { id } });
     if (!period) throw new NotFoundException('Period not found');
+    const before = this.toAuditSnapshot(period);
 
     await this.periodsRepo.manager.transaction(async (manager) => {
       await this.clearPeriodDataInTransaction(manager, id);
     });
 
+    await this.auditService.recordChange({
+      moduleName: 'PERIODS',
+      entityType: 'PERIOD_DATA',
+      entityId: period.id,
+      entityLabel: `${period.code} | ${period.name}`,
+      action: 'BULK_UPDATE',
+      actor: actor ?? null,
+      before,
+      after: before,
+      metadata: {
+        operation: 'CLEAR_DATA',
+        periodDeleted: false,
+      },
+    });
+
     return { ok: true, periodDeleted: false };
   }
 
-  async deletePeriod(id: string) {
+  async deletePeriod(id: string, actor?: AuditActor | null) {
     const period = await this.periodsRepo.findOne({ where: { id } });
     if (!period) throw new NotFoundException('Period not found');
+    const before = this.toAuditSnapshot(period);
 
     const replacementActive = period.status === 'ACTIVE'
       ? await this.periodsRepo.findOne({
@@ -114,6 +190,9 @@ export class PeriodsService {
         where: { status: 'PLANNED' },
         order: { updatedAt: 'DESC', createdAt: 'DESC' },
       })
+      : null;
+    const replacementBefore = replacementActive
+      ? this.toAuditSnapshot(replacementActive)
       : null;
 
     if (period.status === 'ACTIVE' && !replacementActive) {
@@ -141,6 +220,35 @@ export class PeriodsService {
           [replacementActive.id]
         );
       }
+    });
+
+    if (replacementBefore) {
+      await this.auditService.recordChange({
+        moduleName: 'PERIODS',
+        entityType: 'PERIOD_STATUS',
+        entityId: replacementBefore.id,
+        entityLabel: `${replacementBefore.code} | ${replacementBefore.name}`,
+        action: 'UPDATE',
+        actor: actor ?? null,
+        before: replacementBefore,
+        after: {
+          ...replacementBefore,
+          status: 'ACTIVE',
+        },
+      });
+    }
+    await this.auditService.recordChange({
+      moduleName: 'PERIODS',
+      entityType: 'PERIOD',
+      entityId: before.id,
+      entityLabel: `${before.code} | ${before.name}`,
+      action: 'DELETE',
+      actor: actor ?? null,
+      before,
+      after: null,
+      metadata: {
+        replacementActivePeriodId: replacementActive?.id ?? null,
+      },
     });
 
     return {
@@ -176,6 +284,18 @@ export class PeriodsService {
   async getOperationalPeriodIdOrThrow() {
     const period = await this.getOperationalPeriodOrThrow();
     return period.id;
+  }
+
+  private toAuditSnapshot(period: PeriodEntity) {
+    return {
+      id: period.id,
+      code: period.code,
+      name: period.name,
+      kind: period.kind,
+      status: period.status,
+      startsAt: period.startsAt ?? null,
+      endsAt: period.endsAt ?? null,
+    };
   }
 
   private async findActiveOrNull() {
@@ -298,4 +418,3 @@ export class PeriodsService {
   }
 
 }
-
