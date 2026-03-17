@@ -63,9 +63,14 @@ export class WorkshopsController {
       venueCampusName?: string;
       responsibleTeacherId?: string | null;
       studentIds?: string[];
-    }
+    },
+    @CurrentUser() user: JwtUser
   ) {
-    return this.workshopsService.create(body);
+    return this.workshopsService.create(body, {
+      userId: String(user?.sub ?? '').trim() || null,
+      fullName: String(user?.fullName ?? '').trim() || null,
+      role: String(user?.role ?? '').trim() || null,
+    });
   }
 
   @Put(':id')
@@ -86,14 +91,23 @@ export class WorkshopsController {
       venueCampusName?: string;
       responsibleTeacherId?: string | null;
       studentIds?: string[];
-    }>
+    }>,
+    @CurrentUser() user: JwtUser
   ) {
-    return this.workshopsService.update(id, body);
+    return this.workshopsService.update(id, body, {
+      userId: String(user?.sub ?? '').trim() || null,
+      fullName: String(user?.fullName ?? '').trim() || null,
+      role: String(user?.role ?? '').trim() || null,
+    });
   }
 
   @Delete(':id')
-  delete(@Param('id') id: string) {
-    return this.workshopsService.delete(id);
+  delete(@Param('id') id: string, @CurrentUser() user: JwtUser) {
+    return this.workshopsService.delete(id, {
+      userId: String(user?.sub ?? '').trim() || null,
+      fullName: String(user?.fullName ?? '').trim() || null,
+      role: String(user?.role ?? '').trim() || null,
+    });
   }
 
   @Get('students/list')
@@ -123,14 +137,23 @@ export class WorkshopsController {
         sortOrder?: number;
         isActive?: boolean;
       }>;
-    }
+    },
+    @CurrentUser() user: JwtUser
   ) {
-    return this.workshopsService.upsertGroups(id, body?.groups ?? []);
+    return this.workshopsService.upsertGroups(id, body?.groups ?? [], {
+      userId: String(user?.sub ?? '').trim() || null,
+      fullName: String(user?.fullName ?? '').trim() || null,
+      role: String(user?.role ?? '').trim() || null,
+    });
   }
 
   @Post(':id/groups/regenerate')
-  regenerateGroups(@Param('id') id: string) {
-    return this.workshopsService.regenerateGroups(id);
+  regenerateGroups(@Param('id') id: string, @CurrentUser() user: JwtUser) {
+    return this.workshopsService.regenerateGroups(id, {
+      userId: String(user?.sub ?? '').trim() || null,
+      fullName: String(user?.fullName ?? '').trim() || null,
+      role: String(user?.role ?? '').trim() || null,
+    });
   }
 
   @Get(':id/groups/:groupId/schedule')
@@ -179,9 +202,14 @@ export class WorkshopsController {
       zoomMeetingRecordId?: string | null;
       joinUrl?: string | null;
       startUrl?: string | null;
-    }
+    },
+    @CurrentUser() user: JwtUser
   ) {
-    return this.workshopsService.updateGroupScheduleBlockMeetingLinks(id, groupId, blockId, body);
+    return this.workshopsService.updateGroupScheduleBlockMeetingLinks(id, groupId, blockId, body, {
+      userId: String(user?.sub ?? '').trim() || null,
+      fullName: String(user?.fullName ?? '').trim() || null,
+      role: String(user?.role ?? '').trim() || null,
+    });
   }
 
   @Post(':id/groups/:groupId/schedule/:blockId/refresh-meeting-links')

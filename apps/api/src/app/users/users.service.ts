@@ -9,6 +9,7 @@ import { INTERNAL_USER_ROLES, Role, isInternalUserRole } from '@uai/shared';
 import type { InternalUserRole } from '@uai/shared';
 import { In } from 'typeorm';
 import { Repository } from 'typeorm';
+import { AuditActor, AuditService } from '../audit/audit.service';
 import { UserEntity } from './user.entity';
 import { hashInternalPassword } from './passwords.util';
 
@@ -16,7 +17,8 @@ import { hashInternalPassword } from './passwords.util';
 export class UsersService {
   constructor(
     @InjectRepository(UserEntity)
-    private readonly usersRepo: Repository<UserEntity>
+    private readonly usersRepo: Repository<UserEntity>,
+    private readonly auditService: AuditService
   ) {}
 
   async getByIdOrThrow(id: string): Promise<UserEntity> {
@@ -88,6 +90,7 @@ export class UsersService {
     fullName: string;
     role: InternalUserRole;
     password: string;
+    actor?: AuditActor | null;
   }) {
     const dni = String(params.dni ?? '').trim();
     const fullName = String(params.fullName ?? '').trim();
@@ -110,7 +113,18 @@ export class UsersService {
       passwordHash: await hashInternalPassword(password),
     });
 
-    return this.usersRepo.save(created);
+    const saved = await this.usersRepo.save(created);
+    await this.auditService.recordChange({
+      moduleName: 'USERS',
+      entityType: 'INTERNAL_USER',
+      entityId: saved.id,
+      entityLabel: saved.fullName,
+      action: 'CREATE',
+      actor: params.actor ?? null,
+      before: null,
+      after: this.toAuditSnapshot(saved),
+    });
+    return saved;
   }
 
   async updateInternalUser(
@@ -119,9 +133,11 @@ export class UsersService {
       dni?: string;
       fullName?: string;
       role?: InternalUserRole;
+      actor?: AuditActor | null;
     }
   ) {
     const user = await this.getInternalByIdOrThrow(id);
+    const before = this.toAuditSnapshot(user);
     const nextDni = params.dni !== undefined ? String(params.dni ?? '').trim() : user.dni;
     const nextFullName =
       params.fullName !== undefined
@@ -146,15 +162,28 @@ export class UsersService {
 
     user.fullName = nextFullName;
     user.role = nextRole;
-    return this.usersRepo.save(user);
+    const saved = await this.usersRepo.save(user);
+    await this.auditService.recordChange({
+      moduleName: 'USERS',
+      entityType: 'INTERNAL_USER',
+      entityId: saved.id,
+      entityLabel: saved.fullName,
+      action: 'UPDATE',
+      actor: params.actor ?? null,
+      before,
+      after: this.toAuditSnapshot(saved),
+    });
+    return saved;
   }
 
   async updateInternalStatus(
     id: string,
     isActive: boolean,
-    actorUserId: string
+    actorUserId: string,
+    actor?: AuditActor | null
   ) {
     const user = await this.getInternalByIdOrThrow(id);
+    const before = this.toAuditSnapshot(user);
     if (!isActive && user.id === actorUserId) {
       throw new BadRequestException('Cannot deactivate your own user');
     }
@@ -165,7 +194,18 @@ export class UsersService {
     });
 
     user.isActive = isActive;
-    return this.usersRepo.save(user);
+    const saved = await this.usersRepo.save(user);
+    await this.auditService.recordChange({
+      moduleName: 'USERS',
+      entityType: 'INTERNAL_USER_STATUS',
+      entityId: saved.id,
+      entityLabel: saved.fullName,
+      action: 'UPDATE',
+      actor: actor ?? null,
+      before,
+      after: this.toAuditSnapshot(saved),
+    });
+    return saved;
   }
 
   async resetInternalPassword(id: string, newPassword: string) {
@@ -177,14 +217,41 @@ export class UsersService {
   async resetUserPasswordByAdmin(
     id: string,
     newPassword: string,
-    allowedRoles: Role[] = [...INTERNAL_USER_ROLES, Role.DOCENTE, Role.ALUMNO]
+    allowedRoles: Role[] = [...INTERNAL_USER_ROLES, Role.DOCENTE, Role.ALUMNO],
+    actor?: AuditActor | null
   ) {
     const user = await this.usersRepo.findOne({ where: { id } });
     if (!user || !allowedRoles.includes(user.role)) {
       throw new NotFoundException('User not found');
     }
     user.passwordHash = await hashInternalPassword(String(newPassword ?? ''));
-    return this.usersRepo.save(user);
+    const saved = await this.usersRepo.save(user);
+    await this.auditService.recordChange({
+      moduleName: 'USERS',
+      entityType: 'USER_PASSWORD_RESET',
+      entityId: saved.id,
+      entityLabel: saved.fullName,
+      action: 'APPLY',
+      actor: actor ?? null,
+      before: null,
+      after: null,
+      metadata: {
+        targetUserId: saved.id,
+        targetRole: saved.role,
+        targetDni: saved.dni,
+      },
+    });
+    return saved;
+  }
+
+  private toAuditSnapshot(user: UserEntity) {
+    return {
+      id: user.id,
+      dni: user.dni,
+      fullName: user.fullName,
+      role: user.role,
+      isActive: Boolean(user.isActive),
+    };
   }
 
   private assertInternalRole(

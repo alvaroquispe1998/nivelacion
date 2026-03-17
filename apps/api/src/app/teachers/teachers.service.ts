@@ -7,13 +7,15 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Role } from '@uai/shared';
 import * as bcrypt from 'bcrypt';
 import { Repository } from 'typeorm';
+import { AuditActor, AuditService } from '../audit/audit.service';
 import { UserEntity } from '../users/user.entity';
 
 @Injectable()
 export class TeachersService {
   constructor(
     @InjectRepository(UserEntity)
-    private readonly usersRepo: Repository<UserEntity>
+    private readonly usersRepo: Repository<UserEntity>,
+    private readonly auditService: AuditService
   ) {}
 
   async list() {
@@ -23,7 +25,7 @@ export class TeachersService {
     });
   }
 
-  async create(params: { dni: string; fullName: string }) {
+  async create(params: { dni: string; fullName: string; actor?: AuditActor | null }) {
     const dni = String(params.dni || '').trim();
     const fullName = String(params.fullName || '').trim();
     const existing = await this.usersRepo.findOne({ where: { dni } });
@@ -37,11 +39,26 @@ export class TeachersService {
       codigoAlumno: null,
       passwordHash: await bcrypt.hash(dni, 10),
     });
-    return this.usersRepo.save(created);
+    const saved = await this.usersRepo.save(created);
+    await this.auditService.recordChange({
+      moduleName: 'TEACHERS',
+      entityType: 'TEACHER',
+      entityId: saved.id,
+      entityLabel: saved.fullName,
+      action: 'CREATE',
+      actor: params.actor ?? null,
+      before: null,
+      after: this.toAuditSnapshot(saved),
+    });
+    return saved;
   }
 
-  async update(id: string, params: { dni?: string; fullName?: string }) {
+  async update(
+    id: string,
+    params: { dni?: string; fullName?: string; actor?: AuditActor | null }
+  ) {
     const teacher = await this.getByIdOrThrow(id);
+    const before = this.toAuditSnapshot(teacher);
     const nextDni = params.dni !== undefined ? String(params.dni).trim() : teacher.dni;
     const nextFullName =
       params.fullName !== undefined
@@ -58,12 +75,34 @@ export class TeachersService {
     }
 
     teacher.fullName = nextFullName;
-    return this.usersRepo.save(teacher);
+    const saved = await this.usersRepo.save(teacher);
+    await this.auditService.recordChange({
+      moduleName: 'TEACHERS',
+      entityType: 'TEACHER',
+      entityId: saved.id,
+      entityLabel: saved.fullName,
+      action: 'UPDATE',
+      actor: params.actor ?? null,
+      before,
+      after: this.toAuditSnapshot(saved),
+    });
+    return saved;
   }
 
-  async remove(id: string) {
+  async remove(id: string, actor?: AuditActor | null) {
     const teacher = await this.getByIdOrThrow(id);
+    const before = this.toAuditSnapshot(teacher);
     await this.usersRepo.remove(teacher);
+    await this.auditService.recordChange({
+      moduleName: 'TEACHERS',
+      entityType: 'TEACHER',
+      entityId: before.id,
+      entityLabel: before.fullName,
+      action: 'DELETE',
+      actor: actor ?? null,
+      before,
+      after: null,
+    });
     return { ok: true };
   }
 
@@ -73,5 +112,14 @@ export class TeachersService {
     });
     if (!teacher) throw new NotFoundException('Teacher not found');
     return teacher;
+  }
+
+  private toAuditSnapshot(teacher: UserEntity) {
+    return {
+      id: teacher.id,
+      dni: teacher.dni,
+      fullName: teacher.fullName,
+      role: teacher.role,
+    };
   }
 }

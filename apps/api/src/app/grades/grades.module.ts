@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AuditModule } from '../audit/audit.module';
 import { SectionsModule } from '../sections/sections.module';
 import { PeriodsModule } from '../periods/periods.module';
 import { GradesService } from './grades.service';
@@ -7,7 +8,7 @@ import { TeacherGradesController } from './teacher-grades.controller';
 import { StudentGradesController } from './student-grades.controller';
 
 @Module({
-  imports: [PeriodsModule, SectionsModule],
+  imports: [PeriodsModule, SectionsModule, AuditModule],
   controllers: [
     AdminGradesController,
     TeacherGradesController,
@@ -17,4 +18,3 @@ import { StudentGradesController } from './student-grades.controller';
   exports: [GradesService],
 })
 export class GradesModule {}
-

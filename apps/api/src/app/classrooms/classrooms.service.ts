@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { AuditActor, AuditService } from '../audit/audit.service';
 import { ClassroomEntity } from './classroom.entity';
 import { PavilionEntity } from './pavilion.entity';
 
@@ -15,7 +16,8 @@ export class ClassroomsService {
     @InjectRepository(ClassroomEntity)
     private readonly classroomsRepo: Repository<ClassroomEntity>,
     @InjectRepository(PavilionEntity)
-    private readonly pavilionsRepo: Repository<PavilionEntity>
+    private readonly pavilionsRepo: Repository<PavilionEntity>,
+    private readonly auditService: AuditService
   ) {}
 
   async list(params?: {
@@ -178,6 +180,7 @@ export class ClassroomsService {
     code: string;
     name: string;
     status?: 'ACTIVO' | 'INACTIVO';
+    actor?: AuditActor | null;
   }) {
     const campusId = String(params.campusId ?? '').trim();
     const code = String(params.code ?? '').trim().toUpperCase();
@@ -195,7 +198,18 @@ export class ClassroomsService {
       name,
       status: params.status ?? 'ACTIVO',
     });
-    return this.pavilionsRepo.save(created);
+    const saved = await this.pavilionsRepo.save(created);
+    await this.auditService.recordChange({
+      moduleName: 'CLASSROOMS',
+      entityType: 'PAVILION',
+      entityId: saved.id,
+      entityLabel: `${saved.code} | ${saved.name}`,
+      action: 'CREATE',
+      actor: params.actor ?? null,
+      before: null,
+      after: this.toPavilionAuditSnapshot(saved),
+    });
+    return saved;
   }
 
   async updatePavilion(
@@ -205,9 +219,11 @@ export class ClassroomsService {
       code?: string;
       name?: string;
       status?: 'ACTIVO' | 'INACTIVO';
+      actor?: AuditActor | null;
     }
   ) {
     const pavilion = await this.getPavilionByIdOrThrow(id);
+    const before = this.toPavilionAuditSnapshot(pavilion);
 
     const nextCampusId =
       params.campusId !== undefined
@@ -238,20 +254,48 @@ export class ClassroomsService {
       pavilion.status = params.status;
     }
 
-    return this.pavilionsRepo.save(pavilion);
+    const saved = await this.pavilionsRepo.save(pavilion);
+    await this.auditService.recordChange({
+      moduleName: 'CLASSROOMS',
+      entityType: 'PAVILION',
+      entityId: saved.id,
+      entityLabel: `${saved.code} | ${saved.name}`,
+      action: 'UPDATE',
+      actor: params.actor ?? null,
+      before,
+      after: this.toPavilionAuditSnapshot(saved),
+    });
+    return saved;
   }
 
-  async updatePavilionStatus(id: string, status: 'ACTIVO' | 'INACTIVO') {
+  async updatePavilionStatus(
+    id: string,
+    status: 'ACTIVO' | 'INACTIVO',
+    actor?: AuditActor | null
+  ) {
     const pavilion = await this.getPavilionByIdOrThrow(id);
+    const before = this.toPavilionAuditSnapshot(pavilion);
     if (status === 'INACTIVO' && pavilion.status !== 'INACTIVO') {
       await this.assertPavilionNotUsedInActivePeriod(id);
     }
     pavilion.status = status;
-    return this.pavilionsRepo.save(pavilion);
+    const saved = await this.pavilionsRepo.save(pavilion);
+    await this.auditService.recordChange({
+      moduleName: 'CLASSROOMS',
+      entityType: 'PAVILION_STATUS',
+      entityId: saved.id,
+      entityLabel: `${saved.code} | ${saved.name}`,
+      action: 'UPDATE',
+      actor: actor ?? null,
+      before,
+      after: this.toPavilionAuditSnapshot(saved),
+    });
+    return saved;
   }
 
-  async removePavilion(id: string) {
+  async removePavilion(id: string, actor?: AuditActor | null) {
     const pavilion = await this.getPavilionByIdOrThrow(id);
+    const before = this.toPavilionAuditSnapshot(pavilion);
 
     const inUseRows: Array<{ c: number }> = await this.pavilionsRepo.manager.query(
       `
@@ -267,6 +311,16 @@ export class ClassroomsService {
     }
 
     await this.pavilionsRepo.remove(pavilion);
+    await this.auditService.recordChange({
+      moduleName: 'CLASSROOMS',
+      entityType: 'PAVILION',
+      entityId: before.id,
+      entityLabel: `${before.code} | ${before.name}`,
+      action: 'DELETE',
+      actor: actor ?? null,
+      before,
+      after: null,
+    });
     return { ok: true };
   }
 
@@ -280,6 +334,7 @@ export class ClassroomsService {
     type?: 'AULA' | 'LABORATORIO' | 'AUDITORIO';
     status?: 'ACTIVA' | 'INACTIVA';
     notes?: string | null;
+    actor?: AuditActor | null;
   }) {
     const campusId = String(params.campusId ?? '').trim();
     const pavilionId = String(params.pavilionId ?? '').trim();
@@ -314,7 +369,18 @@ export class ClassroomsService {
       status: params.status ?? 'ACTIVA',
       notes: String(params.notes ?? '').trim() || null,
     });
-    return this.classroomsRepo.save(created);
+    const saved = await this.classroomsRepo.save(created);
+    await this.auditService.recordChange({
+      moduleName: 'CLASSROOMS',
+      entityType: 'CLASSROOM',
+      entityId: saved.id,
+      entityLabel: `${saved.code} | ${saved.name}`,
+      action: 'CREATE',
+      actor: params.actor ?? null,
+      before: null,
+      after: this.toClassroomAuditSnapshot(saved),
+    });
+    return saved;
   }
 
   async update(
@@ -329,9 +395,11 @@ export class ClassroomsService {
       type?: 'AULA' | 'LABORATORIO' | 'AUDITORIO';
       status?: 'ACTIVA' | 'INACTIVA';
       notes?: string | null;
+      actor?: AuditActor | null;
     }
   ) {
     const classroom = await this.getByIdOrThrow(id);
+    const before = this.toClassroomAuditSnapshot(classroom);
 
     const nextCampusId =
       params.campusId !== undefined
@@ -394,11 +462,27 @@ export class ClassroomsService {
       classroom.notes = String(params.notes ?? '').trim() || null;
     }
 
-    return this.classroomsRepo.save(classroom);
+    const saved = await this.classroomsRepo.save(classroom);
+    await this.auditService.recordChange({
+      moduleName: 'CLASSROOMS',
+      entityType: 'CLASSROOM',
+      entityId: saved.id,
+      entityLabel: `${saved.code} | ${saved.name}`,
+      action: 'UPDATE',
+      actor: params.actor ?? null,
+      before,
+      after: this.toClassroomAuditSnapshot(saved),
+    });
+    return saved;
   }
 
-  async updateStatus(id: string, status: 'ACTIVA' | 'INACTIVA') {
+  async updateStatus(
+    id: string,
+    status: 'ACTIVA' | 'INACTIVA',
+    actor?: AuditActor | null
+  ) {
     const classroom = await this.getByIdOrThrow(id);
+    const before = this.toClassroomAuditSnapshot(classroom);
     if (status === 'INACTIVA') {
       const inUseRows: Array<{ c: number }> = await this.classroomsRepo.manager.query(
         `
@@ -421,11 +505,23 @@ export class ClassroomsService {
       }
     }
     classroom.status = status;
-    return this.classroomsRepo.save(classroom);
+    const saved = await this.classroomsRepo.save(classroom);
+    await this.auditService.recordChange({
+      moduleName: 'CLASSROOMS',
+      entityType: 'CLASSROOM_STATUS',
+      entityId: saved.id,
+      entityLabel: `${saved.code} | ${saved.name}`,
+      action: 'UPDATE',
+      actor: actor ?? null,
+      before,
+      after: this.toClassroomAuditSnapshot(saved),
+    });
+    return saved;
   }
 
-  async remove(id: string) {
+  async remove(id: string, actor?: AuditActor | null) {
     const classroom = await this.getByIdOrThrow(id);
+    const before = this.toClassroomAuditSnapshot(classroom);
     const inUseRows: Array<{ c: number }> = await this.classroomsRepo.manager.query(
       `
       SELECT COUNT(*) AS c
@@ -438,6 +534,16 @@ export class ClassroomsService {
       throw new ConflictException('No se puede eliminar un aula en uso');
     }
     await this.classroomsRepo.remove(classroom);
+    await this.auditService.recordChange({
+      moduleName: 'CLASSROOMS',
+      entityType: 'CLASSROOM',
+      entityId: before.id,
+      entityLabel: `${before.code} | ${before.name}`,
+      action: 'DELETE',
+      actor: actor ?? null,
+      before,
+      after: null,
+    });
     return { ok: true };
   }
 
@@ -576,5 +682,31 @@ export class ClassroomsService {
       .replace(/\s+/g, ' ')
       .trim()
       .toUpperCase();
+  }
+
+  private toPavilionAuditSnapshot(pavilion: PavilionEntity) {
+    return {
+      id: pavilion.id,
+      campusId: pavilion.campusId,
+      code: pavilion.code,
+      name: pavilion.name,
+      status: pavilion.status,
+    };
+  }
+
+  private toClassroomAuditSnapshot(classroom: ClassroomEntity) {
+    return {
+      id: classroom.id,
+      campusId: classroom.campusId,
+      campusName: classroom.campusName,
+      pavilionId: classroom.pavilionId,
+      code: classroom.code,
+      name: classroom.name,
+      capacity: Number(classroom.capacity ?? 0),
+      levelName: classroom.levelName,
+      type: classroom.type,
+      status: classroom.status,
+      notes: classroom.notes ?? null,
+    };
   }
 }

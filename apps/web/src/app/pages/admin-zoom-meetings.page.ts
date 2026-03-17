@@ -847,7 +847,9 @@ export class AdminZoomMeetingsPage {
       String(draft.sourceWorkshopScheduleBlockId ?? '').trim() || null;
     this.onMeetingModeChange();
     this.success = this.isWorkshopPrefill()
-      ? 'Formulario precargado desde horario de taller.'
+      ? this.sourceWorkshopScheduleBlockId
+        ? 'Formulario precargado desde horario de taller.'
+        : 'Formulario precargado desde horario de taller. Si el bloque aun no fue guardado, los enlaces no se vincularan automaticamente.'
       : 'Formulario precargado desde horario de seccion.';
     this.clearConsumedPrefillState(state);
     this.cdr.markForCheck();
@@ -883,10 +885,7 @@ export class AdminZoomMeetingsPage {
     if (draft.sourceType === 'WORKSHOP_BLOCK') {
       const sourceWorkshopId = String(draft.sourceWorkshopId ?? '').trim();
       const sourceGroupId = String(draft.sourceGroupId ?? '').trim();
-      const sourceWorkshopScheduleBlockId = String(
-        draft.sourceWorkshopScheduleBlockId ?? ''
-      ).trim();
-      if (!sourceWorkshopId || !sourceGroupId || !sourceWorkshopScheduleBlockId) return false;
+      if (!sourceWorkshopId || !sourceGroupId) return false;
     }
     if (mode === 'RECURRING') {
       const weeklyDays = Array.isArray(draft.weeklyDays) ? draft.weeklyDays : [];

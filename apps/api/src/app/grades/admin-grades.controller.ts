@@ -35,8 +35,12 @@ export class AdminGradesController {
   }
 
   @Put('scheme')
-  updateScheme(@Body() dto: UpdateGradeSchemeDto) {
-    return this.gradesService.updateAdminScheme(dto);
+  updateScheme(@Body() dto: UpdateGradeSchemeDto, @CurrentUser() user: JwtUser) {
+    return this.gradesService.updateAdminScheme(dto, {
+      userId: String(user?.sub ?? '').trim() || null,
+      fullName: String(user?.fullName ?? '').trim() || null,
+      role: String(user?.role ?? '').trim() || null,
+    });
   }
 
   @Get('section-courses')
@@ -66,7 +70,12 @@ export class AdminGradesController {
     return this.gradesService.saveSectionCourseGradesForAdmin(
       sectionCourseId,
       dto,
-      user.sub
+      user.sub,
+      {
+        userId: String(user?.sub ?? '').trim() || null,
+        fullName: String(user?.fullName ?? '').trim() || null,
+        role: String(user?.role ?? '').trim() || null,
+      }
     );
   }
 
@@ -77,7 +86,12 @@ export class AdminGradesController {
   ) {
     return this.gradesService.publishSectionCourseGradesForAdmin(
       sectionCourseId,
-      user.sub
+      user.sub,
+      {
+        userId: String(user?.sub ?? '').trim() || null,
+        fullName: String(user?.fullName ?? '').trim() || null,
+        role: String(user?.role ?? '').trim() || null,
+      }
     );
   }
 

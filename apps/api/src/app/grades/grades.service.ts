@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { Role } from '@uai/shared';
 import { DataSource } from 'typeorm';
 import * as XLSX from 'xlsx';
+import { AuditActor, AuditService } from '../audit/audit.service';
 import { PeriodsService } from '../periods/periods.service';
 import { SectionsService } from '../sections/sections.service';
 import { SaveSectionCourseGradesDto } from './dto/save-section-course-grades.dto';
@@ -180,7 +181,8 @@ export class GradesService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly periodsService: PeriodsService,
-    private readonly sectionsService: SectionsService
+    private readonly sectionsService: SectionsService,
+    private readonly auditService: AuditService
   ) {}
 
   async getAdminScheme() {
@@ -188,9 +190,10 @@ export class GradesService {
     return this.getOrCreateScheme(periodId);
   }
 
-  async updateAdminScheme(dto: UpdateGradeSchemeDto) {
+  async updateAdminScheme(dto: UpdateGradeSchemeDto, actor?: AuditActor | null) {
     const periodId = await this.periodsService.getOperationalPeriodIdOrThrow();
     this.validateSchemePayload(dto);
+    const before = await this.buildGradeSchemeAuditSnapshot(periodId);
     const scheme = await this.getOrCreateScheme(periodId);
     const byCode = new Map(dto.components.map((x) => [x.code as GradeComponentCode, x]));
     for (const code of COMPONENT_ORDER) {
@@ -214,7 +217,18 @@ export class GradesService {
         ]
       );
     }
-    return this.getOrCreateScheme(periodId);
+    const updated = await this.getOrCreateScheme(periodId);
+    await this.auditService.recordChange({
+      moduleName: 'GRADES',
+      entityType: 'GRADE_SCHEME',
+      entityId: updated.id,
+      entityLabel: `Periodo ${periodId}`,
+      action: 'UPDATE',
+      actor: actor ?? null,
+      before,
+      after: await this.buildGradeSchemeAuditSnapshot(periodId),
+    });
+    return updated;
   }
 
   async listSectionCoursesForAdmin(params: {
@@ -290,16 +304,29 @@ export class GradesService {
   async saveSectionCourseGradesForAdmin(
     sectionCourseId: string,
     dto: SaveSectionCourseGradesDto,
-    actorUserId: string
+    actorUserId: string,
+    actor?: AuditActor | null
   ) {
     const periodId = await this.periodsService.getOperationalPeriodIdOrThrow();
-    return this.saveSectionCourseGrades({
+    const before = await this.buildSectionCourseGradesAuditSnapshot(sectionCourseId, periodId);
+    const result = await this.saveSectionCourseGrades({
       sectionCourseId,
       dto,
       actorRole: Role.ADMIN,
       actorUserId,
       periodId,
     });
+    await this.auditService.recordChange({
+      moduleName: 'GRADES',
+      entityType: 'SECTION_COURSE_GRADES',
+      entityId: sectionCourseId,
+      entityLabel: `${before.courseName} | ${before.sectionCode ?? before.sectionName}`,
+      action: 'UPDATE',
+      actor: actor ?? null,
+      before,
+      after: await this.buildSectionCourseGradesAuditSnapshot(sectionCourseId, periodId),
+    });
+    return result;
   }
 
   async saveSectionCourseGradesForTeacher(
@@ -317,14 +344,30 @@ export class GradesService {
     });
   }
 
-  async publishSectionCourseGradesForAdmin(sectionCourseId: string, actorUserId: string) {
+  async publishSectionCourseGradesForAdmin(
+    sectionCourseId: string,
+    actorUserId: string,
+    actor?: AuditActor | null
+  ) {
     const periodId = await this.periodsService.getOperationalPeriodIdOrThrow();
-    return this.publishSectionCourseGrades({
+    const before = await this.buildSectionCourseGradesAuditSnapshot(sectionCourseId, periodId);
+    const result = await this.publishSectionCourseGrades({
       sectionCourseId,
       actorRole: Role.ADMIN,
       actorUserId,
       periodId,
     });
+    await this.auditService.recordChange({
+      moduleName: 'GRADES',
+      entityType: 'SECTION_COURSE_GRADES_PUBLICATION',
+      entityId: sectionCourseId,
+      entityLabel: `${before.courseName} | ${before.sectionCode ?? before.sectionName}`,
+      action: 'UPDATE',
+      actor: actor ?? null,
+      before,
+      after: await this.buildSectionCourseGradesAuditSnapshot(sectionCourseId, periodId),
+    });
+    return result;
   }
 
   async publishSectionCourseGradesForTeacher(sectionCourseId: string, actorUserId: string) {
@@ -1292,6 +1335,56 @@ export class GradesService {
     };
   }
 
+  private async buildGradeSchemeAuditSnapshot(periodId: string) {
+    const scheme = await this.getOrCreateScheme(periodId);
+    return {
+      schemeId: scheme.id,
+      periodId: scheme.periodId,
+      status: scheme.status,
+      components: scheme.components.map((component) => ({
+        code: component.code,
+        name: component.name,
+        weight: this.toFixed2(component.weight),
+        orderIndex: component.orderIndex,
+        minScore: this.toFixed2(component.minScore),
+        maxScore: this.toFixed2(component.maxScore),
+        isActive: Boolean(component.isActive),
+      })),
+    };
+  }
+
+  private async buildSectionCourseGradesAuditSnapshot(
+    sectionCourseId: string,
+    periodId: string
+  ) {
+    const context = await this.getSectionCourseContextOrThrow(sectionCourseId);
+    const scheme = await this.getOrCreateScheme(periodId);
+    const publication = await this.loadPublicationOrNull(sectionCourseId, periodId);
+    const activeComponents = this.getActiveComponents(scheme.components);
+    const students = await this.loadEnrolledStudents(sectionCourseId);
+    const grades = await this.loadSectionGrades(sectionCourseId);
+    return {
+      sectionCourseId,
+      periodId,
+      sectionId: context.sectionId,
+      sectionCode: context.sectionCode,
+      sectionName: context.sectionName,
+      courseId: context.courseId,
+      courseName: context.courseName,
+      facultyGroup: context.facultyGroup,
+      campusName: context.campusName,
+      modality: context.modality,
+      studentCount: students.length,
+      activeComponents: activeComponents.length,
+      gradedCells: grades.length,
+      expectedCells: students.length * activeComponents.length,
+      missingCells: Math.max(students.length * activeComponents.length - grades.length, 0),
+      isPublished: Boolean(publication?.isPublished),
+      publishedAt: publication?.publishedAt ? this.toIsoDateOnly(publication.publishedAt) : null,
+      publishedBy: publication?.publishedBy ?? null,
+    };
+  }
+
   private async loadEnrolledStudents(sectionCourseId: string) {
     const rows: Array<any> = await this.dataSource.query(
       `
@@ -1333,6 +1426,24 @@ export class GradesService {
   }
 
   private async getOrCreatePublication(sectionCourseId: string, periodId: string) {
+    const existing = await this.loadPublicationOrNull(sectionCourseId, periodId);
+    if (existing) {
+      return existing;
+    }
+    const id = randomUUID();
+    await this.dataSource.query(
+      `
+      INSERT INTO section_course_grade_publications
+        (id, sectionCourseId, periodId, isPublished, publishedAt, publishedBy, createdAt, updatedAt)
+      VALUES
+        (?, ?, ?, 0, NULL, NULL, CURRENT_TIMESTAMP(6), CURRENT_TIMESTAMP(6))
+      `,
+      [id, sectionCourseId, periodId]
+    );
+    return { id, isPublished: false, publishedAt: null, publishedBy: null };
+  }
+
+  private async loadPublicationOrNull(sectionCourseId: string, periodId: string) {
     const rows: Array<any> = await this.dataSource.query(
       `
       SELECT id, isPublished, publishedAt, publishedBy
@@ -1350,17 +1461,7 @@ export class GradesService {
         publishedBy: rows[0].publishedBy ? String(rows[0].publishedBy) : null,
       };
     }
-    const id = randomUUID();
-    await this.dataSource.query(
-      `
-      INSERT INTO section_course_grade_publications
-        (id, sectionCourseId, periodId, isPublished, publishedAt, publishedBy, createdAt, updatedAt)
-      VALUES
-        (?, ?, ?, 0, NULL, NULL, CURRENT_TIMESTAMP(6), CURRENT_TIMESTAMP(6))
-      `,
-      [id, sectionCourseId, periodId]
-    );
-    return { id, isPublished: false, publishedAt: null, publishedBy: null };
+    return null;
   }
 
   private async getOrCreateScheme(periodId: string): Promise<GradeSchemeRow> {

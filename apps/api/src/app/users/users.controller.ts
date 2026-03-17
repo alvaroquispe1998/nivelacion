@@ -35,22 +35,36 @@ export class UsersController {
   }
 
   @Post()
-  async create(@Body() dto: CreateAdminUserDto) {
+  async create(@Body() dto: CreateAdminUserDto, @CurrentUser() user: JwtUser) {
     const created = await this.usersService.createInternalUser({
       dni: dto.dni,
       fullName: dto.fullName,
       role: dto.role,
       password: dto.password,
+      actor: {
+        userId: String(user?.sub ?? '').trim() || null,
+        fullName: String(user?.fullName ?? '').trim() || null,
+        role: String(user?.role ?? '').trim() || null,
+      },
     });
     return this.toResponse(created);
   }
 
   @Patch(':id')
-  async update(@Param('id') id: string, @Body() dto: UpdateAdminUserDto) {
+  async update(
+    @Param('id') id: string,
+    @Body() dto: UpdateAdminUserDto,
+    @CurrentUser() user: JwtUser
+  ) {
     const updated = await this.usersService.updateInternalUser(id, {
       dni: dto.dni,
       fullName: dto.fullName,
       role: dto.role,
+      actor: {
+        userId: String(user?.sub ?? '').trim() || null,
+        fullName: String(user?.fullName ?? '').trim() || null,
+        role: String(user?.role ?? '').trim() || null,
+      },
     });
     return this.toResponse(updated);
   }
@@ -64,7 +78,12 @@ export class UsersController {
     const updated = await this.usersService.updateInternalStatus(
       id,
       dto.isActive,
-      user.sub
+      user.sub,
+      {
+        userId: String(user?.sub ?? '').trim() || null,
+        fullName: String(user?.fullName ?? '').trim() || null,
+        role: String(user?.role ?? '').trim() || null,
+      }
     );
     return this.toResponse(updated);
   }
@@ -72,9 +91,14 @@ export class UsersController {
   @Post(':id/reset-password')
   async resetPassword(
     @Param('id') id: string,
-    @Body() dto: ResetAdminUserPasswordDto
+    @Body() dto: ResetAdminUserPasswordDto,
+    @CurrentUser() user: JwtUser
   ) {
-    await this.usersService.resetUserPasswordByAdmin(id, dto.newPassword);
+    await this.usersService.resetUserPasswordByAdmin(id, dto.newPassword, undefined, {
+      userId: String(user?.sub ?? '').trim() || null,
+      fullName: String(user?.fullName ?? '').trim() || null,
+      role: String(user?.role ?? '').trim() || null,
+    });
     return { ok: true };
   }
 
