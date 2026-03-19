@@ -185,10 +185,10 @@ interface StudentScheduleItem {
             Abrir enlace de clase
           </a>
           <button
-            *ngIf="itemKind(selectedItem) !== 'WORKSHOP' && selectedItem.startUrl"
+            *ngIf="itemKind(selectedItem) !== 'WORKSHOP' && selectedItem.joinUrl"
             type="button"
             class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
-            (click)="copyStartUrl(selectedItem.startUrl)"
+            (click)="copyJoinUrl(selectedItem.joinUrl)"
           >
             Copiar invitacion
           </button>
@@ -269,7 +269,7 @@ export class StudentWeeklyScheduleComponent {
     this.workshopJoinLoading = false;
   }
 
-  async copyStartUrl(url?: string | null) {
+  async copyJoinUrl(url?: string | null) {
     const value = String(url ?? '').trim();
     if (!value) return;
     try {

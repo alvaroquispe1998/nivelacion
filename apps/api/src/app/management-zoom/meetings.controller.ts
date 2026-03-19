@@ -24,7 +24,7 @@ import { MeetingsService } from './meetings.service';
 export class MeetingsController {
   constructor(private readonly meetingsService: MeetingsService) {}
 
-  /** POST /api/admin/zoom/meetings/auto — Create with smart host selection */
+  /** POST /api/admin/zoom/meetings/auto â€” Create with smart host selection */
   @Post('auto')
   createAuto(@Body() dto: CreateMeetingDto) {
     return this.meetingsService.createAutoMeeting({
@@ -40,7 +40,7 @@ export class MeetingsController {
     });
   }
 
-  /** GET /api/admin/zoom/meetings — List meetings */
+  /** GET /api/admin/zoom/meetings â€” List meetings */
   @Get()
   list(
     @Query('host_emails') hostEmails?: string,
@@ -56,7 +56,7 @@ export class MeetingsController {
     });
   }
 
-  /** GET /api/admin/zoom/meetings/by-topic — Search by topic */
+  /** GET /api/admin/zoom/meetings/by-topic â€” Search by topic */
   @Get('by-topic')
   searchByTopic(
     @Query('topic') topic: string,
@@ -68,7 +68,7 @@ export class MeetingsController {
     );
   }
 
-  /** GET /api/admin/zoom/meetings/recordings — List recordings */
+  /** GET /api/admin/zoom/meetings/recordings â€” List recordings */
   @Get('recordings')
   recordings(
     @Query('host_emails') hostEmails?: string,
@@ -82,13 +82,19 @@ export class MeetingsController {
     });
   }
 
-  /** GET /api/admin/zoom/meetings/users/licensed — Licensed Zoom users */
+  /** GET /api/admin/zoom/meetings/users/licensed â€” Licensed Zoom users */
   @Get('users/licensed')
   licensedUsers() {
     return this.meetingsService.listLicensedUsers();
   }
 
-  /** DELETE /api/admin/zoom/meetings/:id — Delete a meeting */
+  /** POST /api/admin/zoom/meetings/:id/refresh-links â€” Refresh join/start URLs */
+  @Post(':id/refresh-links')
+  refreshLinks(@Param('id') id: string) {
+    return this.meetingsService.refreshMeetingLinks(id);
+  }
+
+  /** DELETE /api/admin/zoom/meetings/:id â€” Delete a meeting */
   @Delete(':id')
   remove(@Param('id') id: string) {
     return this.meetingsService.deleteMeeting(id);
