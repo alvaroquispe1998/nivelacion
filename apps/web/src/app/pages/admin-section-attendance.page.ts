@@ -407,6 +407,10 @@ export class AdminSectionAttendancePage {
     return this.statusMatrix[date]?.[studentId] ?? AttendanceStatus.FALTO;
   }
 
+  getRecordedStatus(date: string, studentId: string) {
+    return this.statusMatrix[date]?.[studentId] ?? null;
+  }
+
   setStatus(date: string, studentId: string, status: AttendanceStatus) {
     this.statusMatrix[date] = this.statusMatrix[date] ?? {};
     this.statusMatrix[date][studentId] = status;
@@ -436,9 +440,12 @@ export class AdminSectionAttendancePage {
         s.dni,
         this.studentCode(s.codigoAlumno),
         s.fullName,
-        ...this.weekDates.map((d) =>
-          this.getStatus(d, s.id) === AttendanceStatus.ASISTIO ? 'ASISTIO' : 'FALTO'
-        ),
+        ...this.weekDates.map((d) => {
+          const status = this.getRecordedStatus(d, s.id);
+          if (status === AttendanceStatus.ASISTIO) return 'ASISTIO';
+          if (status === AttendanceStatus.FALTO) return 'FALTO';
+          return '';
+        }),
       ]);
       const csv = [header, ...rows]
         .map((r) => r.map((v) => `"${String(v ?? '').replace(/\"/g, '\"\"')}"`).join(','))

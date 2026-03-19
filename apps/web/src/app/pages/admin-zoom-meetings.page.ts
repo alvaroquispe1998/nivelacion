@@ -331,40 +331,43 @@ interface ZoomMeetingPrefillDraft {
                 <td class="px-3 py-2">
                   <div class="flex flex-wrap gap-1">
                     <div class="flex gap-2">
-                      <a
-                        *ngIf="m.joinUrl"
-                        [href]="m.joinUrl"
-                        target="_blank"
+                      <button
+                        type="button"
                         class="inline-flex items-center gap-1 rounded-lg border border-sky-300 bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-700 hover:bg-sky-100"
+                        [disabled]="isMeetingActionBusy(m.id)"
+                        (click)="openMeetingLink(m, 'join')"
                         title="Abrir Join URL"
                       >
-                        Join
-                      </a>
+                        {{ isMeetingActionBusy(m.id, 'join') ? 'Abriendo...' : 'Join' }}
+                      </button>
                       <button
+                        type="button"
                         class="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
-                        (click)="copyToClipboard(m.joinUrl)"
+                        [disabled]="isMeetingActionBusy(m.id)"
+                        (click)="copyMeetingLink(m, 'join')"
                         title="Copiar Join URL"
                       >
-                        Copiar join
+                        {{ isMeetingActionBusy(m.id, 'copy-join') ? 'Copiando...' : 'Copiar join' }}
                       </button>
                     </div>
                     <div class="flex gap-2">
-                      <a
-                        *ngIf="m.startUrl"
-                        [href]="m.startUrl"
-                        target="_blank"
+                      <button
+                        type="button"
                         class="inline-flex items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100"
+                        [disabled]="isMeetingActionBusy(m.id)"
+                        (click)="openMeetingLink(m, 'start')"
                         title="Abrir Start URL"
                       >
-                        Start
-                      </a>
+                        {{ isMeetingActionBusy(m.id, 'start') ? 'Abriendo...' : 'Start' }}
+                      </button>
                       <button
-                        *ngIf="m.startUrl"
+                        type="button"
                         class="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
-                        (click)="copyToClipboard(m.startUrl)"
+                        [disabled]="isMeetingActionBusy(m.id)"
+                        (click)="copyMeetingLink(m, 'start')"
                         title="Copiar Start URL"
                       >
-                        Copiar start
+                        {{ isMeetingActionBusy(m.id, 'copy-start') ? 'Copiando...' : 'Copiar start' }}
                       </button>
                     </div>
                     <button
@@ -569,6 +572,8 @@ export class AdminZoomMeetingsPage {
   loadingMeetings = false;
   loadingRecordings = false;
   deletingId: string | null = null;
+  meetingActionId: string | null = null;
+  meetingActionType: 'join' | 'copy-join' | 'start' | 'copy-start' | null = null;
   pendingDeleteMeeting: ZoomMeetingView | null = null;
 
   filterFrom = '';
@@ -1057,6 +1062,127 @@ export class AdminZoomMeetingsPage {
         }
       )
     );
+  }
+
+  isMeetingActionBusy(
+    meetingId: string,
+    actionType?: 'join' | 'copy-join' | 'start' | 'copy-start'
+  ) {
+    return (
+      this.meetingActionId === meetingId &&
+      (!actionType || this.meetingActionType === actionType)
+    );
+  }
+
+  async openMeetingLink(meeting: ZoomMeetingView, kind: 'join' | 'start') {
+    if (!meeting?.id) return;
+    this.error = '';
+    this.success = '';
+    this.meetingActionId = meeting.id;
+    this.meetingActionType = kind;
+    const popup =
+      typeof window !== 'undefined' ? window.open('about:blank', '_blank') : null;
+
+    try {
+      const links = await this.refreshMeetingLinks(meeting.id);
+      const url = String(
+        kind === 'join' ? links.joinUrl ?? '' : links.startUrl ?? ''
+      ).trim();
+      if (!url) {
+        throw new Error('No se pudo obtener un enlace actualizado.');
+      }
+      this.patchMeetingLinks(meeting.id, links);
+      this.navigatePopupToUrl(popup, url);
+    } catch (e: any) {
+      popup?.close();
+      this.error =
+        e?.error?.message ??
+        (kind === 'start'
+          ? 'No se pudo abrir la reunion con un Start URL actualizado.'
+          : 'No se pudo abrir la reunion con un Join URL actualizado.');
+    } finally {
+      this.meetingActionId = null;
+      this.meetingActionType = null;
+      this.cdr.markForCheck();
+    }
+  }
+
+  async copyMeetingLink(meeting: ZoomMeetingView, kind: 'join' | 'start') {
+    if (!meeting?.id) return;
+    this.error = '';
+    this.success = '';
+    this.meetingActionId = meeting.id;
+    this.meetingActionType = kind === 'join' ? 'copy-join' : 'copy-start';
+
+    try {
+      const links = await this.refreshMeetingLinks(meeting.id);
+      const url = String(
+        kind === 'join' ? links.joinUrl ?? '' : links.startUrl ?? ''
+      ).trim();
+      if (!url) {
+        throw new Error('No se pudo obtener un enlace actualizado.');
+      }
+      this.patchMeetingLinks(meeting.id, links);
+      await navigator.clipboard.writeText(url);
+      this.success =
+        kind === 'start'
+          ? 'Start URL actualizado y copiado al portapapeles'
+          : 'Join URL actualizado y copiado al portapapeles';
+    } catch (e: any) {
+      this.error =
+        e?.error?.message ??
+        (kind === 'start'
+          ? 'No se pudo copiar un Start URL actualizado.'
+          : 'No se pudo copiar un Join URL actualizado.');
+    } finally {
+      this.meetingActionId = null;
+      this.meetingActionType = null;
+      this.cdr.markForCheck();
+    }
+  }
+
+  private async refreshMeetingLinks(meetingId: string) {
+    return firstValueFrom(
+      this.http.post<{ joinUrl: string | null; startUrl: string | null }>(
+        `/api/admin/zoom/meetings/${encodeURIComponent(meetingId)}/refresh-links`,
+        {}
+      )
+    );
+  }
+
+  private patchMeetingLinks(
+    meetingId: string,
+    links: { joinUrl: string | null; startUrl: string | null }
+  ) {
+    this.meetings = this.meetings.map((meeting) =>
+      meeting.id === meetingId
+        ? {
+            ...meeting,
+            joinUrl: links.joinUrl ?? meeting.joinUrl,
+            startUrl: links.startUrl ?? meeting.startUrl,
+          }
+        : meeting
+    );
+  }
+
+  private navigatePopupToUrl(popup: Window | null, url: string) {
+    if (popup) {
+      try {
+        popup.opener = null;
+      } catch {}
+      try {
+        popup.location.replace(url);
+        return;
+      } catch {}
+      try {
+        popup.location.href = url;
+        return;
+      } catch {}
+    }
+
+    if (typeof window !== 'undefined') {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
   }
 
   openDeleteMeetingDialog(meeting: ZoomMeetingView) {
