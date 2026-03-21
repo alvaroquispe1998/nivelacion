@@ -504,6 +504,37 @@ export class WorkshopsService {
     return updated;
   }
 
+  async updateStatus(id: string, isActive: boolean, actor?: AuditActor | null) {
+    const existing = await this.get(id, false);
+    const nextIsActive = Boolean(isActive);
+    await this.dataSource.query(
+      `
+      UPDATE workshops
+      SET isActive = ?, updatedAt = NOW(6)
+      WHERE id = ?
+      `,
+      [nextIsActive ? 1 : 0, id]
+    );
+    const updated = {
+      ...existing,
+      isActive: nextIsActive,
+    };
+    await this.auditService.recordChange({
+      moduleName: 'WORKSHOPS',
+      entityType: 'WORKSHOP',
+      entityId: id,
+      entityLabel: existing.name,
+      action: 'UPDATE',
+      actor: actor ?? null,
+      before: this.toAuditWorkshopSnapshot(existing),
+      after: this.toAuditWorkshopSnapshot(updated),
+    });
+    return {
+      id,
+      isActive: nextIsActive,
+    };
+  }
+
   async delete(id: string, actor?: AuditActor | null) {
     const existing = await this.get(id, false);
     await this.dataSource.query(`DELETE FROM workshops WHERE id = ?`, [id]);
@@ -1191,7 +1222,7 @@ export class WorkshopsService {
         ...conflictPayload,
         code: 'WORKSHOP_GROUP_SCHEDULE_CONFIRMATION_REQUIRED',
         message:
-          'Este cambio genera cruces de horario con nivelacion. Desea continuar? Recuerde que luego debe cambiar de grupo a los alumnos afectados.',
+          'Este cambio genera cruces de horario con cursos o talleres activos. Desea continuar? Recuerde que luego debe cambiar de grupo a los alumnos afectados.',
       });
     }
     await this.dataSource.transaction(async (manager) => {
@@ -1253,7 +1284,7 @@ export class WorkshopsService {
               ...conflictPayload,
               code: 'WORKSHOP_GROUP_SCHEDULE_WARNING',
               message:
-                'Horario del taller guardado con alerta. Recuerde cambiar de grupo a los alumnos con cruce de horario.',
+                'Horario del taller guardado con alerta. Recuerde cambiar de grupo a los alumnos con cruce de horario con cursos o talleres activos.',
             }
           : null,
     };
@@ -1363,11 +1394,18 @@ export class WorkshopsService {
     const students = await this.loadStudentsForWorkshop(workshop);
     const groups = (await this.listGroups(workshopId)) as GroupWithSchedule[];
     const periodId = await this.periodsService.getOperationalPeriodIdOrThrow();
-    const loadByStudent = await this.loadStudentLevelingSchedule(
-      students.map((s: any) => String(s.studentId)),
-      periodId
+    const studentIds = students.map((s: any) => String(s.studentId));
+    const [levelingLoadByStudent, activeWorkshopLoadByStudent] = await Promise.all([
+      this.loadStudentLevelingSchedule(studentIds, periodId),
+      this.loadStudentActiveWorkshopSchedule(studentIds, periodId, workshopId),
+    ]);
+    return this.buildAssignmentPreview(
+      workshop,
+      students,
+      groups,
+      levelingLoadByStudent,
+      activeWorkshopLoadByStudent
     );
-    return this.buildAssignmentPreview(workshop, students, groups, loadByStudent);
   }
 
   async runAssignments(workshopId: string, actor: AuditActor | null) {
@@ -1627,15 +1665,24 @@ export class WorkshopsService {
       await this.get(workshopId, false),
       run
     );
-    const loadByStudent = await this.loadStudentLevelingSchedule([normalizedStudentId], run.periodId);
-    const studentLoad = loadByStudent.get(normalizedStudentId) ?? {
+    const [levelingLoadByStudent, activeWorkshopLoadByStudent] = await Promise.all([
+      this.loadStudentLevelingSchedule([normalizedStudentId], run.periodId),
+      this.loadStudentActiveWorkshopSchedule(
+        [normalizedStudentId],
+        run.periodId,
+        workshopId
+      ),
+    ]);
+    const studentLoad = levelingLoadByStudent.get(normalizedStudentId) ?? {
       blocks: [] as StudentScheduleWindow[],
       loadCourses: 0,
     };
+    const activeWorkshopLoad = activeWorkshopLoadByStudent.get(normalizedStudentId) ?? [];
+    const studentConflictBlocks = [...studentLoad.blocks, ...activeWorkshopLoad];
 
     const groups = appliedRun.groups.map((group) => {
       const overlaps = this.findOverlappingBlocks(
-        studentLoad.blocks,
+        studentConflictBlocks,
         group.scheduleBlocks ?? []
       );
       const isCurrent = group.runGroupId === String(assignment.currentRunGroupId);
@@ -1748,7 +1795,7 @@ export class WorkshopsService {
     }
     if (selectedGroup.hasConflict) {
       throw new ConflictException({
-        message: 'El grupo destino genera cruce de horario con nivelacion',
+        message: 'El grupo destino genera cruce de horario con cursos o talleres activos',
         code: 'WORKSHOP_GROUP_CHANGE_CONFLICT',
         summary: {
           affectedStudents: 1,
@@ -2008,10 +2055,11 @@ export class WorkshopsService {
       });
     }
 
-    const loadByStudent = await this.loadStudentLevelingSchedule(
-      assignedRows.map((row) => String(row.studentId)),
-      run.periodId
-    );
+    const assignedStudentIds = assignedRows.map((row) => String(row.studentId));
+    const [levelingLoadByStudent, activeWorkshopLoadByStudent] = await Promise.all([
+      this.loadStudentLevelingSchedule(assignedStudentIds, run.periodId),
+      this.loadStudentActiveWorkshopSchedule(assignedStudentIds, run.periodId, workshop.id),
+    ]);
 
     const groups = groupRows.map((row) => ({
       runGroupId: String(row.runGroupId),
@@ -2049,12 +2097,13 @@ export class WorkshopsService {
 
     for (const group of groups) {
       for (const student of group.students) {
-        const studentLoad = loadByStudent.get(student.studentId) ?? {
+        const studentLoad = levelingLoadByStudent.get(student.studentId) ?? {
           blocks: [] as StudentScheduleWindow[],
           loadCourses: 0,
         };
+        const activeWorkshopLoad = activeWorkshopLoadByStudent.get(student.studentId) ?? [];
         const overlaps = this.findOverlappingBlocks(
-          studentLoad.blocks,
+          [...studentLoad.blocks, ...activeWorkshopLoad],
           group.scheduleBlocks ?? []
         );
         for (const overlap of overlaps) {
@@ -2168,18 +2217,27 @@ export class WorkshopsService {
       startDate: this.normalizeIsoDateOnly(block.startDate) ?? null,
       endDate: this.normalizeIsoDateOnly(block.endDate) ?? null,
     }));
-    const loadByStudent = await this.loadStudentLevelingSchedule(
-      students.map((student) => student.studentId),
-      String(latestRun.periodId)
-    );
+    const studentIds = students.map((student) => student.studentId);
+    const [levelingLoadByStudent, activeWorkshopLoadByStudent] = await Promise.all([
+      this.loadStudentLevelingSchedule(studentIds, String(latestRun.periodId)),
+      this.loadStudentActiveWorkshopSchedule(
+        studentIds,
+        String(latestRun.periodId),
+        params.workshopId
+      ),
+    ]);
 
     const conflictStudents = students
       .map((student) => {
-        const studentLoad = loadByStudent.get(student.studentId) ?? {
+        const studentLoad = levelingLoadByStudent.get(student.studentId) ?? {
           blocks: [] as StudentScheduleWindow[],
           loadCourses: 0,
         };
-        const overlaps = this.findOverlappingBlocks(studentLoad.blocks, normalizedBlocks);
+        const activeWorkshopLoad = activeWorkshopLoadByStudent.get(student.studentId) ?? [];
+        const overlaps = this.findOverlappingBlocks(
+          [...studentLoad.blocks, ...activeWorkshopLoad],
+          normalizedBlocks
+        );
         return {
           ...student,
           overlaps,
@@ -2195,8 +2253,8 @@ export class WorkshopsService {
       workshopName: String(workshop?.name ?? ''),
       message:
         conflictStudents.length === 1
-          ? 'No se puede guardar el horario del grupo: 1 alumno presenta cruce con nivelacion.'
-          : `No se puede guardar el horario del grupo: ${conflictStudents.length} alumnos presentan cruces con nivelacion.`,
+          ? 'No se puede guardar el horario del grupo: 1 alumno presenta cruce con cursos o talleres activos.'
+          : `No se puede guardar el horario del grupo: ${conflictStudents.length} alumnos presentan cruces con cursos o talleres activos.`,
       code: 'WORKSHOP_GROUP_SCHEDULE_CONFLICT',
       summary: {
         affectedStudents: conflictStudents.length,
@@ -2498,9 +2556,11 @@ export class WorkshopsService {
         wag.groupIndex AS groupIndex,
         wag.studentCount AS studentCount
       FROM workshop_applications wa
+      INNER JOIN workshops w ON w.id = wa.workshopId
       INNER JOIN workshop_application_groups wag ON wag.applicationId = wa.id
       WHERE wa.periodId = ?
         AND wa.responsibleTeacherId = ?
+        AND w.isActive = 1
         AND wa.id = (
           SELECT wa2.id
           FROM workshop_applications wa2
@@ -2724,8 +2784,10 @@ export class WorkshopsService {
       FROM workshop_application_students was
       INNER JOIN workshop_application_groups wag ON wag.id = was.groupId
       INNER JOIN workshop_applications wa ON wa.id = was.applicationId
+      INNER JOIN workshops w ON w.id = wa.workshopId
       WHERE was.studentId = ?
         AND wa.periodId = ?
+        AND w.isActive = 1
         AND wa.id = (
           SELECT wa2.id
           FROM workshop_applications wa2
@@ -2758,6 +2820,7 @@ export class WorkshopsService {
       FROM workshop_application_students was
       INNER JOIN workshop_application_groups wag ON wag.id = was.groupId
       INNER JOIN workshop_applications wa ON wa.id = was.applicationId
+      INNER JOIN workshops w ON w.id = wa.workshopId
       INNER JOIN workshop_attendance_sessions ws
         ON ws.applicationId = wa.id
        AND ws.applicationGroupId = wag.id
@@ -2766,6 +2829,7 @@ export class WorkshopsService {
        AND wr.studentId = was.studentId
       WHERE was.studentId = ?
         AND wa.periodId = ?
+        AND w.isActive = 1
         AND wa.id = (
           SELECT wa2.id
           FROM workshop_applications wa2
@@ -2891,6 +2955,80 @@ export class WorkshopsService {
     return result;
   }
 
+  private async loadStudentActiveWorkshopSchedule(
+    studentIds: string[],
+    periodId: string,
+    excludeWorkshopId?: string | null
+  ) {
+    const unique = Array.from(
+      new Set((studentIds ?? []).map((id) => String(id).trim()).filter(Boolean))
+    );
+    const result = new Map<string, StudentScheduleWindow[]>();
+    if (unique.length === 0) return result;
+
+    const normalizedExcludeWorkshopId = this.normalize(excludeWorkshopId);
+    const rows: Array<{
+      studentId: string;
+      dayOfWeek: number;
+      startTime: string;
+      endTime: string;
+      startDate: string | null;
+      endDate: string | null;
+      workshopName: string;
+      groupName: string | null;
+    }> = await this.dataSource.query(
+      `
+      SELECT
+        was.studentId AS studentId,
+        wb.dayOfWeek AS dayOfWeek,
+        wb.startTime AS startTime,
+        wb.endTime AS endTime,
+        wb.startDate AS startDate,
+        wb.endDate AS endDate,
+        wa.name AS workshopName,
+        COALESCE(wag.groupName, wag.groupCode, 'Grupo') AS groupName
+      FROM workshop_application_students was
+      INNER JOIN workshop_application_groups wag ON wag.id = was.groupId
+      INNER JOIN workshop_applications wa ON wa.id = was.applicationId
+      INNER JOIN workshops w ON w.id = wa.workshopId
+      INNER JOIN workshop_group_schedule_blocks wb ON wb.groupId = wag.sourceGroupId
+      WHERE was.studentId IN (${unique.map(() => '?').join(', ')})
+        AND wa.periodId = ?
+        AND w.isActive = 1
+        ${normalizedExcludeWorkshopId ? 'AND wa.workshopId <> ?' : ''}
+        AND wa.id = (
+          SELECT wa2.id
+          FROM workshop_applications wa2
+          WHERE wa2.workshopId = wa.workshopId
+          ORDER BY wa2.createdAt DESC, wa2.id DESC
+          LIMIT 1
+        )
+      ORDER BY was.studentId ASC, wb.dayOfWeek ASC, wb.startTime ASC
+      `,
+      normalizedExcludeWorkshopId
+        ? [...unique, periodId, normalizedExcludeWorkshopId]
+        : [...unique, periodId]
+    );
+
+    for (const row of rows) {
+      const studentId = String(row.studentId);
+      if (!result.has(studentId)) result.set(studentId, []);
+      result.get(studentId)!.push({
+        dayOfWeek: Number(row.dayOfWeek ?? 0),
+        startTime: String(row.startTime ?? '').slice(0, 5),
+        endTime: String(row.endTime ?? '').slice(0, 5),
+        startDate: this.normalizeIsoDateOnly(row.startDate),
+        endDate: this.normalizeIsoDateOnly(row.endDate),
+        label:
+          [String(row.workshopName ?? '').trim(), row.groupName ? String(row.groupName).trim() : '']
+            .filter(Boolean)
+            .join(' | ') || 'Taller',
+      });
+    }
+
+    return result;
+  }
+
   private buildAssignmentPreview(
     workshop: any,
     students: any[],
@@ -2905,10 +3043,13 @@ export class WorkshopsService {
         label: string | null;
       }>;
       loadCourses: number;
-    }>
+    }>,
+    activeWorkshopLoadByStudent: Map<string, StudentScheduleWindow[]>
   ) {
     const candidates = students.map((student: any) => {
       const load = loadByStudent.get(String(student.studentId)) ?? { blocks: [], loadCourses: 0 };
+      const activeWorkshopBlocks =
+        activeWorkshopLoadByStudent.get(String(student.studentId)) ?? [];
       return {
         studentId: String(student.studentId),
         dni: student.dni ? String(student.dni) : null,
@@ -2918,8 +3059,8 @@ export class WorkshopsService {
         campusName: student.campusName ? String(student.campusName) : null,
         hasLevelingLoad: load.blocks.length > 0,
         loadCourses: Number(load.loadCourses ?? 0),
-        loadBlocks: load.blocks.length,
-        scheduleBlocks: load.blocks,
+        loadBlocks: load.blocks.length + activeWorkshopBlocks.length,
+        scheduleBlocks: [...load.blocks, ...activeWorkshopBlocks],
       };
     });
     candidates.sort((a, b) => {
@@ -3325,8 +3466,10 @@ export class WorkshopsService {
           wag.groupName AS groupName
         FROM workshop_application_groups wag
         INNER JOIN workshop_applications wa ON wa.id = wag.applicationId
+        INNER JOIN workshops w ON w.id = wa.workshopId
         WHERE wag.id = ?
           AND wa.responsibleTeacherId = ?
+          AND w.isActive = 1
           AND wa.id = (
             SELECT wa2.id
             FROM workshop_applications wa2
@@ -3368,8 +3511,10 @@ export class WorkshopsService {
         INNER JOIN workshop_groups wg ON wg.id = b.groupId
         INNER JOIN workshop_application_groups wag ON wag.sourceGroupId = wg.id
         INNER JOIN workshop_applications wa ON wa.id = wag.applicationId
+        INNER JOIN workshops w ON w.id = wa.workshopId
         WHERE b.id = ?
           AND wa.responsibleTeacherId = ?
+          AND w.isActive = 1
           AND wa.id = (
             SELECT wa2.id
             FROM workshop_applications wa2
@@ -3408,8 +3553,10 @@ export class WorkshopsService {
         INNER JOIN workshop_application_groups wag ON wag.sourceGroupId = wg.id
         INNER JOIN workshop_application_students was ON was.groupId = wag.id
         INNER JOIN workshop_applications wa ON wa.id = wag.applicationId
+        INNER JOIN workshops w ON w.id = wa.workshopId
         WHERE b.id = ?
           AND was.studentId = ?
+          AND w.isActive = 1
           AND wa.id = (
             SELECT wa2.id
             FROM workshop_applications wa2
@@ -3665,6 +3812,7 @@ export class WorkshopsService {
       careerNames: parseJsonArray(row.careerNames),
       deliveryMode: (row.deliveryMode || 'VIRTUAL') as DeliveryMode,
       venueCampusName: row.venueCampusName ? String(row.venueCampusName) : null,
+      isActive: row.isActive === undefined ? true : this.toBool(row.isActive),
       responsibleTeacherId: row.responsibleTeacherId
         ? String(row.responsibleTeacherId)
         : null,
@@ -3704,6 +3852,7 @@ export class WorkshopsService {
     careerNames?: string[] | null;
     deliveryMode?: DeliveryMode | null;
     venueCampusName?: string | null;
+    isActive?: boolean | null;
     responsibleTeacherId?: string | null;
     responsibleTeacherName?: string | null;
     selectedStudentsCount?: number | null;
@@ -3728,6 +3877,10 @@ export class WorkshopsService {
         : [],
       deliveryMode: workshop.deliveryMode ?? null,
       venueCampusName: workshop.venueCampusName ?? null,
+      isActive:
+        workshop.isActive === null || workshop.isActive === undefined
+          ? null
+          : Boolean(workshop.isActive),
       responsibleTeacherId: workshop.responsibleTeacherId ?? null,
       responsibleTeacherName: workshop.responsibleTeacherName ?? null,
       selectedStudentsCount:

@@ -39,6 +39,7 @@ export interface WorkshopRow {
   responsibleTeacherId?: string | null;
   responsibleTeacherDni?: string | null;
   responsibleTeacherName?: string | null;
+  isActive: boolean;
   studentIds?: string[];
   selectedStudents?: WorkshopStudentRow[];
   selectedStudentsCount?: number;
@@ -360,6 +361,15 @@ export class AdminWorkshopsService {
     return firstValueFrom(this.http.post<WorkshopRow>('/api/admin/workshops', payload));
   }
 
+  updateWorkshopStatus(workshopId: string, isActive: boolean) {
+    return firstValueFrom(
+      this.http.patch<{ id: string; isActive: boolean }>(
+        `/api/admin/workshops/${encodeURIComponent(workshopId)}/status`,
+        { isActive }
+      )
+    );
+  }
+
   deleteWorkshop(workshopId: string) {
     return firstValueFrom(
       this.http.delete(`/api/admin/workshops/${encodeURIComponent(workshopId)}`)
@@ -534,6 +544,7 @@ export class AdminWorkshopsService {
       responsibleTeacherId: null,
       responsibleTeacherDni: null,
       responsibleTeacherName: null,
+      isActive: true,
       studentIds: [],
       selectedStudents: [],
     };

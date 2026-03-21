@@ -74,6 +74,7 @@ import { ScheduleBlockZoomMeetingRecord051Migration1775500000000 } from './migra
 import { WorkshopGroupScheduleZoomLinks052Migration1775600000000 } from './migrations/052-workshop-group-schedule-zoom-links.migration';
 import { SupportTechnicalRole053Migration1775700000000 } from './migrations/053-support-technical-role.migration';
 import { AdminChangeAudit054Migration1775800000000 } from './migrations/054-admin-change-audit.migration';
+import { WorkshopActiveFlag055Migration1775900000000 } from './migrations/055-workshop-active-flag.migration';
 
 export const TYPEORM_ENTITIES = [
   UserEntity,
@@ -151,6 +152,7 @@ export const TYPEORM_MIGRATIONS = [
   WorkshopGroupScheduleZoomLinks052Migration1775600000000,
   SupportTechnicalRole053Migration1775700000000,
   AdminChangeAudit054Migration1775800000000,
+  WorkshopActiveFlag055Migration1775900000000,
 ];
 
 export function createDataSourceOptionsFromEnv(): DataSourceOptions {

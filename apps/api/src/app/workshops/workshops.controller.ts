@@ -1,9 +1,11 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
   Get,
   Param,
+  Patch,
   Post,
   Put,
   Query,
@@ -98,6 +100,22 @@ export class WorkshopsController {
     @CurrentUser() user: JwtUser
   ) {
     return this.workshopsService.update(id, body, {
+      userId: String(user?.sub ?? '').trim() || null,
+      fullName: String(user?.fullName ?? '').trim() || null,
+      role: String(user?.role ?? '').trim() || null,
+    });
+  }
+
+  @Patch(':id/status')
+  updateStatus(
+    @Param('id') id: string,
+    @Body() body: { isActive?: boolean },
+    @CurrentUser() user: JwtUser
+  ) {
+    if (typeof body?.isActive !== 'boolean') {
+      throw new BadRequestException('isActive es requerido');
+    }
+    return this.workshopsService.updateStatus(id, body.isActive, {
       userId: String(user?.sub ?? '').trim() || null,
       fullName: String(user?.fullName ?? '').trim() || null,
       role: String(user?.role ?? '').trim() || null,
