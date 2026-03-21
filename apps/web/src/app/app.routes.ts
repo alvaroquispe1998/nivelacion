@@ -415,6 +415,13 @@ export const appRoutes: Route[] = [
           ),
       },
       {
+        path: 'admin/audit',
+        canActivate: [roleGuard],
+        data: { roles: [Role.ADMIN] },
+        loadComponent: () =>
+          import('./pages/admin-audit.page').then((m) => m.AdminAuditPage),
+      },
+      {
         path: 'admin/account/password',
         canActivate: [roleGuard],
         data: { roles: ADMIN_BACKOFFICE_ROLES },

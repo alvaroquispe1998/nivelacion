@@ -36,7 +36,52 @@ interface ListAuditChangesParams {
   batchId?: string | null;
   from?: string | null;
   to?: string | null;
-  limit?: number | null;
+  page?: number | null;
+  pageSize?: number | null;
+}
+
+interface AuditListQueryContext {
+  conditions: string[];
+  values: Array<string | number>;
+}
+
+interface AuditActorFacetResponse {
+  userId: string;
+  name: string;
+  role: string | null;
+}
+
+interface AuditChangeResponse {
+  id: string;
+  moduleName: string;
+  entityType: string;
+  entityId: string | null;
+  entityLabel: string | null;
+  action: string;
+  batchId: string | null;
+  actorUserId: string | null;
+  actorName: string | null;
+  actorRole: string | null;
+  changes: AuditChangeItem[];
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+interface AuditListResponse {
+  items: AuditChangeResponse[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+}
+
+interface AuditFacetsResponse {
+  modules: string[];
+  entityTypes: string[];
+  actions: string[];
+  actors: AuditActorFacetResponse[];
 }
 
 @Injectable()
@@ -101,7 +146,144 @@ export class AuditService {
     }
   }
 
-  async listChanges(params: ListAuditChangesParams) {
+  async listChanges(params: ListAuditChangesParams): Promise<AuditListResponse> {
+    const { conditions, values } = this.buildListQueryContext(params);
+    const page = Math.max(1, Math.floor(Number(params.page ?? 1) || 1));
+    const pageSize = Math.max(
+      1,
+      Math.min(100, Math.floor(Number(params.pageSize ?? 50) || 50))
+    );
+    const offset = (page - 1) * pageSize;
+
+    const totalRows: Array<{ total: number | string }> = await this.dataSource.query(
+      `
+      SELECT COUNT(*) AS total
+      FROM admin_change_audit
+      ${conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''}
+      `,
+      values
+    );
+    const total = Number(totalRows[0]?.total ?? 0);
+
+    const rows: Array<{
+      id: string;
+      moduleName: string;
+      entityType: string;
+      entityId: string | null;
+      entityLabel: string | null;
+      action: string;
+      batchId: string | null;
+      actorUserId: string | null;
+      actorName: string | null;
+      actorRole: string | null;
+      changesJson: string | null;
+      beforeJson: string | null;
+      afterJson: string | null;
+      metadataJson: string | null;
+      createdAt: Date | string;
+    }> = await this.dataSource.query(
+      `
+      SELECT
+        id,
+        moduleName,
+        entityType,
+        entityId,
+        entityLabel,
+        action,
+        batchId,
+        actorUserId,
+        actorName,
+        actorRole,
+        changesJson,
+        beforeJson,
+        afterJson,
+        metadataJson,
+        createdAt
+      FROM admin_change_audit
+      ${conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''}
+      ORDER BY createdAt DESC, id DESC
+      LIMIT ?
+      OFFSET ?
+      `,
+      [...values, pageSize, offset]
+    );
+
+    const items = rows.map((row) => this.mapRow(row));
+    return {
+      items,
+      total,
+      page,
+      pageSize,
+      hasMore: page * pageSize < total,
+    };
+  }
+
+  async getFacets(): Promise<AuditFacetsResponse> {
+    const [moduleRows, entityTypeRows, actionRows, actorRows] = await Promise.all([
+      this.dataSource.query(
+        `
+        SELECT DISTINCT moduleName
+        FROM admin_change_audit
+        WHERE moduleName IS NOT NULL
+          AND TRIM(moduleName) <> ''
+        ORDER BY moduleName ASC
+        `
+      ),
+      this.dataSource.query(
+        `
+        SELECT DISTINCT entityType
+        FROM admin_change_audit
+        WHERE entityType IS NOT NULL
+          AND TRIM(entityType) <> ''
+        ORDER BY entityType ASC
+        `
+      ),
+      this.dataSource.query(
+        `
+        SELECT DISTINCT action
+        FROM admin_change_audit
+        WHERE action IS NOT NULL
+          AND TRIM(action) <> ''
+        ORDER BY action ASC
+        `
+      ),
+      this.dataSource.query(
+        `
+        SELECT actorUserId, MAX(actorName) AS actorName, MAX(actorRole) AS actorRole
+        FROM admin_change_audit
+        WHERE actorUserId IS NOT NULL
+          AND TRIM(actorUserId) <> ''
+        GROUP BY actorUserId
+        ORDER BY
+          COALESCE(NULLIF(MAX(actorName), ''), actorUserId) ASC,
+          actorUserId ASC
+        `
+      ),
+    ]);
+
+    const actors: AuditActorFacetResponse[] = actorRows.map(
+      (row: { actorUserId: string; actorName: string | null; actorRole: string | null }) => ({
+        userId: String(row.actorUserId ?? ''),
+        name: String(row.actorName ?? '').trim() || String(row.actorUserId ?? ''),
+        role: this.normalizeText(row.actorRole) || null,
+      })
+    );
+
+    return {
+      modules: moduleRows
+        .map((row: { moduleName: string }) => this.normalizeText(row.moduleName))
+        .filter((value: string) => value.length > 0),
+      entityTypes: entityTypeRows
+        .map((row: { entityType: string }) => this.normalizeText(row.entityType))
+        .filter((value: string) => value.length > 0),
+      actions: actionRows
+        .map((row: { action: string }) => this.normalizeText(row.action))
+        .filter((value: string) => value.length > 0),
+      actors,
+    };
+  }
+
+  private buildListQueryContext(params: ListAuditChangesParams): AuditListQueryContext {
     const conditions: string[] = [];
     const values: Array<string | number> = [];
 
@@ -153,54 +335,27 @@ export class AuditService {
       values.push(to.length <= 10 ? `${to} 23:59:59` : to);
     }
 
-    const limit = Math.max(
-      1,
-      Math.min(500, Math.floor(Number(params.limit ?? 100) || 100))
-    );
+    return { conditions, values };
+  }
 
-    const rows: Array<{
-      id: string;
-      moduleName: string;
-      entityType: string;
-      entityId: string | null;
-      entityLabel: string | null;
-      action: string;
-      batchId: string | null;
-      actorUserId: string | null;
-      actorName: string | null;
-      actorRole: string | null;
-      changesJson: string | null;
-      beforeJson: string | null;
-      afterJson: string | null;
-      metadataJson: string | null;
-      createdAt: Date | string;
-    }> = await this.dataSource.query(
-      `
-      SELECT
-        id,
-        moduleName,
-        entityType,
-        entityId,
-        entityLabel,
-        action,
-        batchId,
-        actorUserId,
-        actorName,
-        actorRole,
-        changesJson,
-        beforeJson,
-        afterJson,
-        metadataJson,
-        createdAt
-      FROM admin_change_audit
-      ${conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''}
-      ORDER BY createdAt DESC, id DESC
-      LIMIT ?
-      `,
-      [...values, limit]
-    );
-
-    return rows.map((row) => ({
+  private mapRow(row: {
+    id: string;
+    moduleName: string;
+    entityType: string;
+    entityId: string | null;
+    entityLabel: string | null;
+    action: string;
+    batchId: string | null;
+    actorUserId: string | null;
+    actorName: string | null;
+    actorRole: string | null;
+    changesJson: string | null;
+    beforeJson: string | null;
+    afterJson: string | null;
+    metadataJson: string | null;
+    createdAt: Date | string;
+  }): AuditChangeResponse {
+    return {
       id: String(row.id),
       moduleName: String(row.moduleName ?? ''),
       entityType: String(row.entityType ?? ''),
@@ -219,7 +374,7 @@ export class AuditService {
         row.createdAt instanceof Date
           ? row.createdAt.toISOString()
           : String(row.createdAt ?? ''),
-    }));
+    };
   }
 
   private buildChanges(
