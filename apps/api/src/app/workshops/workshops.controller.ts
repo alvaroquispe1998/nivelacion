@@ -8,9 +8,12 @@ import {
   Put,
   Query,
   StreamableFile,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { ADMIN_BACKOFFICE_ROLES } from '@uai/shared';
 import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -117,6 +120,16 @@ export class WorkshopsController {
     @Query('careerName') careerName?: string | string[]
   ) {
     return this.workshopsService.listStudents({ facultyGroup, campusName, careerName });
+  }
+
+  @Post('students/import-codes')
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(FileInterceptor('file'))
+  importStudentCodes(@UploadedFile() file: any) {
+    return this.workshopsService.importStudentCodesFromExcel({
+      buffer: file?.buffer,
+      originalname: file?.originalname,
+    });
   }
 
   @Get(':id/groups')
