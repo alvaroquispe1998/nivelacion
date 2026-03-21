@@ -50,7 +50,7 @@ import {
 
     <div *ngIf="!loading && appliedView" class="mt-4 space-y-4">
       <div class="rounded-2xl border border-slate-200 bg-white p-4">
-        <div class="grid gap-3 sm:grid-cols-6">
+        <div class="grid gap-3 sm:grid-cols-5">
           <div class="rounded-xl bg-slate-50 p-3">
             <div class="text-xs text-slate-500">Taller</div>
             <div class="text-sm font-semibold">{{ appliedView.workshop.name }}</div>
@@ -64,10 +64,6 @@ import {
           <div class="rounded-xl bg-slate-50 p-3">
             <div class="text-xs text-slate-500">Asignados</div>
             <div class="text-lg font-semibold">{{ appliedView.summary.assignedCount }}</div>
-          </div>
-          <div class="rounded-xl bg-slate-50 p-3">
-            <div class="text-xs text-slate-500">Pendientes</div>
-            <div class="text-lg font-semibold">{{ appliedView.summary.pendingCount }}</div>
           </div>
           <div class="rounded-xl bg-slate-50 p-3">
             <div class="text-xs text-slate-500">Grupos</div>
@@ -185,29 +181,6 @@ import {
         </div>
       </div>
 
-      <div *ngIf="appliedView.pending.length > 0" class="rounded-2xl border border-slate-200 bg-white p-4">
-        <div class="text-sm font-semibold">Pendientes de la aplicacion</div>
-        <div class="mt-3 max-h-72 overflow-auto rounded-xl border border-slate-200">
-          <table class="min-w-full text-xs">
-            <thead class="bg-slate-50 text-left text-slate-700">
-              <tr>
-                <th class="px-3 py-2">Alumno</th>
-                <th class="px-3 py-2">Codigo</th>
-                <th class="px-3 py-2">Motivo</th>
-                <th class="px-3 py-2">Detalle</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr *ngFor="let row of appliedView.pending" class="border-t border-slate-100">
-                <td class="px-3 py-2">{{ row.fullName }}</td>
-                <td class="px-3 py-2">{{ row.codigoAlumno || 'SIN CODIGO' }}</td>
-                <td class="px-3 py-2">{{ row.reasonCode }}</td>
-                <td class="px-3 py-2">{{ row.reasonDetail || '-' }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
     </div>
 
     <div *ngIf="groupOptions" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
