@@ -4887,9 +4887,11 @@ export class SectionsService {
       FROM workshop_application_students was
       INNER JOIN workshop_application_groups wag ON wag.id = was.groupId
       INNER JOIN workshop_applications wa ON wa.id = was.applicationId
+      INNER JOIN workshops w ON w.id = wa.workshopId
       INNER JOIN workshop_group_schedule_blocks wb ON wb.groupId = wag.sourceGroupId
       WHERE was.studentId IN (${uniqueStudentIds.map(() => '?').join(', ')})
         AND wa.periodId = ?
+        AND w.isActive = 1
         AND wa.id = (
           SELECT wa2.id
           FROM workshop_applications wa2

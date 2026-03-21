@@ -651,7 +651,7 @@ export class AdminWorkshopGroupsPage implements OnInit, OnDestroy {
     const workshopName =
       String(errorBody?.workshopName ?? this.workshop?.name ?? '').trim() || 'este taller';
     return window.confirm(
-      `El nuevo horario de ${workshopName} genera cruces con nivelacion. Desea continuar? Recuerde que luego debe cambiar de grupo a los alumnos con cruce de horario.`
+      `El nuevo horario de ${workshopName} genera cruces con cursos o talleres activos. Desea continuar? Recuerde que luego debe cambiar de grupo a los alumnos con cruce de horario.`
     );
   }
 

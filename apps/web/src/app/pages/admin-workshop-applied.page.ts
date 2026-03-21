@@ -96,7 +96,7 @@ import {
                 <th class="px-3 py-2">Codigo</th>
                 <th class="px-3 py-2">Grupo</th>
                 <th class="px-3 py-2">Bloque taller</th>
-                <th class="px-3 py-2">Bloque nivelacion</th>
+                <th class="px-3 py-2">Bloque conflictivo</th>
                 <th class="px-3 py-2">Accion</th>
               </tr>
             </thead>
@@ -123,7 +123,7 @@ import {
               </tr>
               <tr *ngIf="appliedView.currentConflicts.length === 0" class="border-t border-slate-100">
                 <td colspan="7" class="px-3 py-3 text-slate-500">
-                  No hay cruces actuales entre taller y nivelacion.
+                  No hay cruces actuales entre el taller, los cursos y otros talleres activos.
                 </td>
               </tr>
             </tbody>

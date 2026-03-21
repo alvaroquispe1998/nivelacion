@@ -67,9 +67,24 @@ import { AdminWorkshopsService, WorkshopRow } from './admin-workshops.service';
             </tr>
           </thead>
           <tbody>
-            <tr *ngFor="let workshop of workshops" class="border-t border-slate-100 align-top">
+            <tr
+              *ngFor="let workshop of workshops"
+              class="border-t border-slate-100 align-top"
+              [class.bg-slate-50]="!workshop.isActive"
+            >
               <td class="px-3 py-3">
                 <div class="font-semibold text-slate-900">{{ workshop.name }}</div>
+                <div class="mt-1">
+                  <span
+                    class="inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold"
+                    [class.bg-emerald-50]="workshop.isActive"
+                    [class.text-emerald-700]="workshop.isActive"
+                    [class.bg-slate-200]="!workshop.isActive"
+                    [class.text-slate-700]="!workshop.isActive"
+                  >
+                    {{ workshop.isActive ? 'Activo' : 'Inactivo' }}
+                  </span>
+                </div>
                 <div class="mt-1 text-xs text-slate-500">
                   {{ deliveryLabel(workshop) }}
                 </div>
@@ -145,8 +160,27 @@ import { AdminWorkshopsService, WorkshopRow } from './admin-workshops.service';
                     {{ downloadingExportId === workshop.id ? 'Exportando...' : 'Exportar grupos' }}
                   </button>
                   <button
+                    class="rounded border px-2 py-1 text-xs disabled:opacity-50"
+                    [class.border-amber-300]="workshop.isActive"
+                    [class.text-amber-700]="workshop.isActive"
+                    [class.hover:bg-amber-50]="workshop.isActive"
+                    [class.border-emerald-300]="!workshop.isActive"
+                    [class.text-emerald-700]="!workshop.isActive"
+                    [class.hover:bg-emerald-50]="!workshop.isActive"
+                    [disabled]="loadingStatusId === workshop.id"
+                    (click)="openToggleWorkshopStatusConfirm(workshop)"
+                  >
+                    {{
+                      loadingStatusId === workshop.id
+                        ? 'Guardando...'
+                        : workshop.isActive
+                          ? 'Inactivar'
+                          : 'Activar'
+                    }}
+                  </button>
+                  <button
                     class="rounded border border-rose-300 px-2 py-1 text-xs text-rose-700 hover:bg-rose-50"
-                    (click)="deleteWorkshop(workshop)"
+                    (click)="openDeleteConfirm(workshop)"
                   >
                     Eliminar
                   </button>
@@ -155,6 +189,102 @@ import { AdminWorkshopsService, WorkshopRow } from './admin-workshops.service';
             </tr>
           </tbody>
         </table>
+      </div>
+    </div>
+
+    <div
+      *ngIf="confirmState.isOpen"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 backdrop-blur-sm"
+    >
+      <div class="w-full max-w-lg overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_32px_120px_-32px_rgba(15,23,42,0.45)]">
+        <div
+          class="relative overflow-hidden border-b border-slate-100 bg-gradient-to-r p-6"
+          [ngClass]="
+            confirmState.tone === 'danger'
+              ? 'from-rose-50 via-white to-rose-100'
+              : confirmState.tone === 'success'
+                ? 'from-emerald-50 via-white to-emerald-100'
+                : 'from-amber-50 via-white to-amber-100'
+          "
+        >
+          <div
+            class="absolute -right-8 -top-10 h-28 w-28 rounded-full blur-2xl"
+            [ngClass]="
+              confirmState.tone === 'danger'
+                ? 'bg-rose-200/70'
+                : confirmState.tone === 'success'
+                  ? 'bg-emerald-200/70'
+                  : 'bg-amber-200/70'
+            "
+          ></div>
+          <div class="relative">
+            <div
+              class="inline-flex rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em]"
+              [ngClass]="
+                confirmState.tone === 'danger'
+                  ? 'bg-rose-100 text-rose-700'
+                  : confirmState.tone === 'success'
+                    ? 'bg-emerald-100 text-emerald-700'
+                    : 'bg-amber-100 text-amber-700'
+              "
+            >
+              Confirmacion
+            </div>
+            <div class="mt-4 text-2xl font-semibold tracking-tight text-slate-900">
+              {{ confirmState.title }}
+            </div>
+            <div class="mt-2 max-w-xl text-sm leading-relaxed text-slate-600">
+              {{ confirmState.subtitle }}
+            </div>
+          </div>
+        </div>
+
+        <div class="p-6">
+          <div
+            class="rounded-2xl border px-4 py-4"
+            [ngClass]="
+              confirmState.tone === 'danger'
+                ? 'border-rose-200 bg-rose-50/70'
+                : confirmState.tone === 'success'
+                  ? 'border-emerald-200 bg-emerald-50/70'
+                  : 'border-amber-200 bg-amber-50/70'
+            "
+          >
+            <div class="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
+              Taller seleccionado
+            </div>
+            <div class="mt-2 break-words text-base font-semibold text-slate-900">
+              {{ confirmState.workshopName }}
+            </div>
+            <div class="mt-2 text-sm leading-relaxed text-slate-600">
+              {{ confirmState.message }}
+            </div>
+          </div>
+
+          <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+            <button
+              class="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              [disabled]="confirmState.loading"
+              (click)="closeConfirm()"
+            >
+              Cancelar
+            </button>
+            <button
+              class="rounded-2xl px-4 py-2.5 text-sm font-semibold text-white transition-all disabled:cursor-not-allowed disabled:opacity-60"
+              [ngClass]="
+                confirmState.tone === 'danger'
+                  ? 'bg-rose-600 shadow-lg shadow-rose-600/20 hover:bg-rose-700'
+                  : confirmState.tone === 'success'
+                    ? 'bg-emerald-600 shadow-lg shadow-emerald-600/20 hover:bg-emerald-700'
+                    : 'bg-amber-600 shadow-lg shadow-amber-600/20 hover:bg-amber-700'
+              "
+              [disabled]="confirmState.loading"
+              (click)="executeConfirm()"
+            >
+              {{ confirmState.loading ? confirmState.loadingLabel : confirmState.confirmLabel }}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   `,
@@ -173,6 +303,19 @@ export class AdminWorkshopsPage implements OnInit, OnDestroy {
   error: string | null = null;
   success: string | null = null;
   downloadingExportId: string | null = null;
+  loadingStatusId: string | null = null;
+  confirmState = {
+    isOpen: false,
+    title: '',
+    subtitle: '',
+    message: '',
+    workshopName: '',
+    confirmLabel: 'Confirmar',
+    loadingLabel: 'Guardando...',
+    tone: 'warning' as 'warning' | 'success' | 'danger',
+    onConfirm: null as null | (() => Promise<boolean>),
+    loading: false,
+  };
 
   async ngOnInit() {
     this.querySub = this.route.queryParamMap.subscribe((params) => {
@@ -205,18 +348,82 @@ export class AdminWorkshopsPage implements OnInit, OnDestroy {
     }
   }
 
+  openDeleteConfirm(workshop: WorkshopRow) {
+    this.confirmState = {
+      isOpen: true,
+      title: 'Eliminar taller',
+      subtitle: 'Esta accion borra el taller de forma permanente y no se podra deshacer.',
+      message:
+        'Si solo quieres ocultarlo para alumno y docente, te conviene dejarlo inactivo en lugar de eliminarlo.',
+      workshopName: workshop.name,
+      confirmLabel: 'Eliminar taller',
+      loadingLabel: 'Eliminando...',
+      tone: 'danger',
+      onConfirm: () => this.deleteWorkshop(workshop),
+      loading: false,
+    };
+    this.safeDetectChanges();
+  }
+
   async deleteWorkshop(workshop: WorkshopRow) {
-    const ok = window.confirm(`Eliminar taller "${workshop.name}"?`);
-    if (!ok) return;
     this.error = null;
     this.success = null;
     try {
       await this.workshopsService.deleteWorkshop(workshop.id);
       this.workshops = this.workshops.filter((row) => row.id !== workshop.id);
       this.success = 'Taller eliminado.';
+      return true;
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo eliminar el taller';
+      return false;
     } finally {
+      this.safeDetectChanges();
+    }
+  }
+
+  openToggleWorkshopStatusConfirm(workshop: WorkshopRow) {
+    const nextIsActive = !workshop.isActive;
+    this.confirmState = {
+      isOpen: true,
+      title: nextIsActive ? 'Activar taller' : 'Inactivar taller',
+      subtitle: nextIsActive
+        ? 'El taller volvera a estar visible y disponible dentro del flujo normal.'
+        : 'El taller quedara oculto para alumno y docente, pero seguira disponible en admin.',
+      message: nextIsActive
+        ? 'Se mostrara otra vez en los listados y podra participar nuevamente en las validaciones de talleres activos.'
+        : 'Seguira existiendo para editarlo, revisarlo o reactivarlo despues cuando lo necesites.',
+      workshopName: workshop.name,
+      confirmLabel: nextIsActive ? 'Activar taller' : 'Inactivar taller',
+      loadingLabel: nextIsActive ? 'Activando...' : 'Inactivando...',
+      tone: nextIsActive ? 'success' : 'warning',
+      onConfirm: () => this.toggleWorkshopStatus(workshop),
+      loading: false,
+    };
+    this.safeDetectChanges();
+  }
+
+  async toggleWorkshopStatus(workshop: WorkshopRow) {
+    const nextIsActive = !workshop.isActive;
+    this.loadingStatusId = workshop.id;
+    this.error = null;
+    this.success = null;
+    try {
+      const updated = await this.workshopsService.updateWorkshopStatus(
+        workshop.id,
+        nextIsActive
+      );
+      this.workshops = this.workshops.map((row) =>
+        row.id === workshop.id ? { ...row, isActive: updated.isActive } : row
+      );
+      this.success = nextIsActive
+        ? 'Taller activado.'
+        : 'Taller inactivado. Alumno y docente ya no lo veran.';
+      return true;
+    } catch (e: any) {
+      this.error = e?.error?.message ?? 'No se pudo actualizar el estado del taller';
+      return false;
+    } finally {
+      this.loadingStatusId = null;
       this.safeDetectChanges();
     }
   }
@@ -273,6 +480,46 @@ export class AdminWorkshopsPage implements OnInit, OnDestroy {
     if (scheduled === 0) return 'Sin horarios';
     if (scheduled < groupsCount) return 'Faltan horarios';
     return 'Todos configurados';
+  }
+
+  closeConfirm(force = false) {
+    if (this.confirmState.loading && !force) return;
+    this.confirmState = {
+      isOpen: false,
+      title: '',
+      subtitle: '',
+      message: '',
+      workshopName: '',
+      confirmLabel: 'Confirmar',
+      loadingLabel: 'Guardando...',
+      tone: 'warning',
+      onConfirm: null,
+      loading: false,
+    };
+    this.safeDetectChanges();
+  }
+
+  async executeConfirm() {
+    const action = this.confirmState.onConfirm;
+    if (!action || this.confirmState.loading) return;
+
+    this.confirmState = {
+      ...this.confirmState,
+      loading: true,
+    };
+    this.safeDetectChanges();
+
+    const shouldClose = await action();
+    if (shouldClose) {
+      this.closeConfirm(true);
+      return;
+    }
+
+    this.confirmState = {
+      ...this.confirmState,
+      loading: false,
+    };
+    this.safeDetectChanges();
   }
 
   private safeDetectChanges() {
