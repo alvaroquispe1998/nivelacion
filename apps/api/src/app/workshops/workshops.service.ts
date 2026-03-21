@@ -82,6 +82,30 @@ interface StudentScheduleWindow {
   label?: string | null;
 }
 
+interface WorkshopStudentSummaryRow {
+  studentId: string;
+  dni: string | null;
+  codigoAlumno: string | null;
+  fullName: string;
+  careerName: string | null;
+  facultyGroup: string | null;
+  campusName: string | null;
+}
+
+interface WorkshopStudentCodeImportSummary {
+  rowsRead: number;
+  resolvedCount: number;
+  duplicateCodes: string[];
+  notFoundCodes: string[];
+  ambiguousCodes: string[];
+  emptyRows: number;
+}
+
+interface WorkshopStudentCodeImportResult {
+  students: WorkshopStudentSummaryRow[];
+  summary: WorkshopStudentCodeImportSummary;
+}
+
 @Injectable()
 export class WorkshopsService {
   constructor(
@@ -100,6 +124,18 @@ export class WorkshopsService {
     return arr
       .map((v) => this.normalize(v))
       .filter((v) => v.length > 0);
+  }
+
+  private normalizeHeaderToken(value: unknown) {
+    return String(value ?? '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '');
+  }
+
+  private normalizeStudentCode(value: unknown) {
+    return String(value ?? '').trim().toUpperCase();
   }
 
   private toBool(value: any) {
@@ -123,6 +159,18 @@ export class WorkshopsService {
     const mm = Number(match[2]);
     if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
     return hh * 60 + mm;
+  }
+
+  private mapWorkshopStudentRow(row: any): WorkshopStudentSummaryRow {
+    return {
+      studentId: String(row.studentId),
+      dni: row.dni ? String(row.dni) : null,
+      codigoAlumno: row.codigoAlumno ? String(row.codigoAlumno) : null,
+      fullName: String(row.fullName ?? ''),
+      careerName: row.careerName ? String(row.careerName) : null,
+      facultyGroup: row.facultyGroup ? String(row.facultyGroup) : null,
+      campusName: row.campusName ? String(row.campusName) : null,
+    };
   }
 
   private hasDateRangeOverlap(
@@ -302,9 +350,15 @@ export class WorkshopsService {
       )
       .then((r) => r[0]);
     if (!row) throw new NotFoundException('Taller no encontrado');
-    const workshop = this.mapWorkshop(row) as ReturnType<WorkshopsService['mapWorkshop']> & { studentIds?: string[] };
+    const workshop = this.mapWorkshop(row) as ReturnType<WorkshopsService['mapWorkshop']> & {
+      studentIds?: string[];
+      selectedStudents?: WorkshopStudentSummaryRow[];
+    };
     if (loadStudents) {
       workshop.studentIds = await this.loadStudentIds(id);
+      workshop.selectedStudents = await this.loadWorkshopSelectedStudents(
+        workshop.studentIds ?? []
+      );
     }
     return workshop;
   }
@@ -474,6 +528,97 @@ export class WorkshopsService {
     return rows.map((r: any) => String(r.studentId));
   }
 
+  private async loadWorkshopSelectedStudents(studentIds: string[]) {
+    const uniqueIds = Array.from(
+      new Set((studentIds ?? []).map((id) => String(id ?? '').trim()).filter(Boolean))
+    );
+    if (uniqueIds.length === 0) return [];
+    const periodId = await this.periodsService.getOperationalPeriodIdOrThrow();
+    return this.loadStudentRowsByIds(uniqueIds, periodId);
+  }
+
+  private async loadStudentRowsByIds(studentIds: string[], periodId: string) {
+    const uniqueIds = Array.from(
+      new Set((studentIds ?? []).map((id) => String(id ?? '').trim()).filter(Boolean))
+    );
+    if (uniqueIds.length === 0) return [];
+
+    const rows = await this.dataSource.query(
+      `
+      SELECT
+        u.id AS studentId,
+        u.dni AS dni,
+        u.codigoAlumno AS codigoAlumno,
+        u.fullName AS fullName,
+        se.careerName AS careerName,
+        se.facultyGroup AS facultyGroup,
+        se.campusName AS campusName
+      FROM users u
+      LEFT JOIN (
+        SELECT
+          studentId,
+          MAX(TRIM(REPLACE(REPLACE(careerName, '\\r', ''), '\\n', ''))) AS careerName,
+          MAX(TRIM(facultyGroup)) AS facultyGroup,
+          MAX(TRIM(campusName)) AS campusName
+        FROM student_enrollments
+        WHERE periodId = ?
+        GROUP BY studentId
+      ) se ON se.studentId = u.id
+      WHERE u.id IN (${uniqueIds.map(() => '?').join(', ')})
+        AND u.role = ?
+      ORDER BY u.fullName ASC, u.dni ASC
+      `,
+      [periodId, ...uniqueIds, Role.ALUMNO]
+    );
+
+    return rows.map((row: any) => this.mapWorkshopStudentRow(row));
+  }
+
+  private async loadStudentsByCodes(codes: string[], periodId: string) {
+    const uniqueCodes = Array.from(
+      new Set((codes ?? []).map((code) => this.normalizeStudentCode(code)).filter(Boolean))
+    );
+    const result = new Map<string, WorkshopStudentSummaryRow[]>();
+    if (uniqueCodes.length === 0) return result;
+
+    const rows = await this.dataSource.query(
+      `
+      SELECT
+        u.id AS studentId,
+        u.dni AS dni,
+        u.codigoAlumno AS codigoAlumno,
+        u.fullName AS fullName,
+        se.careerName AS careerName,
+        se.facultyGroup AS facultyGroup,
+        se.campusName AS campusName
+      FROM users u
+      LEFT JOIN (
+        SELECT
+          studentId,
+          MAX(TRIM(REPLACE(REPLACE(careerName, '\\r', ''), '\\n', ''))) AS careerName,
+          MAX(TRIM(facultyGroup)) AS facultyGroup,
+          MAX(TRIM(campusName)) AS campusName
+        FROM student_enrollments
+        WHERE periodId = ?
+        GROUP BY studentId
+      ) se ON se.studentId = u.id
+      WHERE u.role = ?
+        AND UPPER(COALESCE(u.codigoAlumno, '')) IN (${uniqueCodes.map(() => '?').join(', ')})
+      ORDER BY u.fullName ASC, u.dni ASC
+      `,
+      [periodId, Role.ALUMNO, ...uniqueCodes]
+    );
+
+    for (const row of rows) {
+      const code = this.normalizeStudentCode(row.codigoAlumno);
+      if (!code) continue;
+      if (!result.has(code)) result.set(code, []);
+      result.get(code)!.push(this.mapWorkshopStudentRow(row));
+    }
+
+    return result;
+  }
+
   private async saveStudentIds(manager: any, workshopId: string, studentIds: string[]) {
     if (!studentIds || studentIds.length === 0) {
       throw new BadRequestException('Seleccion manual vacia');
@@ -577,6 +722,150 @@ export class WorkshopsService {
       facultyGroup: row.facultyGroup ? String(row.facultyGroup) : null,
       campusName: row.campusName ? String(row.campusName) : null,
     }));
+  }
+
+  async importStudentCodesFromExcel(file: {
+    buffer?: Buffer;
+    originalname?: string;
+  }): Promise<WorkshopStudentCodeImportResult> {
+    const fileBuffer = file?.buffer;
+    const originalName = String(file?.originalname ?? '').trim().toLowerCase();
+    if (!fileBuffer?.length) {
+      throw new BadRequestException('Debes adjuntar un archivo Excel.');
+    }
+    if (!originalName.endsWith('.xlsx') && !originalName.endsWith('.xls')) {
+      throw new BadRequestException('El archivo debe ser Excel (.xlsx o .xls).');
+    }
+
+    let workbook: XLSX.WorkBook;
+    try {
+      workbook = XLSX.read(fileBuffer, { type: 'buffer' });
+    } catch {
+      throw new BadRequestException('No se pudo leer el archivo Excel.');
+    }
+
+    const firstSheetName = workbook.SheetNames[0];
+    if (!firstSheetName) {
+      throw new BadRequestException('El archivo Excel no contiene hojas.');
+    }
+
+    const sheet = workbook.Sheets[firstSheetName];
+    const rows = XLSX.utils.sheet_to_json<(string | number | null)[]>(sheet, {
+      header: 1,
+      raw: false,
+      defval: '',
+    });
+
+    const recognizedHeaders = new Set(['CODIGO', 'CODIGOALUMNO', 'CODIGOESTUDIANTE']);
+    let headerRowIdx = -1;
+    let codeColumnIdx = -1;
+    for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
+      const row = rows[rowIdx] ?? [];
+      for (let colIdx = 0; colIdx < row.length; colIdx++) {
+        const token = this.normalizeHeaderToken(row[colIdx]);
+        if (!recognizedHeaders.has(token)) continue;
+        headerRowIdx = rowIdx;
+        codeColumnIdx = colIdx;
+        break;
+      }
+      if (codeColumnIdx >= 0) break;
+    }
+
+    const firstNonEmptyRowIdx = rows.findIndex((row) =>
+      (row ?? []).some((cell) => this.normalize(String(cell ?? '')).length > 0)
+    );
+    if (firstNonEmptyRowIdx < 0) {
+      throw new BadRequestException('El archivo Excel no contiene datos.');
+    }
+
+    if (codeColumnIdx < 0) {
+      const fallbackRow = rows[firstNonEmptyRowIdx] ?? [];
+      codeColumnIdx = fallbackRow.findIndex(
+        (cell) => this.normalize(String(cell ?? '')).length > 0
+      );
+    }
+    if (codeColumnIdx < 0) {
+      throw new BadRequestException(
+        'No se pudo identificar una columna de codigo de alumno en el archivo.'
+      );
+    }
+
+    const startRowIdx = headerRowIdx >= 0 ? headerRowIdx + 1 : firstNonEmptyRowIdx;
+    if (startRowIdx >= rows.length) {
+      throw new BadRequestException('El archivo no contiene filas de datos para importar.');
+    }
+
+    let rowsRead = 0;
+    let emptyRows = 0;
+    const uniqueCodes: string[] = [];
+    const seenCodes = new Set<string>();
+    const duplicateCodes: string[] = [];
+    const duplicateCodesSeen = new Set<string>();
+
+    for (let rowIdx = startRowIdx; rowIdx < rows.length; rowIdx++) {
+      const row = rows[rowIdx] ?? [];
+      rowsRead += 1;
+      const isRowEmpty = row.every((cell) => this.normalize(String(cell ?? '')).length === 0);
+      if (isRowEmpty) {
+        emptyRows += 1;
+        continue;
+      }
+
+      const normalizedCode = this.normalizeStudentCode(row[codeColumnIdx]);
+      if (!normalizedCode) {
+        emptyRows += 1;
+        continue;
+      }
+
+      if (seenCodes.has(normalizedCode)) {
+        if (!duplicateCodesSeen.has(normalizedCode)) {
+          duplicateCodesSeen.add(normalizedCode);
+          duplicateCodes.push(normalizedCode);
+        }
+        continue;
+      }
+
+      seenCodes.add(normalizedCode);
+      uniqueCodes.push(normalizedCode);
+    }
+
+    if (rowsRead === 0) {
+      throw new BadRequestException('El archivo no contiene filas de datos para importar.');
+    }
+    if (uniqueCodes.length === 0) {
+      throw new BadRequestException('No se encontraron codigos de alumno validos en el archivo.');
+    }
+
+    const periodId = await this.periodsService.getOperationalPeriodIdOrThrow();
+    const studentsByCode = await this.loadStudentsByCodes(uniqueCodes, periodId);
+    const students: WorkshopStudentSummaryRow[] = [];
+    const notFoundCodes: string[] = [];
+    const ambiguousCodes: string[] = [];
+
+    for (const code of uniqueCodes) {
+      const matches = studentsByCode.get(code) ?? [];
+      if (matches.length === 1) {
+        students.push(matches[0]);
+        continue;
+      }
+      if (matches.length > 1) {
+        ambiguousCodes.push(code);
+        continue;
+      }
+      notFoundCodes.push(code);
+    }
+
+    return {
+      students,
+      summary: {
+        rowsRead,
+        resolvedCount: students.length,
+        duplicateCodes,
+        notFoundCodes,
+        ambiguousCodes,
+        emptyRows,
+      },
+    };
   }
 
   async listFilters(filters: { facultyGroup?: string | string[]; campusName?: string | string[] }) {

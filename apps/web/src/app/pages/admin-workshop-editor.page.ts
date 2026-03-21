@@ -19,6 +19,7 @@ import {
   FilterLevel,
   FilterSnapshot,
   WorkshopOptionsResponse,
+  WorkshopStudentImportResponse,
   WorkshopRow,
   WorkshopSavePayload,
   WorkshopStudentRow,
@@ -38,6 +39,13 @@ interface FormState {
   deliveryMode: 'VIRTUAL' | 'PRESENCIAL';
   venueCampusName: string;
   responsibleTeacherId: string;
+}
+
+interface WorkshopImportState {
+  addedCount: number;
+  alreadySelectedCount: number;
+  students: WorkshopStudentRow[];
+  summary: WorkshopStudentImportResponse['summary'];
 }
 
 @Component({
@@ -175,22 +183,103 @@ interface FormState {
         </div>
       </div>
 
-      <div class="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
-        <div class="flex items-center justify-between">
+      <div class="rounded-2xl border border-slate-200 bg-white p-4 space-y-4">
+        <div class="flex flex-wrap items-start justify-between gap-3">
           <div>
             <div class="text-sm font-semibold">Alumnos del taller</div>
             <div class="text-xs text-slate-500">
-              Mostrando {{ students.length }} alumno(s) | Selección manual {{ selectedStudentIds.size }}
+              Mostrando {{ students.length }} alumno(s) visibles | Selección actual {{ selectedStudentIds.size }}
             </div>
           </div>
-          <button
-            type="button"
-            class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold hover:bg-slate-50 disabled:opacity-60"
-            (click)="clearManualStudentSelection()"
-            [disabled]="selectedStudentIds.size === 0"
-          >
-            Limpiar selección manual
-          </button>
+          <div class="flex flex-wrap gap-2">
+            <input
+              #excelInput
+              type="file"
+              accept=".xlsx,.xls"
+              class="hidden"
+              (change)="importStudentsFromExcel($event)"
+            />
+            <button
+              type="button"
+              class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold hover:bg-slate-50 disabled:opacity-60"
+              (click)="excelInput.click()"
+              [disabled]="importingExcel"
+            >
+              {{ importingExcel ? 'Importando...' : 'Subir Excel' }}
+            </button>
+            <button
+              type="button"
+              class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold hover:bg-slate-50 disabled:opacity-60"
+              (click)="clearManualStudentSelection()"
+              [disabled]="selectedStudentIds.size === 0"
+            >
+              Limpiar selección actual
+            </button>
+          </div>
+        </div>
+
+        <div class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+          Importa un Excel simple con una columna de código. Los válidos se suman a la selección actual y luego puedes seguir editando manualmente.
+        </div>
+
+        <div *ngIf="lastImportState" class="rounded-xl border border-sky-200 bg-sky-50 p-3 text-xs text-sky-900 space-y-2">
+          <div class="font-semibold">Resumen de última importación</div>
+          <div class="grid gap-2 md:grid-cols-3">
+            <div>Filas leídas: <b>{{ lastImportState.summary.rowsRead }}</b></div>
+            <div>Códigos válidos: <b>{{ lastImportState.summary.resolvedCount }}</b></div>
+            <div>Agregados a la selección: <b>{{ lastImportState.addedCount }}</b></div>
+            <div>Ya estaban seleccionados: <b>{{ lastImportState.alreadySelectedCount }}</b></div>
+            <div>Filas vacías: <b>{{ lastImportState.summary.emptyRows }}</b></div>
+            <div>No encontrados: <b>{{ lastImportState.summary.notFoundCodes.length }}</b></div>
+            <div>Códigos ambiguos: <b>{{ lastImportState.summary.ambiguousCodes.length }}</b></div>
+            <div>Códigos repetidos en archivo: <b>{{ lastImportState.summary.duplicateCodes.length }}</b></div>
+          </div>
+        </div>
+
+        <div class="rounded-xl border border-slate-200 p-3 space-y-3">
+          <div>
+            <div class="text-sm font-semibold">Seleccionados actualmente</div>
+            <div class="text-xs text-slate-500">
+              Aquí aparecen también los alumnos importados por Excel aunque no coincidan con los filtros visibles.
+            </div>
+          </div>
+
+          <div *ngIf="selectedStudents.length === 0" class="rounded-lg border border-dashed border-slate-200 px-3 py-4 text-xs text-slate-500">
+            Aún no hay alumnos seleccionados.
+          </div>
+
+          <div *ngIf="selectedStudents.length > 0" class="max-h-60 overflow-auto rounded-lg border border-slate-100">
+            <table class="min-w-full text-xs">
+              <thead class="sticky top-0 bg-slate-50 text-left text-slate-600">
+                <tr>
+                  <th class="px-2 py-1">Alumno</th>
+                  <th class="px-2 py-1">DNI</th>
+                  <th class="px-2 py-1">Código</th>
+                  <th class="px-2 py-1">Carrera</th>
+                  <th class="px-2 py-1">Sede</th>
+                  <th class="px-2 py-1 text-right">Acción</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr *ngFor="let student of selectedStudents; trackBy: trackStudentRow" class="border-t border-slate-100">
+                  <td class="px-2 py-1">{{ student.fullName }}</td>
+                  <td class="px-2 py-1">{{ student.dni || 'SIN DNI' }}</td>
+                  <td class="px-2 py-1">{{ student.codigoAlumno || 'SIN CODIGO' }}</td>
+                  <td class="px-2 py-1">{{ student.careerName || '-' }}</td>
+                  <td class="px-2 py-1">{{ student.campusName || '-' }}</td>
+                  <td class="px-2 py-1 text-right">
+                    <button
+                      type="button"
+                      class="rounded border border-slate-200 px-2 py-1 hover:bg-slate-50"
+                      (click)="removeSelectedStudent(student.studentId)"
+                    >
+                      Quitar
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
 
         <div class="grid gap-2 text-xs md:grid-cols-3">
@@ -246,7 +335,7 @@ interface FormState {
           </div>
         </div>
 
-        <div class="text-[11px] text-slate-500">Selecciona manualmente los alumnos que entrarán en la base del taller.</div>
+        <div class="text-[11px] text-slate-500">Selecciona manualmente los alumnos visibles para sumarlos o quitarlos de la base del taller.</div>
 
         <div class="max-h-72 overflow-auto rounded-lg border border-slate-100">
           <table class="min-w-full text-xs">
@@ -263,12 +352,12 @@ interface FormState {
               </tr>
             </thead>
             <tbody>
-              <tr *ngFor="let student of students" class="border-t border-slate-100">
+              <tr *ngFor="let student of students; trackBy: trackStudentRow" class="border-t border-slate-100">
                 <td class="px-2 py-1 text-center">
                   <input
                     type="checkbox"
                     [checked]="selectedStudentIds.has(student.studentId)"
-                    (change)="toggleStudent(student.studentId, $event)"
+                    (change)="toggleStudent(student, $event)"
                   />
                 </td>
                 <td class="px-2 py-1">{{ student.fullName }}</td>
@@ -371,11 +460,15 @@ export class AdminWorkshopEditorPage implements OnInit, OnDestroy {
   students: WorkshopStudentRow[] = [];
   teachers: AdminTeacher[] = [];
   selectedStudentIds = new Set<string>();
+  selectedStudents: WorkshopStudentRow[] = [];
+  importingExcel = false;
+  lastImportState: WorkshopImportState | null = null;
   options: WorkshopOptionsResponse = { faculties: [], campuses: [], careers: [] };
   filter: FilterSnapshot = { facultyGroups: [], campusNames: [], careerNames: [] };
   showRegenerationConfirm = false;
 
   form: FormState = this.createFormState(this.workshopsService.createEmptyWorkshop());
+  private readonly selectedStudentsById = new Map<string, WorkshopStudentRow>();
 
   ngOnInit() {
     this.setupFilterPipeline();
@@ -402,6 +495,44 @@ export class AdminWorkshopEditorPage implements OnInit, OnDestroy {
 
   async reload() {
     await this.loadFromRoute();
+  }
+
+  async importStudentsFromExcel(ev: Event) {
+    const input = ev.target as HTMLInputElement | null;
+    const file = input?.files?.[0] ?? null;
+    if (!file) return;
+
+    this.error = null;
+    this.success = null;
+    this.importingExcel = true;
+    try {
+      const result = await this.workshopsService.importStudentsByExcel(file);
+      const beforeSelection = new Set(this.selectedStudentIds);
+      for (const student of result.students) {
+        this.selectedStudentIds.add(student.studentId);
+      }
+      this.upsertSelectedStudents(result.students);
+      const addedCount = result.students.filter(
+        (student) => !beforeSelection.has(student.studentId)
+      ).length;
+      this.lastImportState = {
+        addedCount,
+        alreadySelectedCount: result.students.length - addedCount,
+        students: result.students,
+        summary: result.summary,
+      };
+      if (result.students.length === 0) {
+        this.success = 'El archivo fue procesado, pero no hubo codigos validos para agregar.';
+      } else {
+        this.success = `Importacion procesada. Se agregaron ${addedCount} alumno(s) nuevos a la seleccion.`;
+      }
+    } catch (e: any) {
+      this.error = e?.error?.message ?? 'No se pudo importar el Excel de alumnos.';
+    } finally {
+      this.importingExcel = false;
+      if (input) input.value = '';
+      this.safeDetectChanges();
+    }
   }
 
   async saveHeader() {
@@ -481,22 +612,34 @@ export class AdminWorkshopEditorPage implements OnInit, OnDestroy {
     return null;
   }
 
-  toggleStudent(id: string, ev: Event) {
+  toggleStudent(student: WorkshopStudentRow, ev: Event) {
     const checked = (ev.target as HTMLInputElement).checked;
-    if (checked) this.selectedStudentIds.add(id);
-    else this.selectedStudentIds.delete(id);
+    if (checked) {
+      this.selectedStudentIds.add(student.studentId);
+      this.upsertSelectedStudents([student]);
+    } else {
+      this.removeSelectedStudent(student.studentId);
+    }
   }
 
   toggleAllVisible(ev: Event) {
     const checked = (ev.target as HTMLInputElement).checked;
     for (const student of this.students) {
-      if (checked) this.selectedStudentIds.add(student.studentId);
-      else this.selectedStudentIds.delete(student.studentId);
+      if (checked) {
+        this.selectedStudentIds.add(student.studentId);
+      } else {
+        this.selectedStudentIds.delete(student.studentId);
+        this.selectedStudentsById.delete(student.studentId);
+      }
     }
+    if (checked) this.upsertSelectedStudents(this.students);
+    else this.refreshSelectedStudents();
   }
 
   clearManualStudentSelection() {
     this.selectedStudentIds = new Set<string>();
+    this.selectedStudentsById.clear();
+    this.selectedStudents = [];
     this.safeDetectChanges();
   }
 
@@ -507,6 +650,17 @@ export class AdminWorkshopEditorPage implements OnInit, OnDestroy {
 
   trackTeacher(_: number, item: AdminTeacher) {
     return item.id;
+  }
+
+  trackStudentRow(_: number, item: WorkshopStudentRow) {
+    return item.studentId;
+  }
+
+  removeSelectedStudent(studentId: string) {
+    this.selectedStudentIds.delete(studentId);
+    this.selectedStudentsById.delete(studentId);
+    this.refreshSelectedStudents();
+    this.safeDetectChanges();
   }
 
   toggleFilterValue(level: FilterLevel, value: string, ev: Event) {
@@ -528,7 +682,6 @@ export class AdminWorkshopEditorPage implements OnInit, OnDestroy {
     } else if (level === 'campus') {
       this.filter.careerNames = [];
     }
-    this.selectedStudentIds = new Set<string>();
     this.syncFormSinglesFromFilters();
     this.queueFilterReload();
   }
@@ -544,7 +697,6 @@ export class AdminWorkshopEditorPage implements OnInit, OnDestroy {
     } else {
       this.filter.careerNames = [...this.options.careers];
     }
-    this.selectedStudentIds = new Set<string>();
     this.syncFormSinglesFromFilters();
     this.queueFilterReload();
   }
@@ -560,7 +712,6 @@ export class AdminWorkshopEditorPage implements OnInit, OnDestroy {
     } else {
       this.filter.careerNames = [];
     }
-    this.selectedStudentIds = new Set<string>();
     this.syncFormSinglesFromFilters();
     this.queueFilterReload();
   }
@@ -582,6 +733,9 @@ export class AdminWorkshopEditorPage implements OnInit, OnDestroy {
     this.students = [];
     this.teachers = [];
     this.selectedStudentIds = new Set<string>();
+    this.selectedStudentsById.clear();
+    this.selectedStudents = [];
+    this.lastImportState = null;
     try {
       this.teachers = await this.workshopsService.listTeachers();
       const id = this.route.snapshot.paramMap.get('id');
@@ -603,6 +757,7 @@ export class AdminWorkshopEditorPage implements OnInit, OnDestroy {
       this.existingGroupsCount = groups.length;
       this.form = this.createFormState(workshop);
       this.selectedStudentIds = new Set(workshop.studentIds ?? []);
+      this.upsertSelectedStudents(workshop.selectedStudents ?? []);
       this.filter = this.workshopsService.buildInitialFilter(workshop);
       this.syncFormSinglesFromFilters();
       this.originalRegenerationFingerprint = this.buildRegenerationFingerprint();
@@ -625,6 +780,9 @@ export class AdminWorkshopEditorPage implements OnInit, OnDestroy {
         this.options = result.options;
         this.filter = result.snapshot;
         this.students = result.students;
+        this.upsertSelectedStudents(
+          result.students.filter((student) => this.selectedStudentIds.has(student.studentId))
+        );
         this.syncFormSinglesFromFilters();
         this.safeDetectChanges();
       });
@@ -681,6 +839,21 @@ export class AdminWorkshopEditorPage implements OnInit, OnDestroy {
       campusNames: this.workshopsService.normalizeList(this.filter.campusNames),
       careerNames: this.workshopsService.normalizeList(this.filter.careerNames),
     };
+  }
+
+  private upsertSelectedStudents(students: WorkshopStudentRow[]) {
+    for (const student of students ?? []) {
+      if (!student?.studentId) continue;
+      this.selectedStudentsById.set(student.studentId, student);
+    }
+    this.refreshSelectedStudents();
+  }
+
+  private refreshSelectedStudents() {
+    this.selectedStudents = Array.from(this.selectedStudentIds)
+      .map((studentId) => this.selectedStudentsById.get(studentId) ?? null)
+      .filter((student): student is WorkshopStudentRow => Boolean(student))
+      .sort((a, b) => a.fullName.localeCompare(b.fullName, 'es', { sensitivity: 'base' }));
   }
 
   private syncFormSinglesFromFilters() {

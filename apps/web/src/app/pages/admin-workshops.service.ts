@@ -40,6 +40,7 @@ export interface WorkshopRow {
   responsibleTeacherDni?: string | null;
   responsibleTeacherName?: string | null;
   studentIds?: string[];
+  selectedStudents?: WorkshopStudentRow[];
   selectedStudentsCount?: number;
   groupsCount?: number;
   scheduledGroupsCount?: number;
@@ -271,6 +272,20 @@ export interface WorkshopOptionsResponse {
   careers: string[];
 }
 
+export interface WorkshopStudentImportSummary {
+  rowsRead: number;
+  resolvedCount: number;
+  duplicateCodes: string[];
+  notFoundCodes: string[];
+  ambiguousCodes: string[];
+  emptyRows: number;
+}
+
+export interface WorkshopStudentImportResponse {
+  students: WorkshopStudentRow[];
+  summary: WorkshopStudentImportSummary;
+}
+
 export interface WorkshopSavePayload {
   name: string;
   mode: WorkshopMode;
@@ -315,6 +330,17 @@ export class AdminWorkshopsService {
       this.http.get<WorkshopStudentRow[]>('/api/admin/workshops/students/list', {
         params: this.buildStudentsHttpParams(snapshot),
       })
+    );
+  }
+
+  importStudentsByExcel(file: File) {
+    const formData = new FormData();
+    formData.append('file', file);
+    return firstValueFrom(
+      this.http.post<WorkshopStudentImportResponse>(
+        '/api/admin/workshops/students/import-codes',
+        formData
+      )
     );
   }
 
@@ -509,6 +535,7 @@ export class AdminWorkshopsService {
       responsibleTeacherDni: null,
       responsibleTeacherName: null,
       studentIds: [],
+      selectedStudents: [],
     };
   }
 
