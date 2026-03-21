@@ -594,8 +594,7 @@ export class GradesService {
       `${codeExpr} = ?`,
       `${codeExpr} LIKE ?`,
     ];
-    const params: unknown[] = [
-      periodId,
+    const searchParams: unknown[] = [
       normalized,
       `${normalized}%`,
       normalized,
@@ -606,7 +605,7 @@ export class GradesService {
       whereBlocks.push(
         tokens.map(() => `${searchExpr} LIKE ?`).join(' AND ')
       );
-      params.push(...tokens.map((token) => `%${token}%`));
+      searchParams.push(...tokens.map((token) => `%${token}%`));
     }
 
     const rows: Array<any> = await this.dataSource.query(
@@ -618,10 +617,23 @@ export class GradesService {
         u.fullName AS fullName,
         u.careerName AS careerName
       FROM users u
-      INNER JOIN section_student_courses ssc ON ssc.studentId = u.id
-      INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
       WHERE u.role = 'ALUMNO'
-        AND sc.periodId = ?
+        AND (
+          EXISTS (
+            SELECT 1
+            FROM section_student_courses ssc
+            INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
+            WHERE ssc.studentId = u.id
+              AND sc.periodId = ?
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM workshop_application_students was
+            INNER JOIN workshop_applications wa ON wa.id = was.applicationId
+            WHERE was.studentId = u.id
+              AND wa.periodId = ?
+          )
+        )
         AND (${whereBlocks.join(' OR ')})
       ORDER BY
         CASE
@@ -637,7 +649,9 @@ export class GradesService {
       LIMIT 20
       `,
       [
-        ...params,
+        periodId,
+        periodId,
+        ...searchParams,
         normalized,
         normalized,
         `${normalized}%`,

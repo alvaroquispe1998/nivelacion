@@ -287,6 +287,51 @@ export interface ResetAdminInternalUserPasswordRequest {
   newPassword: string;
 }
 
+export interface AdminAuditChangeItem {
+  field: string;
+  oldValue: unknown;
+  newValue: unknown;
+}
+
+export interface AdminAuditChange {
+  id: Uuid;
+  moduleName: string;
+  entityType: string;
+  entityId: string | null;
+  entityLabel: string | null;
+  action: string;
+  batchId: string | null;
+  actorUserId: Uuid | null;
+  actorName: string | null;
+  actorRole: string | null;
+  changes: AdminAuditChangeItem[];
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface AdminAuditActorFacet {
+  userId: Uuid;
+  name: string;
+  role: string | null;
+}
+
+export interface AdminAuditListResponse {
+  items: AdminAuditChange[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+}
+
+export interface AdminAuditFacetsResponse {
+  modules: string[];
+  entityTypes: string[];
+  actions: string[];
+  actors: AdminAuditActorFacet[];
+}
+
 export interface AdminScheduleConflictBlock {
   blockId: Uuid;
   sectionCourseId: Uuid;
