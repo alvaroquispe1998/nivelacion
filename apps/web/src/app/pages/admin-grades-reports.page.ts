@@ -40,6 +40,87 @@ interface AttendanceReportResponse {
   >;
 }
 
+interface WeeklySummaryCount {
+  attendedCount: number;
+  absentCount: number;
+}
+
+interface WeeklySummaryWeekRange {
+  label: string;
+  startDate: string | null;
+  endDate: string | null;
+}
+
+interface WeeklySummaryAggregate {
+  studentCount: number;
+  week1: WeeklySummaryCount;
+  week2: WeeklySummaryCount;
+  week3: WeeklySummaryCount;
+  totalAttendedCount: number;
+  totalAbsentCount: number;
+  totalAttendancePct: number;
+  totalAbsencePct: number;
+  studentsWithGrades: number;
+  approvedCount: number;
+  failedCount: number;
+  approvedPct: number;
+  failedPct: number;
+}
+
+interface WeeklySummaryCareerRow extends WeeklySummaryAggregate {
+  careerName: string;
+}
+
+interface WeeklySummaryBlock {
+  sectionCourseId: string;
+  courseName: string;
+  sectionCode: string | null;
+  sectionName: string;
+  currentCampusName: string;
+  currentModality: string;
+  weeks: WeeklySummaryWeekRange[];
+  careers: WeeklySummaryCareerRow[];
+  totals: WeeklySummaryAggregate;
+}
+
+interface WeeklySummaryResponse {
+  filters: {
+    originCampuses: string[];
+    sourceModalities: string[];
+  };
+  rows: WeeklySummaryBlock[];
+  totals: WeeklySummaryAggregate;
+}
+
+function createEmptyWeeklySummaryAggregate(): WeeklySummaryAggregate {
+  return {
+    studentCount: 0,
+    week1: { attendedCount: 0, absentCount: 0 },
+    week2: { attendedCount: 0, absentCount: 0 },
+    week3: { attendedCount: 0, absentCount: 0 },
+    totalAttendedCount: 0,
+    totalAbsentCount: 0,
+    totalAttendancePct: 0,
+    totalAbsencePct: 0,
+    studentsWithGrades: 0,
+    approvedCount: 0,
+    failedCount: 0,
+    approvedPct: 0,
+    failedPct: 0,
+  };
+}
+
+function createEmptyWeeklySummaryResponse(): WeeklySummaryResponse {
+  return {
+    filters: {
+      originCampuses: [],
+      sourceModalities: [],
+    },
+    rows: [],
+    totals: createEmptyWeeklySummaryAggregate(),
+  };
+}
+
 @Component({
   standalone: true,
   imports: [CommonModule, FormsModule],
@@ -82,31 +163,108 @@ interface AttendanceReportResponse {
         </div>
       </div>
 
-      <div *ngIf="error" class="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+      <div
+        *ngIf="error"
+        class="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+      >
         {{ error }}
       </div>
 
       <div class="rounded-2xl border border-slate-200 bg-white p-5">
-        <div class="grid gap-2 md:grid-cols-3">
+        <div
+          class="grid gap-2 md:grid-cols-3"
+          *ngIf="activeTab !== 'attendanceWeeklySummary'"
+        >
           <label class="text-xs font-semibold text-slate-700">
             Facultad
-            <select class="mt-1 w-full rounded-lg border border-slate-200 px-2 py-2 text-sm" [(ngModel)]="reportFaculty" (ngModelChange)="loadReports()">
+            <select
+              class="mt-1 w-full rounded-lg border border-slate-200 px-2 py-2 text-sm"
+              [(ngModel)]="reportFaculty"
+              (ngModelChange)="loadReports()"
+            >
               <option value="">Todas</option>
-              <option *ngFor="let f of reportFilters.faculties; trackBy: trackFaculty" [value]="f.facultyGroup">{{ f.facultyName }}</option>
+              <option
+                *ngFor="let f of reportFilters.faculties; trackBy: trackFaculty"
+                [value]="f.facultyGroup"
+              >
+                {{ f.facultyName }}
+              </option>
             </select>
           </label>
           <label class="text-xs font-semibold text-slate-700">
             Sede
-            <select class="mt-1 w-full rounded-lg border border-slate-200 px-2 py-2 text-sm" [(ngModel)]="reportCampus" (ngModelChange)="loadReports()">
+            <select
+              class="mt-1 w-full rounded-lg border border-slate-200 px-2 py-2 text-sm"
+              [(ngModel)]="reportCampus"
+              (ngModelChange)="loadReports()"
+            >
               <option value="">Todas</option>
-              <option *ngFor="let c of reportFilters.campuses; trackBy: trackText" [value]="c">{{ c }}</option>
+              <option
+                *ngFor="let c of reportFilters.campuses; trackBy: trackText"
+                [value]="c"
+              >
+                {{ c }}
+              </option>
             </select>
           </label>
           <label class="text-xs font-semibold text-slate-700">
             Carrera
-            <select class="mt-1 w-full rounded-lg border border-slate-200 px-2 py-2 text-sm" [(ngModel)]="reportCareer" (ngModelChange)="loadReports()">
+            <select
+              class="mt-1 w-full rounded-lg border border-slate-200 px-2 py-2 text-sm"
+              [(ngModel)]="reportCareer"
+              (ngModelChange)="loadReports()"
+            >
               <option value="">Todas</option>
-              <option *ngFor="let c of reportFilters.careers; trackBy: trackText" [value]="c">{{ c }}</option>
+              <option
+                *ngFor="let c of reportFilters.careers; trackBy: trackText"
+                [value]="c"
+              >
+                {{ c }}
+              </option>
+            </select>
+          </label>
+        </div>
+
+        <div
+          class="grid gap-2 md:grid-cols-2"
+          *ngIf="activeTab === 'attendanceWeeklySummary'"
+        >
+          <label class="text-xs font-semibold text-slate-700">
+            Local del alumno (segun Excel)
+            <select
+              class="mt-1 w-full rounded-lg border border-slate-200 px-2 py-2 text-sm"
+              [(ngModel)]="weeklyOriginCampus"
+              (ngModelChange)="loadWeeklySummary()"
+            >
+              <option value="">Todas</option>
+              <option
+                *ngFor="
+                  let campus of weeklySummaryReport.filters.originCampuses;
+                  trackBy: trackText
+                "
+                [value]="campus"
+              >
+                {{ campus }}
+              </option>
+            </select>
+          </label>
+          <label class="text-xs font-semibold text-slate-700">
+            Modalidad del alumno (segun Excel)
+            <select
+              class="mt-1 w-full rounded-lg border border-slate-200 px-2 py-2 text-sm"
+              [(ngModel)]="weeklySourceModality"
+              (ngModelChange)="loadWeeklySummary()"
+            >
+              <option value="">Todas</option>
+              <option
+                *ngFor="
+                  let modality of weeklySummaryReport.filters.sourceModalities;
+                  trackBy: trackText
+                "
+                [value]="modality"
+              >
+                {{ modality }}
+              </option>
             </select>
           </label>
         </div>
@@ -115,7 +273,11 @@ interface AttendanceReportResponse {
           <button
             type="button"
             class="rounded-lg border px-3 py-1.5 text-xs font-semibold"
-            [ngClass]="activeTab === 'students' ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'"
+            [ngClass]="
+              activeTab === 'students'
+                ? 'border-slate-900 bg-slate-900 text-white'
+                : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+            "
             (click)="activeTab = 'students'"
           >
             Total alumnado por carrera
@@ -123,7 +285,11 @@ interface AttendanceReportResponse {
           <button
             type="button"
             class="rounded-lg border px-3 py-1.5 text-xs font-semibold"
-            [ngClass]="activeTab === 'averages' ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'"
+            [ngClass]="
+              activeTab === 'averages'
+                ? 'border-slate-900 bg-slate-900 text-white'
+                : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+            "
             (click)="activeTab = 'averages'"
           >
             Promedio del alumno
@@ -131,10 +297,26 @@ interface AttendanceReportResponse {
           <button
             type="button"
             class="rounded-lg border px-3 py-1.5 text-xs font-semibold"
-            [ngClass]="activeTab === 'attendance' ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'"
+            [ngClass]="
+              activeTab === 'attendance'
+                ? 'border-slate-900 bg-slate-900 text-white'
+                : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+            "
             (click)="activeTab = 'attendance'"
           >
             Asistencia por carrera
+          </button>
+          <button
+            type="button"
+            class="rounded-lg border px-3 py-1.5 text-xs font-semibold"
+            [ngClass]="
+              activeTab === 'attendanceWeeklySummary'
+                ? 'border-slate-900 bg-slate-900 text-white'
+                : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+            "
+            (click)="activeTab = 'attendanceWeeklySummary'"
+          >
+            Resumen semanal
           </button>
         </div>
 
@@ -151,20 +333,29 @@ interface AttendanceReportResponse {
                 </tr>
               </thead>
               <tbody>
-                <tr *ngFor="let row of studentsReport; trackBy: trackStudentReport" class="border-t border-slate-100">
+                <tr
+                  *ngFor="let row of studentsReport; trackBy: trackStudentReport"
+                  class="border-t border-slate-100"
+                >
                   <td class="px-3 py-2">{{ row.dni }}</td>
                   <td class="px-3 py-2">{{ row.codigoAlumno || 'SIN CODIGO' }}</td>
                   <td class="px-3 py-2">{{ row.fullName }}</td>
                   <td class="px-3 py-2">{{ row.careerName || 'SIN CARRERA' }}</td>
                 </tr>
-                <tr *ngIf="studentsReport.length === 0"><td colspan="4" class="px-3 py-4 text-center text-slate-500">Sin datos</td></tr>
+                <tr *ngIf="studentsReport.length === 0">
+                  <td colspan="4" class="px-3 py-4 text-center text-slate-500">
+                    Sin datos
+                  </td>
+                </tr>
               </tbody>
             </table>
           </div>
         </div>
 
         <div class="mt-4" *ngIf="activeTab === 'averages'">
-          <div class="text-sm font-semibold">Reporte de nota promedio del alumno</div>
+          <div class="text-sm font-semibold">
+            Reporte de nota promedio del alumno
+          </div>
           <div class="mt-2 overflow-x-auto rounded-xl border border-slate-200">
             <table class="min-w-full text-xs">
               <thead class="bg-slate-50">
@@ -177,14 +368,23 @@ interface AttendanceReportResponse {
                 </tr>
               </thead>
               <tbody>
-                <tr *ngFor="let row of averagesReport; trackBy: trackStudentReport" class="border-t border-slate-100">
+                <tr
+                  *ngFor="let row of averagesReport; trackBy: trackStudentReport"
+                  class="border-t border-slate-100"
+                >
                   <td class="px-3 py-2">{{ row.dni }}</td>
                   <td class="px-3 py-2">{{ row.codigoAlumno || 'SIN CODIGO' }}</td>
                   <td class="px-3 py-2">{{ row.fullName }}</td>
-                  <td class="px-3 py-2 text-right">{{ row.average | number:'1.2-2' }}</td>
+                  <td class="px-3 py-2 text-right">
+                    {{ row.average | number: '1.2-2' }}
+                  </td>
                   <td class="px-3 py-2 text-center">{{ row.approved }}</td>
                 </tr>
-                <tr *ngIf="averagesReport.length === 0"><td colspan="5" class="px-3 py-4 text-center text-slate-500">Sin datos</td></tr>
+                <tr *ngIf="averagesReport.length === 0">
+                  <td colspan="5" class="px-3 py-4 text-center text-slate-500">
+                    Sin datos
+                  </td>
+                </tr>
               </tbody>
             </table>
           </div>
@@ -200,26 +400,201 @@ interface AttendanceReportResponse {
                   <th class="px-3 py-2 text-left">Codigo</th>
                   <th class="px-3 py-2 text-left">Nombres completos</th>
                   <th class="px-3 py-2 text-left">Carrera</th>
-                  <th class="px-3 py-2 text-center" *ngFor="let date of attendanceReport.dates; trackBy: trackText">{{ date }}</th>
+                  <th
+                    class="px-3 py-2 text-center"
+                    *ngFor="let date of attendanceReport.dates; trackBy: trackText"
+                  >
+                    {{ date }}
+                  </th>
                   <th class="px-3 py-2 text-right">Asistencias totales</th>
                 </tr>
               </thead>
               <tbody>
-                <tr *ngFor="let row of attendanceReport.rows; trackBy: trackStudentReport" class="border-t border-slate-100">
+                <tr
+                  *ngFor="let row of attendanceReport.rows; trackBy: trackStudentReport"
+                  class="border-t border-slate-100"
+                >
                   <td class="px-3 py-2">{{ row.dni }}</td>
                   <td class="px-3 py-2">{{ row.codigoAlumno || 'SIN CODIGO' }}</td>
                   <td class="px-3 py-2">{{ row.fullName }}</td>
                   <td class="px-3 py-2">{{ row.careerName || 'SIN CARRERA' }}</td>
-                  <td class="px-3 py-2 text-center" *ngFor="let date of attendanceReport.dates; trackBy: trackText">
+                  <td
+                    class="px-3 py-2 text-center"
+                    *ngFor="let date of attendanceReport.dates; trackBy: trackText"
+                  >
                     {{ attendanceLabel(row.attendanceByDate[date]) }}
                   </td>
-                  <td class="px-3 py-2 text-right font-semibold">{{ row.totalAsistencias }}</td>
+                  <td class="px-3 py-2 text-right font-semibold">
+                    {{ row.totalAsistencias }}
+                  </td>
                 </tr>
                 <tr *ngIf="attendanceReport.rows.length === 0">
-                  <td [attr.colspan]="5 + attendanceReport.dates.length" class="px-3 py-4 text-center text-slate-500">Sin datos</td>
+                  <td
+                    [attr.colspan]="5 + attendanceReport.dates.length"
+                    class="px-3 py-4 text-center text-slate-500"
+                  >
+                    Sin datos
+                  </td>
                 </tr>
               </tbody>
             </table>
+          </div>
+        </div>
+
+        <div class="mt-4 space-y-4" *ngIf="activeTab === 'attendanceWeeklySummary'">
+          <div class="grid gap-3 md:grid-cols-4">
+            <div class="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <div class="text-xs font-semibold text-slate-500">Registros</div>
+              <div class="mt-1 text-lg font-semibold text-slate-900">
+                {{ weeklySummaryReport.totals.studentCount }}
+              </div>
+            </div>
+            <div class="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <div class="text-xs font-semibold text-slate-500">
+                Asistencia total
+              </div>
+              <div class="mt-1 text-lg font-semibold text-slate-900">
+                {{ weeklySummaryReport.totals.totalAttendancePct | number: '1.0-2' }}%
+              </div>
+            </div>
+            <div class="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <div class="text-xs font-semibold text-slate-500">Aprobados</div>
+              <div class="mt-1 text-lg font-semibold text-slate-900">
+                {{ weeklySummaryReport.totals.approvedPct | number: '1.0-2' }}%
+              </div>
+            </div>
+            <div class="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <div class="text-xs font-semibold text-slate-500">
+                Desaprobados
+              </div>
+              <div class="mt-1 text-lg font-semibold text-slate-900">
+                {{ weeklySummaryReport.totals.failedPct | number: '1.0-2' }}%
+              </div>
+            </div>
+          </div>
+
+          <div
+            *ngIf="weeklySummaryReport.rows.length === 0"
+            class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-4 text-center text-sm text-slate-500"
+          >
+            Sin datos
+          </div>
+
+          <div
+            *ngFor="
+              let block of weeklySummaryReport.rows;
+              trackBy: trackWeeklySummaryBlock
+            "
+            class="overflow-hidden rounded-2xl border border-slate-200"
+          >
+            <div class="border-b border-slate-200 bg-slate-50 p-4">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div class="text-sm font-semibold text-slate-900">
+                    {{ block.courseName }} -
+                    {{ block.sectionCode || block.sectionName }}
+                  </div>
+                  <div class="mt-1 text-xs text-slate-600">
+                    Sede actual: <b>{{ block.currentCampusName }}</b> |
+                    Modalidad actual: <b>{{ block.currentModality }}</b>
+                  </div>
+                </div>
+                <div class="space-y-1 text-right text-xs text-slate-500">
+                  <div *ngFor="let week of block.weeks; trackBy: trackWeeklyWeek">
+                    {{ formatWeekRange(week) }}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="overflow-x-auto">
+              <table class="min-w-full text-xs">
+                <thead class="bg-white">
+                  <tr>
+                    <th class="px-3 py-2 text-left">Carrera</th>
+                    <th class="px-3 py-2 text-center">Semana 1</th>
+                    <th class="px-3 py-2 text-center">Semana 2</th>
+                    <th class="px-3 py-2 text-center">Semana 3</th>
+                    <th class="px-3 py-2 text-right">Asistieron total</th>
+                    <th class="px-3 py-2 text-right">Faltaron total</th>
+                    <th class="px-3 py-2 text-right">% asistencia total</th>
+                    <th class="px-3 py-2 text-right">% no asistencia total</th>
+                    <th class="px-3 py-2 text-right">% aprobados</th>
+                    <th class="px-3 py-2 text-right">% desaprobados</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    *ngFor="
+                      let career of block.careers;
+                      trackBy: trackWeeklySummaryCareer
+                    "
+                    class="border-t border-slate-100"
+                  >
+                    <td class="px-3 py-2 font-medium text-slate-700">
+                      {{ career.careerName }}
+                    </td>
+                    <td class="px-3 py-2 text-center">
+                      {{ formatWeeklyCount(career.week1) }}
+                    </td>
+                    <td class="px-3 py-2 text-center">
+                      {{ formatWeeklyCount(career.week2) }}
+                    </td>
+                    <td class="px-3 py-2 text-center">
+                      {{ formatWeeklyCount(career.week3) }}
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                      {{ career.totalAttendedCount }}
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                      {{ career.totalAbsentCount }}
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                      {{ career.totalAttendancePct | number: '1.0-2' }}%
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                      {{ career.totalAbsencePct | number: '1.0-2' }}%
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                      {{ career.approvedPct | number: '1.0-2' }}%
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                      {{ career.failedPct | number: '1.0-2' }}%
+                    </td>
+                  </tr>
+                  <tr class="border-t-2 border-slate-200 bg-slate-50 font-semibold">
+                    <td class="px-3 py-2">TOTAL</td>
+                    <td class="px-3 py-2 text-center">
+                      {{ formatWeeklyCount(block.totals.week1) }}
+                    </td>
+                    <td class="px-3 py-2 text-center">
+                      {{ formatWeeklyCount(block.totals.week2) }}
+                    </td>
+                    <td class="px-3 py-2 text-center">
+                      {{ formatWeeklyCount(block.totals.week3) }}
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                      {{ block.totals.totalAttendedCount }}
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                      {{ block.totals.totalAbsentCount }}
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                      {{ block.totals.totalAttendancePct | number: '1.0-2' }}%
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                      {{ block.totals.totalAbsencePct | number: '1.0-2' }}%
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                      {{ block.totals.approvedPct | number: '1.0-2' }}%
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                      {{ block.totals.failedPct | number: '1.0-2' }}%
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>
@@ -233,7 +608,11 @@ export class AdminGradesReportsPage implements OnDestroy {
   private periodSub?: Subscription;
 
   error: string | null = null;
-  activeTab: 'students' | 'averages' | 'attendance' = 'students';
+  activeTab:
+    | 'students'
+    | 'averages'
+    | 'attendance'
+    | 'attendanceWeeklySummary' = 'students';
   exportingExcel = false;
   exportingPdf = false;
 
@@ -249,6 +628,9 @@ export class AdminGradesReportsPage implements OnDestroy {
   studentsReport: StudentsReportRow[] = [];
   averagesReport: AveragesReportRow[] = [];
   attendanceReport: AttendanceReportResponse = { dates: [], rows: [] };
+  weeklyOriginCampus = '';
+  weeklySourceModality = '';
+  weeklySummaryReport: WeeklySummaryResponse = createEmptyWeeklySummaryResponse();
 
   get currentPeriodLabel() {
     const period = this.adminPeriodContext.getSelectedPeriod();
@@ -279,10 +661,35 @@ export class AdminGradesReportsPage implements OnDestroy {
     return item.facultyGroup;
   }
 
+  trackWeeklySummaryBlock(_: number, item: { sectionCourseId: string }) {
+    return item.sectionCourseId;
+  }
+
+  trackWeeklySummaryCareer(_: number, item: { careerName: string }) {
+    return item.careerName;
+  }
+
+  trackWeeklyWeek(_: number, item: WeeklySummaryWeekRange) {
+    return `${item.label}:${item.startDate || '-'}:${item.endDate || '-'}`;
+  }
+
   attendanceLabel(status: 'ASISTIO' | 'FALTO' | '' | undefined) {
     if (status === 'ASISTIO') return 'SI';
     if (status === 'FALTO') return 'NO';
     return '-';
+  }
+
+  formatWeeklyCount(value: WeeklySummaryCount) {
+    return `${Number(value?.attendedCount ?? 0)}/${Number(value?.absentCount ?? 0)}`;
+  }
+
+  formatWeekRange(value: WeeklySummaryWeekRange) {
+    const label = String(value?.label ?? 'Semana').trim() || 'Semana';
+    const startDate = String(value?.startDate ?? '').trim();
+    const endDate = String(value?.endDate ?? '').trim();
+    if (!startDate || !endDate) return `${label}: Sin sesiones registradas`;
+    if (startDate === endDate) return `${label}: ${startDate}`;
+    return `${label}: ${startDate} al ${endDate}`;
   }
 
   async loadAll() {
@@ -294,7 +701,7 @@ export class AdminGradesReportsPage implements OnDestroy {
       this.reportFilters = filters;
       if (
         this.reportFaculty &&
-        !filters.faculties.some((x) => x.facultyGroup === this.reportFaculty)
+        !filters.faculties.some((item) => item.facultyGroup === this.reportFaculty)
       ) {
         this.reportFaculty = '';
       }
@@ -304,14 +711,18 @@ export class AdminGradesReportsPage implements OnDestroy {
       if (this.reportCareer && !filters.careers.includes(this.reportCareer)) {
         this.reportCareer = '';
       }
-      await this.loadReports();
+      await Promise.all([this.loadReports(true), this.loadWeeklySummary(true)]);
     } catch (e: any) {
-      this.error = this.extractError(e, 'No se pudo cargar reportes por carrera.');
+      this.error = this.extractError(
+        e,
+        'No se pudo cargar reportes por carrera.'
+      );
+    } finally {
       this.cdr.detectChanges();
     }
   }
 
-  async loadReports() {
+  async loadReports(skipDetectChanges = false) {
     this.error = null;
     try {
       const params = this.buildReportParams();
@@ -342,7 +753,55 @@ export class AdminGradesReportsPage implements OnDestroy {
       this.averagesReport = [];
       this.attendanceReport = { dates: [], rows: [] };
     } finally {
-      this.cdr.detectChanges();
+      if (!skipDetectChanges) {
+        this.cdr.detectChanges();
+      }
+    }
+  }
+
+  async loadWeeklySummary(skipDetectChanges = false) {
+    this.error = null;
+    try {
+      const response = await firstValueFrom(
+        this.http.get<WeeklySummaryResponse>(
+          '/api/admin/grades/reports/attendance-weekly-summary',
+          {
+            params: this.buildWeeklySummaryParams(),
+          }
+        )
+      );
+
+      let shouldReload = false;
+      if (
+        this.weeklyOriginCampus &&
+        !response.filters.originCampuses.includes(this.weeklyOriginCampus)
+      ) {
+        this.weeklyOriginCampus = '';
+        shouldReload = true;
+      }
+      if (
+        this.weeklySourceModality &&
+        !response.filters.sourceModalities.includes(this.weeklySourceModality)
+      ) {
+        this.weeklySourceModality = '';
+        shouldReload = true;
+      }
+      if (shouldReload) {
+        await this.loadWeeklySummary(skipDetectChanges);
+        return;
+      }
+
+      this.weeklySummaryReport = response;
+    } catch (e: any) {
+      this.error = this.extractError(
+        e,
+        'No se pudo cargar el resumen semanal.'
+      );
+      this.weeklySummaryReport = createEmptyWeeklySummaryResponse();
+    } finally {
+      if (!skipDetectChanges) {
+        this.cdr.detectChanges();
+      }
     }
   }
 
@@ -356,16 +815,27 @@ export class AdminGradesReportsPage implements OnDestroy {
     try {
       const suffix = format === 'excel' ? 'excel' : 'pdf';
       const extension = format === 'excel' ? 'xlsx' : 'pdf';
-      const endpoint =
-        this.activeTab === 'students'
-          ? `/api/admin/grades/reports/students/export/${suffix}`
-          : this.activeTab === 'averages'
-            ? `/api/admin/grades/reports/averages/export/${suffix}`
-            : `/api/admin/grades/reports/attendance/export/${suffix}`;
+      let endpoint = '';
+      let params = new HttpParams();
+
+      if (this.activeTab === 'students') {
+        endpoint = `/api/admin/grades/reports/students/export/${suffix}`;
+        params = this.buildReportParams();
+      } else if (this.activeTab === 'averages') {
+        endpoint = `/api/admin/grades/reports/averages/export/${suffix}`;
+        params = this.buildReportParams();
+      } else if (this.activeTab === 'attendance') {
+        endpoint = `/api/admin/grades/reports/attendance/export/${suffix}`;
+        params = this.buildReportParams();
+      } else {
+        endpoint = `/api/admin/grades/reports/attendance-weekly-summary/export/${suffix}`;
+        params = this.buildWeeklySummaryParams();
+      }
+
       const response = await firstValueFrom(
         this.http.get(endpoint, {
           observe: 'response',
-          params: this.buildReportParams(),
+          params,
           responseType: 'blob',
         })
       );
@@ -402,10 +872,25 @@ export class AdminGradesReportsPage implements OnDestroy {
     return params;
   }
 
+  private buildWeeklySummaryParams() {
+    let params = new HttpParams();
+    if (this.weeklyOriginCampus) {
+      params = params.set('originCampus', this.weeklyOriginCampus);
+    }
+    if (this.weeklySourceModality) {
+      params = params.set('sourceModality', this.weeklySourceModality);
+    }
+    return params;
+  }
+
   private buildDownloadFileName(extension: 'xlsx' | 'pdf') {
     const period = this.adminPeriodContext.getSelectedPeriod();
     const periodPart = this.sanitizeFilePart(period?.code ?? 'periodo');
-    const filters = [this.reportFaculty, this.reportCampus, this.reportCareer]
+    const filters =
+      this.activeTab === 'attendanceWeeklySummary'
+        ? [this.weeklyOriginCampus, this.weeklySourceModality]
+        : [this.reportFaculty, this.reportCampus, this.reportCareer];
+    const filterPart = filters
       .map((item) => this.sanitizeFilePart(item))
       .filter(Boolean)
       .join('_');
@@ -414,8 +899,10 @@ export class AdminGradesReportsPage implements OnDestroy {
         ? 'reporte_alumnado'
         : this.activeTab === 'averages'
           ? 'reporte_promedios'
-          : 'reporte_asistencia';
-    const fileName = [base, periodPart, filters]
+          : this.activeTab === 'attendance'
+            ? 'reporte_asistencia'
+            : 'reporte_resumen_semanal';
+    const fileName = [base, periodPart, filterPart]
       .filter(Boolean)
       .join('_')
       .replace(/\s+/g, '_');
@@ -438,7 +925,9 @@ export class AdminGradesReportsPage implements OnDestroy {
   }
 
   private cleanFileName(value: string) {
-    return String(value ?? '').trim().replace(/[\\/:*?"<>|]+/g, '_') || 'archivo';
+    return (
+      String(value ?? '').trim().replace(/[\\/:*?"<>|]+/g, '_') || 'archivo'
+    );
   }
 
   private sanitizeFilePart(value: string | null | undefined) {
