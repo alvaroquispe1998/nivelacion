@@ -86,7 +86,9 @@ interface WeeklySummaryBlock {
 interface WeeklySummaryResponse {
   filters: {
     originCampuses: string[];
+    faculties: Array<{ facultyGroup: string; facultyName: string }>;
     sourceModalities: string[];
+    courses: string[];
   };
   rows: WeeklySummaryBlock[];
   totals: WeeklySummaryAggregate;
@@ -114,7 +116,9 @@ function createEmptyWeeklySummaryResponse(): WeeklySummaryResponse {
   return {
     filters: {
       originCampuses: [],
+      faculties: [],
       sourceModalities: [],
+      courses: [],
     },
     rows: [],
     totals: createEmptyWeeklySummaryAggregate(),
@@ -226,7 +230,7 @@ function createEmptyWeeklySummaryResponse(): WeeklySummaryResponse {
         </div>
 
         <div
-          class="grid gap-2 md:grid-cols-2"
+          class="grid gap-2 md:grid-cols-4"
           *ngIf="activeTab === 'attendanceWeeklySummary'"
         >
           <label class="text-xs font-semibold text-slate-700">
@@ -249,6 +253,25 @@ function createEmptyWeeklySummaryResponse(): WeeklySummaryResponse {
             </select>
           </label>
           <label class="text-xs font-semibold text-slate-700">
+            Facultad
+            <select
+              class="mt-1 w-full rounded-lg border border-slate-200 px-2 py-2 text-sm"
+              [(ngModel)]="weeklyFacultyGroup"
+              (ngModelChange)="loadWeeklySummary()"
+            >
+              <option value="">Todas</option>
+              <option
+                *ngFor="
+                  let faculty of weeklySummaryReport.filters.faculties;
+                  trackBy: trackFaculty
+                "
+                [value]="faculty.facultyGroup"
+              >
+                {{ faculty.facultyName }}
+              </option>
+            </select>
+          </label>
+          <label class="text-xs font-semibold text-slate-700">
             Modalidad del alumno (segun Excel)
             <select
               class="mt-1 w-full rounded-lg border border-slate-200 px-2 py-2 text-sm"
@@ -264,6 +287,25 @@ function createEmptyWeeklySummaryResponse(): WeeklySummaryResponse {
                 [value]="modality"
               >
                 {{ modality }}
+              </option>
+            </select>
+          </label>
+          <label class="text-xs font-semibold text-slate-700">
+            Curso
+            <select
+              class="mt-1 w-full rounded-lg border border-slate-200 px-2 py-2 text-sm"
+              [(ngModel)]="weeklyCourseName"
+              (ngModelChange)="loadWeeklySummary()"
+            >
+              <option value="">Todos</option>
+              <option
+                *ngFor="
+                  let course of weeklySummaryReport.filters.courses;
+                  trackBy: trackText
+                "
+                [value]="course"
+              >
+                {{ course }}
               </option>
             </select>
           </label>
@@ -629,7 +671,9 @@ export class AdminGradesReportsPage implements OnDestroy {
   averagesReport: AveragesReportRow[] = [];
   attendanceReport: AttendanceReportResponse = { dates: [], rows: [] };
   weeklyOriginCampus = '';
+  weeklyFacultyGroup = '';
   weeklySourceModality = '';
+  weeklyCourseName = '';
   weeklySummaryReport: WeeklySummaryResponse = createEmptyWeeklySummaryResponse();
 
   get currentPeriodLabel() {
@@ -780,10 +824,26 @@ export class AdminGradesReportsPage implements OnDestroy {
         shouldReload = true;
       }
       if (
+        this.weeklyFacultyGroup &&
+        !response.filters.faculties.some(
+          (item) => item.facultyGroup === this.weeklyFacultyGroup
+        )
+      ) {
+        this.weeklyFacultyGroup = '';
+        shouldReload = true;
+      }
+      if (
         this.weeklySourceModality &&
         !response.filters.sourceModalities.includes(this.weeklySourceModality)
       ) {
         this.weeklySourceModality = '';
+        shouldReload = true;
+      }
+      if (
+        this.weeklyCourseName &&
+        !response.filters.courses.includes(this.weeklyCourseName)
+      ) {
+        this.weeklyCourseName = '';
         shouldReload = true;
       }
       if (shouldReload) {
@@ -877,8 +937,14 @@ export class AdminGradesReportsPage implements OnDestroy {
     if (this.weeklyOriginCampus) {
       params = params.set('originCampus', this.weeklyOriginCampus);
     }
+    if (this.weeklyFacultyGroup) {
+      params = params.set('facultyGroup', this.weeklyFacultyGroup);
+    }
     if (this.weeklySourceModality) {
       params = params.set('sourceModality', this.weeklySourceModality);
+    }
+    if (this.weeklyCourseName) {
+      params = params.set('courseName', this.weeklyCourseName);
     }
     return params;
   }
@@ -888,7 +954,12 @@ export class AdminGradesReportsPage implements OnDestroy {
     const periodPart = this.sanitizeFilePart(period?.code ?? 'periodo');
     const filters =
       this.activeTab === 'attendanceWeeklySummary'
-        ? [this.weeklyOriginCampus, this.weeklySourceModality]
+        ? [
+            this.weeklyOriginCampus,
+            this.weeklyFacultyGroup,
+            this.weeklySourceModality,
+            this.weeklyCourseName,
+          ]
         : [this.reportFaculty, this.reportCampus, this.reportCareer];
     const filterPart = filters
       .map((item) => this.sanitizeFilePart(item))
