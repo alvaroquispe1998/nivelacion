@@ -38,7 +38,9 @@ interface GradesReportFilter {
 
 interface AttendanceWeeklySummaryFilter {
   originCampus?: string;
+  facultyGroup?: string;
   sourceModality?: string;
+  courseName?: string;
 }
 
 interface AttendanceWeeklySummaryCount {
@@ -88,7 +90,9 @@ interface AttendanceWeeklySummaryBlock {
 interface AttendanceWeeklySummaryReportResponse {
   filters: {
     originCampuses: string[];
+    faculties: Array<{ facultyGroup: string; facultyName: string }>;
     sourceModalities: string[];
+    courses: string[];
   };
   rows: AttendanceWeeklySummaryBlock[];
   totals: AttendanceWeeklySummaryAggregate;
@@ -666,24 +670,13 @@ export class GradesService {
     });
 
     const filters = this.buildAttendanceWeeklySummaryFilters(
-      originMetadata.filters,
-      mergedRows
+      mergedRows,
+      normalizedFilter
     );
-    const filteredRows = mergedRows.filter((row) => {
-      if (
-        normalizedFilter.originCampus &&
-        row.originCampus !== normalizedFilter.originCampus
-      ) {
-        return false;
-      }
-      if (
-        normalizedFilter.sourceModality &&
-        row.sourceModality !== normalizedFilter.sourceModality
-      ) {
-        return false;
-      }
-      return true;
-    });
+    const filteredRows = this.filterAttendanceWeeklySummaryRows(
+      mergedRows,
+      normalizedFilter
+    );
 
     if (filteredRows.length === 0) {
       return {
@@ -1470,9 +1463,11 @@ export class GradesService {
       [
         `Local del alumno (segun Excel): ${normalizedFilter.originCampus || 'Todas'}`,
       ],
+      [`Facultad: ${normalizedFilter.facultyGroup || 'Todas'}`],
       [
         `Modalidad del alumno (segun Excel): ${normalizedFilter.sourceModality || 'Todas'}`,
       ],
+      [`Curso: ${normalizedFilter.courseName || 'Todos'}`],
       [],
       ['Totales generales'],
       [
@@ -2687,13 +2682,21 @@ export class GradesService {
     filter: AttendanceWeeklySummaryFilter
   ) {
     const originCampus = String(filter.originCampus ?? '').trim();
+    const facultyGroup = String(filter.facultyGroup ?? '').trim();
     const sourceModality = String(filter.sourceModality ?? '').trim();
+    const courseName = String(filter.courseName ?? '').trim();
     return {
       originCampus: originCampus
         ? this.normalizeAttendanceWeeklySummaryText(originCampus)
         : undefined,
+      facultyGroup: facultyGroup
+        ? this.normalizeAttendanceWeeklySummaryFacultyGroup(facultyGroup)
+        : undefined,
       sourceModality: sourceModality
         ? this.normalizeAttendanceWeeklySummaryModality(sourceModality)
+        : undefined,
+      courseName: courseName
+        ? this.normalizeAttendanceWeeklySummaryCourseName(courseName)
         : undefined,
     };
   }
@@ -2708,6 +2711,19 @@ export class GradesService {
     return text || 'SIN CARRERA';
   }
 
+  private normalizeAttendanceWeeklySummaryFacultyGroup(value: unknown) {
+    const text = String(value ?? '').trim();
+    return text || 'SIN FACULTAD';
+  }
+
+  private normalizeAttendanceWeeklySummaryFacultyName(
+    facultyName: unknown,
+    facultyGroup: unknown
+  ) {
+    const text = String(facultyName ?? '').trim();
+    return text || this.normalizeAttendanceWeeklySummaryFacultyGroup(facultyGroup);
+  }
+
   private normalizeAttendanceWeeklySummaryModality(value: unknown) {
     const text = String(value ?? '').trim();
     if (!text) return 'SIN DATO';
@@ -2719,6 +2735,11 @@ export class GradesService {
     if (normalized.includes('PRESENCIAL')) return 'PRESENCIAL';
     if (normalized.includes('VIRTUAL')) return 'VIRTUAL';
     return 'SIN DATO';
+  }
+
+  private normalizeAttendanceWeeklySummaryCourseName(value: unknown) {
+    const text = String(value ?? '').trim();
+    return text || 'SIN CURSO';
   }
 
   private async loadAttendanceWeeklySummaryOriginMetadata(periodId: string) {
@@ -2769,9 +2790,11 @@ export class GradesService {
         originCampuses: this.sortAttendanceWeeklySummaryCampuses(
           Array.from(originCampuses)
         ),
+        faculties: [],
         sourceModalities: this.sortAttendanceWeeklySummaryModalities(
           Array.from(sourceModalities)
         ),
+        courses: [],
       },
     };
   }
@@ -2787,6 +2810,8 @@ export class GradesService {
         c.name AS courseName,
         s.code AS sectionCode,
         s.name AS sectionName,
+        s.facultyGroup AS facultyGroup,
+        s.facultyName AS facultyName,
         s.campusName AS currentCampusName,
         s.modality AS currentModality,
         u.careerName AS careerName
@@ -2811,6 +2836,8 @@ export class GradesService {
         courseName: string;
         sectionCode: string | null;
         sectionName: string;
+        facultyGroup: string;
+        facultyName: string;
         currentCampusName: string;
         currentModality: string;
         careerName: string;
@@ -2831,6 +2858,13 @@ export class GradesService {
         courseName: String(row.courseName ?? '').trim(),
         sectionCode: row.sectionCode ? String(row.sectionCode).trim() : null,
         sectionName: String(row.sectionName ?? '').trim(),
+        facultyGroup: this.normalizeAttendanceWeeklySummaryFacultyGroup(
+          row.facultyGroup
+        ),
+        facultyName: this.normalizeAttendanceWeeklySummaryFacultyName(
+          row.facultyName,
+          row.facultyGroup
+        ),
         currentCampusName: this.normalizeAttendanceWeeklySummaryText(
           row.currentCampusName
         ),
@@ -2847,28 +2881,143 @@ export class GradesService {
   }
 
   private buildAttendanceWeeklySummaryFilters(
-    baseFilters: {
-      originCampuses: string[];
-      sourceModalities: string[];
-    },
-    rows: Array<{ originCampus: string; sourceModality: string }>
+    rows: Array<{
+      originCampus: string;
+      facultyGroup: string;
+      facultyName: string;
+      sourceModality: string;
+      courseName: string;
+    }>,
+    filter: {
+      originCampus?: string;
+      facultyGroup?: string;
+      sourceModality?: string;
+      courseName?: string;
+    }
   ) {
-    const originCampuses = new Set(baseFilters.originCampuses);
-    const sourceModalities = new Set(baseFilters.sourceModalities);
-    for (const row of rows) {
+    const originCampuses = new Set<string>();
+    for (const row of this.filterAttendanceWeeklySummaryRows(rows, filter, [
+      'originCampus',
+    ])) {
       originCampuses.add(this.normalizeAttendanceWeeklySummaryText(row.originCampus));
+    }
+
+    const faculties = new Map<string, string>();
+    for (const row of this.filterAttendanceWeeklySummaryRows(rows, filter, [
+      'facultyGroup',
+    ])) {
+      faculties.set(
+        this.normalizeAttendanceWeeklySummaryFacultyGroup(row.facultyGroup),
+        this.normalizeAttendanceWeeklySummaryFacultyName(
+          row.facultyName,
+          row.facultyGroup
+        )
+      );
+    }
+
+    const sourceModalities = new Set<string>();
+    for (const row of this.filterAttendanceWeeklySummaryRows(rows, filter, [
+      'sourceModality',
+    ])) {
       sourceModalities.add(
         this.normalizeAttendanceWeeklySummaryModality(row.sourceModality)
       );
     }
+
+    const courses = new Set<string>();
+    for (const row of this.filterAttendanceWeeklySummaryRows(rows, filter, [
+      'courseName',
+    ])) {
+      courses.add(this.normalizeAttendanceWeeklySummaryCourseName(row.courseName));
+    }
+
     return {
       originCampuses: this.sortAttendanceWeeklySummaryCampuses(
         Array.from(originCampuses)
       ),
+      faculties: Array.from(faculties.entries())
+        .map(([facultyGroup, facultyName]) => ({
+          facultyGroup,
+          facultyName,
+        }))
+        .sort(
+          (left, right) =>
+            this.compareReportText(left.facultyName, right.facultyName) ||
+            this.compareReportText(left.facultyGroup, right.facultyGroup)
+        ),
       sourceModalities: this.sortAttendanceWeeklySummaryModalities(
         Array.from(sourceModalities)
       ),
+      courses: Array.from(courses).sort((left, right) =>
+        this.compareReportText(left, right)
+      ),
     };
+  }
+
+  private filterAttendanceWeeklySummaryRows<T extends {
+    originCampus: string;
+    facultyGroup: string;
+    sourceModality: string;
+    courseName: string;
+  }>(
+    rows: T[],
+    filter: {
+      originCampus?: string;
+      facultyGroup?: string;
+      sourceModality?: string;
+      courseName?: string;
+    },
+    excludeKeys: Array<'originCampus' | 'facultyGroup' | 'sourceModality' | 'courseName'> = []
+  ) {
+    return rows.filter((row) =>
+      this.matchesAttendanceWeeklySummaryFilter(row, filter, excludeKeys)
+    );
+  }
+
+  private matchesAttendanceWeeklySummaryFilter(
+    row: {
+      originCampus: string;
+      facultyGroup: string;
+      sourceModality: string;
+      courseName: string;
+    },
+    filter: {
+      originCampus?: string;
+      facultyGroup?: string;
+      sourceModality?: string;
+      courseName?: string;
+    },
+    excludeKeys: Array<'originCampus' | 'facultyGroup' | 'sourceModality' | 'courseName'> = []
+  ) {
+    if (
+      !excludeKeys.includes('originCampus') &&
+      filter.originCampus &&
+      row.originCampus !== filter.originCampus
+    ) {
+      return false;
+    }
+    if (
+      !excludeKeys.includes('facultyGroup') &&
+      filter.facultyGroup &&
+      row.facultyGroup !== filter.facultyGroup
+    ) {
+      return false;
+    }
+    if (
+      !excludeKeys.includes('sourceModality') &&
+      filter.sourceModality &&
+      row.sourceModality !== filter.sourceModality
+    ) {
+      return false;
+    }
+    if (
+      !excludeKeys.includes('courseName') &&
+      filter.courseName &&
+      row.courseName !== filter.courseName
+    ) {
+      return false;
+    }
+    return true;
   }
 
   private async loadAttendanceWeeklySummaryScheduleBlocks(
@@ -3318,7 +3467,9 @@ export class GradesService {
     const normalized = this.normalizeAttendanceWeeklySummaryFilter(filter);
     return [
       `Local del alumno (segun Excel): ${normalized.originCampus || 'Todas'}`,
+      `Facultad: ${normalized.facultyGroup || 'Todas'}`,
       `Modalidad del alumno (segun Excel): ${normalized.sourceModality || 'Todas'}`,
+      `Curso: ${normalized.courseName || 'Todos'}`,
     ];
   }
 
@@ -3456,8 +3607,14 @@ export class GradesService {
     if (normalized.originCampus) {
       parts.push(this.sanitizeFilePart(normalized.originCampus));
     }
+    if (normalized.facultyGroup) {
+      parts.push(this.sanitizeFilePart(normalized.facultyGroup));
+    }
     if (normalized.sourceModality) {
       parts.push(this.sanitizeFilePart(normalized.sourceModality));
+    }
+    if (normalized.courseName) {
+      parts.push(this.sanitizeFilePart(normalized.courseName));
     }
     return `reporte_${parts.join('_')}.${extension}`;
   }

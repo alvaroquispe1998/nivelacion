@@ -58,5 +58,15 @@ export class AttendanceWeeklySummaryFilterDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  facultyGroup?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
   sourceModality?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  courseName?: string;
 }
