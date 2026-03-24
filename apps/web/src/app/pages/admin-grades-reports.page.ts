@@ -502,6 +502,9 @@ function createEmptyWeeklySummaryResponse(): WeeklySummaryResponse {
             <div class="rounded-xl border border-slate-200 bg-slate-50 p-3">
               <div class="text-xs font-semibold text-slate-500">Aprobados</div>
               <div class="mt-1 text-lg font-semibold text-slate-900">
+                {{ weeklySummaryReport.totals.approvedCount }}
+              </div>
+              <div class="mt-1 text-xs text-slate-500">
                 {{ weeklySummaryReport.totals.approvedPct | number: '1.0-2' }}%
               </div>
             </div>
@@ -510,6 +513,9 @@ function createEmptyWeeklySummaryResponse(): WeeklySummaryResponse {
                 Desaprobados
               </div>
               <div class="mt-1 text-lg font-semibold text-slate-900">
+                {{ weeklySummaryReport.totals.failedCount }}
+              </div>
+              <div class="mt-1 text-xs text-slate-500">
                 {{ weeklySummaryReport.totals.failedPct | number: '1.0-2' }}%
               </div>
             </div>
@@ -561,6 +567,8 @@ function createEmptyWeeklySummaryResponse(): WeeklySummaryResponse {
                     <th class="px-3 py-2 text-right">Faltaron total</th>
                     <th class="px-3 py-2 text-right">% asistencia total</th>
                     <th class="px-3 py-2 text-right">% no asistencia total</th>
+                    <th class="px-3 py-2 text-right">Aprobados</th>
+                    <th class="px-3 py-2 text-right">Desaprobados</th>
                     <th class="px-3 py-2 text-right">% aprobados</th>
                     <th class="px-3 py-2 text-right">% desaprobados</th>
                   </tr>
@@ -598,6 +606,12 @@ function createEmptyWeeklySummaryResponse(): WeeklySummaryResponse {
                       {{ career.totalAbsencePct | number: '1.0-2' }}%
                     </td>
                     <td class="px-3 py-2 text-right">
+                      {{ career.approvedCount }}
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                      {{ career.failedCount }}
+                    </td>
+                    <td class="px-3 py-2 text-right">
                       {{ career.approvedPct | number: '1.0-2' }}%
                     </td>
                     <td class="px-3 py-2 text-right">
@@ -626,6 +640,12 @@ function createEmptyWeeklySummaryResponse(): WeeklySummaryResponse {
                     </td>
                     <td class="px-3 py-2 text-right">
                       {{ block.totals.totalAbsencePct | number: '1.0-2' }}%
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                      {{ block.totals.approvedCount }}
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                      {{ block.totals.failedCount }}
                     </td>
                     <td class="px-3 py-2 text-right">
                       {{ block.totals.approvedPct | number: '1.0-2' }}%

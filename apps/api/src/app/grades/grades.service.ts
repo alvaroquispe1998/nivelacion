@@ -1479,6 +1479,8 @@ export class GradesService {
         'Faltaron total',
         '% asistencia total',
         '% no asistencia total',
+        'Aprobados',
+        'Desaprobados',
         '% aprobados',
         '% desaprobados',
       ],
@@ -1491,6 +1493,8 @@ export class GradesService {
         report.totals.totalAbsentCount,
         report.totals.totalAttendancePct,
         report.totals.totalAbsencePct,
+        report.totals.approvedCount,
+        report.totals.failedCount,
         report.totals.approvedPct,
         report.totals.failedPct,
       ],
@@ -1517,6 +1521,8 @@ export class GradesService {
         'Faltaron total',
         '% asistencia total',
         '% no asistencia total',
+        'Aprobados',
+        'Desaprobados',
         '% aprobados',
         '% desaprobados',
       ]);
@@ -1530,6 +1536,8 @@ export class GradesService {
           career.totalAbsentCount,
           career.totalAttendancePct,
           career.totalAbsencePct,
+          career.approvedCount,
+          career.failedCount,
           career.approvedPct,
           career.failedPct,
         ]);
@@ -1543,6 +1551,8 @@ export class GradesService {
         block.totals.totalAbsentCount,
         block.totals.totalAttendancePct,
         block.totals.totalAbsencePct,
+        block.totals.approvedCount,
+        block.totals.failedCount,
         block.totals.approvedPct,
         block.totals.failedPct,
       ]);
@@ -1559,6 +1569,8 @@ export class GradesService {
       { wch: 16 },
       { wch: 18 },
       { wch: 18 },
+      { wch: 12 },
+      { wch: 14 },
       { wch: 14 },
       { wch: 14 },
     ];
@@ -3514,6 +3526,8 @@ export class GradesService {
       totalAbsentCount: 0,
       totalAttendancePct: 0,
       totalAbsencePct: 0,
+      approvedCount: 0,
+      failedCount: 0,
       approvedPct: 0,
       failedPct: 0,
     });
@@ -3542,6 +3556,8 @@ export class GradesService {
     totalAbsentCount: number;
     totalAttendancePct: number;
     totalAbsencePct: number;
+    approvedCount: number;
+    failedCount: number;
     approvedPct: number;
     failedPct: number;
   }) {
@@ -3575,6 +3591,14 @@ export class GradesService {
       this.padAttendanceWeeklySummaryPdfColumn(
         isHeader ? '% No Asist.' : `${this.toFixed2(row.totalAbsencePct)}%`,
         10
+      ),
+      this.padAttendanceWeeklySummaryPdfColumn(
+        isHeader ? 'Aprob.' : String(row.approvedCount),
+        7
+      ),
+      this.padAttendanceWeeklySummaryPdfColumn(
+        isHeader ? 'Desap.' : String(row.failedCount),
+        7
       ),
       this.padAttendanceWeeklySummaryPdfColumn(
         isHeader ? '% Aprob.' : `${this.toFixed2(row.approvedPct)}%`,
