@@ -17,7 +17,11 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { AdminStudentReportSearchDto } from './dto/reports.dto';
-import { GradesReportFilterDto, SaveSectionCourseGradesDto } from './dto/save-section-course-grades.dto';
+import {
+  AttendanceWeeklySummaryFilterDto,
+  GradesReportFilterDto,
+  SaveSectionCourseGradesDto,
+} from './dto/save-section-course-grades.dto';
 import { UpdateGradeSchemeDto } from './dto/update-grade-scheme.dto';
 import { GradesService } from './grades.service';
 
@@ -215,6 +219,37 @@ export class AdminGradesController {
   ): Promise<StreamableFile> {
     const { fileBuffer, fileName } =
       await this.gradesService.buildAdminAttendanceReportPdf(query);
+    return new StreamableFile(fileBuffer, {
+      type: 'application/pdf',
+      disposition: `attachment; filename="${fileName}"`,
+    });
+  }
+
+  @Get('reports/attendance-weekly-summary')
+  getAttendanceWeeklySummaryReport(
+    @Query() query: AttendanceWeeklySummaryFilterDto
+  ) {
+    return this.gradesService.getAdminAttendanceWeeklySummaryReport(query);
+  }
+
+  @Get('reports/attendance-weekly-summary/export/excel')
+  async exportAttendanceWeeklySummaryExcel(
+    @Query() query: AttendanceWeeklySummaryFilterDto
+  ): Promise<StreamableFile> {
+    const { fileBuffer, fileName } =
+      await this.gradesService.buildAdminAttendanceWeeklySummaryExcel(query);
+    return new StreamableFile(fileBuffer, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="${fileName}"`,
+    });
+  }
+
+  @Get('reports/attendance-weekly-summary/export/pdf')
+  async exportAttendanceWeeklySummaryPdf(
+    @Query() query: AttendanceWeeklySummaryFilterDto
+  ): Promise<StreamableFile> {
+    const { fileBuffer, fileName } =
+      await this.gradesService.buildAdminAttendanceWeeklySummaryPdf(query);
     return new StreamableFile(fileBuffer, {
       type: 'application/pdf',
       disposition: `attachment; filename="${fileName}"`,

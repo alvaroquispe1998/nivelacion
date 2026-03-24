@@ -49,3 +49,14 @@ export class GradesReportFilterDto {
   careerName?: string;
 }
 
+export class AttendanceWeeklySummaryFilterDto {
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  originCampus?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  sourceModality?: string;
+}

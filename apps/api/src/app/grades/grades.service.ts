@@ -36,6 +36,72 @@ interface GradesReportFilter {
   careerName?: string;
 }
 
+interface AttendanceWeeklySummaryFilter {
+  originCampus?: string;
+  sourceModality?: string;
+}
+
+interface AttendanceWeeklySummaryCount {
+  attendedCount: number;
+  absentCount: number;
+}
+
+interface AttendanceWeeklySummaryWeekRange {
+  label: string;
+  startDate: string | null;
+  endDate: string | null;
+}
+
+interface AttendanceWeeklySummaryAggregate {
+  studentCount: number;
+  week1: AttendanceWeeklySummaryCount;
+  week2: AttendanceWeeklySummaryCount;
+  week3: AttendanceWeeklySummaryCount;
+  totalAttendedCount: number;
+  totalAbsentCount: number;
+  totalAttendancePct: number;
+  totalAbsencePct: number;
+  studentsWithGrades: number;
+  approvedCount: number;
+  failedCount: number;
+  approvedPct: number;
+  failedPct: number;
+}
+
+interface AttendanceWeeklySummaryCareerRow
+  extends AttendanceWeeklySummaryAggregate {
+  careerName: string;
+}
+
+interface AttendanceWeeklySummaryBlock {
+  sectionCourseId: string;
+  courseName: string;
+  sectionCode: string | null;
+  sectionName: string;
+  currentCampusName: string;
+  currentModality: string;
+  weeks: AttendanceWeeklySummaryWeekRange[];
+  careers: AttendanceWeeklySummaryCareerRow[];
+  totals: AttendanceWeeklySummaryAggregate;
+}
+
+interface AttendanceWeeklySummaryReportResponse {
+  filters: {
+    originCampuses: string[];
+    sourceModalities: string[];
+  };
+  rows: AttendanceWeeklySummaryBlock[];
+  totals: AttendanceWeeklySummaryAggregate;
+}
+
+interface AttendanceWeeklySummaryScheduleBlock {
+  scheduleBlockId: string;
+  sectionCourseId: string;
+  dayOfWeek: number;
+  startDate: string | null;
+  endDate: string | null;
+}
+
 interface PeriodMetadata {
   id: string;
   code: string;
@@ -576,6 +642,306 @@ export class GradesService {
     return { dates, rows };
   }
 
+  async getAdminAttendanceWeeklySummaryReport(
+    filter: AttendanceWeeklySummaryFilter
+  ): Promise<AttendanceWeeklySummaryReportResponse> {
+    const periodId = await this.periodsService.getOperationalPeriodIdOrThrow();
+    const normalizedFilter = this.normalizeAttendanceWeeklySummaryFilter(filter);
+    const [originMetadata, enrollmentRows] = await Promise.all([
+      this.loadAttendanceWeeklySummaryOriginMetadata(periodId),
+      this.loadAttendanceWeeklySummaryEnrollmentRows(periodId),
+    ]);
+
+    const mergedRows = enrollmentRows.map((row) => {
+      const origin =
+        originMetadata.byStudentCourse.get(`${row.studentId}::${row.courseId}`) ?? {
+          originCampus: 'SIN DATO',
+          sourceModality: 'SIN DATO',
+        };
+      return {
+        ...row,
+        originCampus: origin.originCampus,
+        sourceModality: origin.sourceModality,
+      };
+    });
+
+    const filters = this.buildAttendanceWeeklySummaryFilters(
+      originMetadata.filters,
+      mergedRows
+    );
+    const filteredRows = mergedRows.filter((row) => {
+      if (
+        normalizedFilter.originCampus &&
+        row.originCampus !== normalizedFilter.originCampus
+      ) {
+        return false;
+      }
+      if (
+        normalizedFilter.sourceModality &&
+        row.sourceModality !== normalizedFilter.sourceModality
+      ) {
+        return false;
+      }
+      return true;
+    });
+
+    if (filteredRows.length === 0) {
+      return {
+        filters,
+        rows: [],
+        totals: this.createEmptyAttendanceWeeklySummaryAggregate(),
+      };
+    }
+
+    const sectionCourseIds = Array.from(
+      new Set(filteredRows.map((row) => row.sectionCourseId))
+    );
+    const studentIds = Array.from(new Set(filteredRows.map((row) => row.studentId)));
+    const [scheduleBlockRows, sessionRows, attendanceRows, gradeContext] =
+      await Promise.all([
+        this.loadAttendanceWeeklySummaryScheduleBlocks(sectionCourseIds),
+      this.loadAttendanceWeeklySummarySessions(sectionCourseIds),
+      this.loadAttendanceWeeklySummaryAttendanceRows(sectionCourseIds, studentIds),
+      this.loadAttendanceWeeklySummaryGradeContext(
+        periodId,
+        sectionCourseIds,
+        studentIds
+      ),
+      ]);
+
+    const firstSessionBySectionCourse = new Map<string, string>();
+    const firstSessionByScheduleBlock = new Map<string, string>();
+    const sessionDatesBySectionCourse = new Map<string, Set<string>>();
+    for (const row of sessionRows) {
+      const scheduleBlockId = String(row.scheduleBlockId ?? '').trim();
+      const sectionCourseId = String(row.sectionCourseId ?? '').trim();
+      const sessionDate = this.toIsoDateOnly(row.sessionDate);
+      if (!sectionCourseId || !sessionDate) continue;
+      if (scheduleBlockId) {
+        const currentScheduleBlockDate =
+          firstSessionByScheduleBlock.get(scheduleBlockId);
+        if (
+          !currentScheduleBlockDate ||
+          sessionDate.localeCompare(currentScheduleBlockDate) < 0
+        ) {
+          firstSessionByScheduleBlock.set(scheduleBlockId, sessionDate);
+        }
+      }
+      const current = firstSessionBySectionCourse.get(sectionCourseId);
+      if (!current || sessionDate.localeCompare(current) < 0) {
+        firstSessionBySectionCourse.set(sectionCourseId, sessionDate);
+      }
+      const sessionDates = sessionDatesBySectionCourse.get(sectionCourseId) ?? new Set<string>();
+      sessionDates.add(sessionDate);
+      sessionDatesBySectionCourse.set(sectionCourseId, sessionDates);
+    }
+
+    const scheduleBlocksBySectionCourse = new Map<
+      string,
+      AttendanceWeeklySummaryScheduleBlock[]
+    >();
+    for (const row of scheduleBlockRows) {
+      const scheduleBlockId = String(row.scheduleBlockId ?? '').trim();
+      const sectionCourseId = String(row.sectionCourseId ?? '').trim();
+      const dayOfWeek = Number(row.dayOfWeek ?? 0);
+      if (!scheduleBlockId || !sectionCourseId || dayOfWeek < 1 || dayOfWeek > 7) {
+        continue;
+      }
+      const blocks = scheduleBlocksBySectionCourse.get(sectionCourseId) ?? [];
+      blocks.push({
+        scheduleBlockId,
+        sectionCourseId,
+        dayOfWeek,
+        startDate: row.startDate ? this.toIsoDateOnly(row.startDate) : null,
+        endDate: row.endDate ? this.toIsoDateOnly(row.endDate) : null,
+      });
+      scheduleBlocksBySectionCourse.set(sectionCourseId, blocks);
+    }
+
+    const todayDate = this.toIsoDateOnly(new Date()) || null;
+    const firstExpectedDateBySectionCourse = new Map<string, string | null>();
+    const expectedWeeksBySectionCourse = new Map<
+      string,
+      [boolean, boolean, boolean]
+    >();
+    const weeksBySectionCourse = new Map<
+      string,
+      AttendanceWeeklySummaryWeekRange[]
+    >();
+    for (const sectionCourseId of sectionCourseIds) {
+      const blocks = scheduleBlocksBySectionCourse.get(sectionCourseId) ?? [];
+      const firstExpectedDate = this.resolveAttendanceWeeklySummaryFirstExpectedDate(
+        blocks,
+        firstSessionByScheduleBlock,
+        firstSessionBySectionCourse.get(sectionCourseId) ?? null
+      );
+      firstExpectedDateBySectionCourse.set(sectionCourseId, firstExpectedDate);
+      expectedWeeksBySectionCourse.set(
+        sectionCourseId,
+        this.buildAttendanceWeeklySummaryExpectedWeekFlags(
+          blocks,
+          firstExpectedDate,
+          todayDate,
+          Array.from(sessionDatesBySectionCourse.get(sectionCourseId) ?? [])
+        )
+      );
+      weeksBySectionCourse.set(
+        sectionCourseId,
+        this.buildAttendanceWeeklySummaryWeeks(firstExpectedDate)
+      );
+    }
+
+    const attendanceByEnrollment = new Map<
+      string,
+      Array<{ sessionDate: string; status: 'ASISTIO' | 'FALTO' }>
+    >();
+    for (const row of attendanceRows) {
+      const sectionCourseId = String(row.sectionCourseId ?? '').trim();
+      const studentId = String(row.studentId ?? '').trim();
+      const sessionDate = this.toIsoDateOnly(row.sessionDate);
+      if (!sectionCourseId || !studentId || !sessionDate) continue;
+      const key = `${sectionCourseId}::${studentId}`;
+      const list = attendanceByEnrollment.get(key) ?? [];
+      list.push({
+        sessionDate,
+        status: this.normalizeAttendanceStatus(row.status),
+      });
+      attendanceByEnrollment.set(key, list);
+    }
+
+    const metricRows = filteredRows.map((row) => {
+      const weekFlags: [boolean, boolean, boolean] = [false, false, false];
+      const weekExpectedFlags =
+        expectedWeeksBySectionCourse.get(row.sectionCourseId) ?? [
+          false,
+          false,
+          false,
+        ];
+      let totalAttendanceCount = 0;
+      const firstExpectedDate =
+        firstExpectedDateBySectionCourse.get(row.sectionCourseId) ?? null;
+      const firstExpectedMs = firstExpectedDate
+        ? this.dateOnlyToUtcMs(firstExpectedDate)
+        : null;
+      const attendanceItems =
+        attendanceByEnrollment.get(`${row.sectionCourseId}::${row.studentId}`) ?? [];
+
+      if (firstExpectedMs !== null) {
+        for (const item of attendanceItems) {
+          if (item.status !== 'ASISTIO') continue;
+          if (todayDate && item.sessionDate.localeCompare(todayDate) > 0) continue;
+          const sessionMs = this.dateOnlyToUtcMs(item.sessionDate);
+          if (sessionMs === null) continue;
+          const diffDays = Math.floor((sessionMs - firstExpectedMs) / 86400000);
+          if (diffDays < 0) continue;
+          const weekIndex = Math.floor(diffDays / 7);
+          if (weekIndex < 0 || weekIndex > 2) continue;
+          weekFlags[weekIndex] = true;
+          totalAttendanceCount += 1;
+        }
+      }
+
+      let hasCompleteGrade = false;
+      let approved = false;
+      if (gradeContext.activeComponents.length > 0) {
+        const scores = new Map<string, number>();
+        for (const component of gradeContext.activeComponents) {
+          const gradeKey = this.gradeKey(
+            row.studentId,
+            row.sectionCourseId,
+            component.id
+          );
+          if (gradeContext.gradeMap.has(gradeKey)) {
+            scores.set(component.id, gradeContext.gradeMap.get(gradeKey) ?? 0);
+          }
+        }
+        const calc = this.computeFinalAverage(
+          gradeContext.activeComponents,
+          scores
+        );
+        hasCompleteGrade = calc.isComplete;
+        approved = calc.approved;
+      }
+
+      return {
+        ...row,
+        weekFlags,
+        weekExpectedFlags,
+        totalAttendanceCount,
+        hasCompleteGrade,
+        approved,
+      };
+    });
+
+    const blocks = new Map<
+      string,
+      {
+        sectionCourseId: string;
+        courseName: string;
+        sectionCode: string | null;
+        sectionName: string;
+        currentCampusName: string;
+        currentModality: string;
+        weeks: AttendanceWeeklySummaryWeekRange[];
+        metrics: typeof metricRows;
+      }
+    >();
+
+    for (const row of metricRows) {
+      const existing = blocks.get(row.sectionCourseId);
+      if (existing) {
+        existing.metrics.push(row);
+        continue;
+      }
+      blocks.set(row.sectionCourseId, {
+        sectionCourseId: row.sectionCourseId,
+        courseName: row.courseName,
+        sectionCode: row.sectionCode,
+        sectionName: row.sectionName,
+        currentCampusName: row.currentCampusName,
+        currentModality: row.currentModality,
+        weeks: weeksBySectionCourse.get(row.sectionCourseId) ?? [],
+        metrics: [row],
+      });
+    }
+
+    const rows = Array.from(blocks.values())
+      .sort((left, right) => this.compareAttendanceWeeklySummaryBlocks(left, right))
+      .map((block) => {
+        const careers = new Map<string, typeof metricRows>();
+        for (const item of block.metrics) {
+          const list = careers.get(item.careerName) ?? [];
+          list.push(item);
+          careers.set(item.careerName, list);
+        }
+
+        const careerRows = Array.from(careers.entries())
+          .sort((left, right) => this.compareReportText(left[0], right[0]))
+          .map(([careerName, items]) => ({
+            careerName,
+            ...this.buildAttendanceWeeklySummaryAggregate(items),
+          }));
+
+        return {
+          sectionCourseId: block.sectionCourseId,
+          courseName: block.courseName,
+          sectionCode: block.sectionCode,
+          sectionName: block.sectionName,
+          currentCampusName: block.currentCampusName,
+          currentModality: block.currentModality,
+          weeks: block.weeks,
+          careers: careerRows,
+          totals: this.buildAttendanceWeeklySummaryAggregate(block.metrics),
+        };
+      });
+
+    return {
+      filters,
+      rows,
+      totals: this.buildAttendanceWeeklySummaryAggregate(metricRows),
+    };
+  }
+
   async searchAdminStudentsForReport(q: string): Promise<AdminStudentReportSearchItem[]> {
     const periodId = await this.periodsService.getOperationalPeriodIdOrThrow();
     const normalized = this.normalizeSearchText(q);
@@ -1087,6 +1453,218 @@ export class GradesService {
     return {
       fileBuffer: await this.finalizePdfDocument(doc),
       fileName: this.buildCareerReportExportFileName('asistencia', filter, period.code, 'pdf'),
+    };
+  }
+
+  async buildAdminAttendanceWeeklySummaryExcel(
+    filter: AttendanceWeeklySummaryFilter
+  ) {
+    const periodId = await this.periodsService.getOperationalPeriodIdOrThrow();
+    const period = await this.loadPeriodMetadata(periodId);
+    const report = await this.getAdminAttendanceWeeklySummaryReport(filter);
+    const normalizedFilter = this.normalizeAttendanceWeeklySummaryFilter(filter);
+    const workbook = XLSX.utils.book_new();
+    const rows: Array<Array<string | number>> = [
+      ['Reporte semanal de asistencia y rendimiento'],
+      [`Periodo: ${period.code} - ${period.name}`],
+      [
+        `Local del alumno (segun Excel): ${normalizedFilter.originCampus || 'Todas'}`,
+      ],
+      [
+        `Modalidad del alumno (segun Excel): ${normalizedFilter.sourceModality || 'Todas'}`,
+      ],
+      [],
+      ['Totales generales'],
+      [
+        'Carrera',
+        'Semana 1',
+        'Semana 2',
+        'Semana 3',
+        'Asistieron total',
+        'Faltaron total',
+        '% asistencia total',
+        '% no asistencia total',
+        '% aprobados',
+        '% desaprobados',
+      ],
+      [
+        'TOTAL',
+        this.formatAttendanceWeeklySummaryCount(report.totals.week1),
+        this.formatAttendanceWeeklySummaryCount(report.totals.week2),
+        this.formatAttendanceWeeklySummaryCount(report.totals.week3),
+        report.totals.totalAttendedCount,
+        report.totals.totalAbsentCount,
+        report.totals.totalAttendancePct,
+        report.totals.totalAbsencePct,
+        report.totals.approvedPct,
+        report.totals.failedPct,
+      ],
+      [],
+    ];
+
+    for (const block of report.rows) {
+      rows.push([
+        `${block.courseName} | Seccion: ${
+          block.sectionCode || block.sectionName
+        } | Sede actual: ${block.currentCampusName} | Modalidad actual: ${block.currentModality}`,
+      ]);
+      rows.push([
+        this.formatAttendanceWeeklySummaryWeekHeader(block.weeks[0]),
+        this.formatAttendanceWeeklySummaryWeekHeader(block.weeks[1]),
+        this.formatAttendanceWeeklySummaryWeekHeader(block.weeks[2]),
+      ]);
+      rows.push([
+        'Carrera',
+        'Semana 1',
+        'Semana 2',
+        'Semana 3',
+        'Asistieron total',
+        'Faltaron total',
+        '% asistencia total',
+        '% no asistencia total',
+        '% aprobados',
+        '% desaprobados',
+      ]);
+      for (const career of block.careers) {
+        rows.push([
+          career.careerName,
+          this.formatAttendanceWeeklySummaryCount(career.week1),
+          this.formatAttendanceWeeklySummaryCount(career.week2),
+          this.formatAttendanceWeeklySummaryCount(career.week3),
+          career.totalAttendedCount,
+          career.totalAbsentCount,
+          career.totalAttendancePct,
+          career.totalAbsencePct,
+          career.approvedPct,
+          career.failedPct,
+        ]);
+      }
+      rows.push([
+        'TOTAL',
+        this.formatAttendanceWeeklySummaryCount(block.totals.week1),
+        this.formatAttendanceWeeklySummaryCount(block.totals.week2),
+        this.formatAttendanceWeeklySummaryCount(block.totals.week3),
+        block.totals.totalAttendedCount,
+        block.totals.totalAbsentCount,
+        block.totals.totalAttendancePct,
+        block.totals.totalAbsencePct,
+        block.totals.approvedPct,
+        block.totals.failedPct,
+      ]);
+      rows.push([]);
+    }
+
+    const sheet = XLSX.utils.aoa_to_sheet(rows);
+    sheet['!cols'] = [
+      { wch: 28 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 14 },
+      { wch: 14 },
+    ];
+    XLSX.utils.book_append_sheet(workbook, sheet, 'Resumen semanal');
+
+    return {
+      fileBuffer: XLSX.write(workbook, {
+        type: 'buffer',
+        bookType: 'xlsx',
+      }) as Buffer,
+      fileName: this.buildAttendanceWeeklySummaryExportFileName(
+        'resumen_semanal_asistencia',
+        filter,
+        period.code,
+        'xlsx'
+      ),
+    };
+  }
+
+  async buildAdminAttendanceWeeklySummaryPdf(
+    filter: AttendanceWeeklySummaryFilter
+  ) {
+    const periodId = await this.periodsService.getOperationalPeriodIdOrThrow();
+    const period = await this.loadPeriodMetadata(periodId);
+    const report = await this.getAdminAttendanceWeeklySummaryReport(filter);
+    const doc = this.createPdfDocument({ layout: 'landscape', margin: 28 });
+
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(15)
+      .text('Reporte semanal de asistencia y rendimiento', {
+        align: 'center',
+      });
+    doc.moveDown(0.4);
+    doc
+      .font('Helvetica')
+      .fontSize(9)
+      .text(`Periodo: ${period.code} - ${period.name}`, { align: 'center' });
+    doc.moveDown(0.8);
+    this.writePdfSection(
+      doc,
+      'Filtros',
+      this.buildAttendanceWeeklySummaryFilterSummary(filter)
+    );
+
+    this.writeAttendanceWeeklySummaryPdfTable(
+      doc,
+      'Totales generales',
+      [
+        {
+          careerName: 'TOTAL',
+          ...report.totals,
+        },
+      ],
+      []
+    );
+
+    if (report.rows.length === 0) {
+      this.writePdfSection(doc, 'Resultados', ['Sin datos.']);
+    } else {
+      for (const block of report.rows) {
+        this.ensurePdfSpace(doc, 90);
+        doc
+          .font('Helvetica-Bold')
+          .fontSize(10)
+          .text(
+            `${block.courseName} | Seccion: ${
+              block.sectionCode || block.sectionName
+            } | Sede actual: ${block.currentCampusName} | Modalidad actual: ${block.currentModality}`,
+            { width: 760 }
+          );
+        doc.moveDown(0.2);
+        doc
+          .font('Helvetica')
+          .fontSize(8)
+          .text(
+            [
+              this.formatAttendanceWeeklySummaryWeekHeader(block.weeks[0]),
+              this.formatAttendanceWeeklySummaryWeekHeader(block.weeks[1]),
+              this.formatAttendanceWeeklySummaryWeekHeader(block.weeks[2]),
+            ].join(' | '),
+            { width: 760 }
+          );
+        doc.moveDown(0.3);
+        this.writeAttendanceWeeklySummaryPdfTable(doc, null, block.careers, [
+          {
+            careerName: 'TOTAL',
+            ...block.totals,
+          },
+        ]);
+      }
+    }
+
+    return {
+      fileBuffer: await this.finalizePdfDocument(doc),
+      fileName: this.buildAttendanceWeeklySummaryExportFileName(
+        'resumen_semanal_asistencia',
+        filter,
+        period.code,
+        'pdf'
+      ),
     };
   }
 
@@ -2105,6 +2683,785 @@ export class GradesService {
       .toUpperCase();
   }
 
+  private normalizeAttendanceWeeklySummaryFilter(
+    filter: AttendanceWeeklySummaryFilter
+  ) {
+    const originCampus = String(filter.originCampus ?? '').trim();
+    const sourceModality = String(filter.sourceModality ?? '').trim();
+    return {
+      originCampus: originCampus
+        ? this.normalizeAttendanceWeeklySummaryText(originCampus)
+        : undefined,
+      sourceModality: sourceModality
+        ? this.normalizeAttendanceWeeklySummaryModality(sourceModality)
+        : undefined,
+    };
+  }
+
+  private normalizeAttendanceWeeklySummaryText(value: unknown) {
+    const text = String(value ?? '').trim();
+    return text || 'SIN DATO';
+  }
+
+  private normalizeAttendanceWeeklySummaryCareerName(value: unknown) {
+    const text = String(value ?? '').trim();
+    return text || 'SIN CARRERA';
+  }
+
+  private normalizeAttendanceWeeklySummaryModality(value: unknown) {
+    const text = String(value ?? '').trim();
+    if (!text) return 'SIN DATO';
+    const normalized = text
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim()
+      .toUpperCase();
+    if (normalized.includes('PRESENCIAL')) return 'PRESENCIAL';
+    if (normalized.includes('VIRTUAL')) return 'VIRTUAL';
+    return 'SIN DATO';
+  }
+
+  private async loadAttendanceWeeklySummaryOriginMetadata(periodId: string) {
+    const rows: Array<any> = await this.dataSource.query(
+      `
+      SELECT
+        d.studentId AS studentId,
+        d.courseId AS courseId,
+        d.campusName AS campusName,
+        d.sourceModality AS sourceModality,
+        d.id AS demandId
+      FROM leveling_run_student_course_demands d
+      INNER JOIN leveling_runs lr ON lr.id = d.runId
+      WHERE lr.periodId = ?
+        AND lr.status <> 'ARCHIVED'
+      ORDER BY lr.updatedAt DESC, d.updatedAt DESC, d.id DESC
+      `,
+      [periodId]
+    );
+
+    const byStudentCourse = new Map<
+      string,
+      { originCampus: string; sourceModality: string }
+    >();
+    const originCampuses = new Set<string>();
+    const sourceModalities = new Set<string>();
+
+    for (const row of rows) {
+      const studentId = String(row.studentId ?? '').trim();
+      const courseId = String(row.courseId ?? '').trim();
+      if (!studentId || !courseId) continue;
+      const key = `${studentId}::${courseId}`;
+      if (byStudentCourse.has(key)) continue;
+      const originCampus = this.normalizeAttendanceWeeklySummaryText(
+        row.campusName
+      );
+      const sourceModality = this.normalizeAttendanceWeeklySummaryModality(
+        row.sourceModality
+      );
+      byStudentCourse.set(key, { originCampus, sourceModality });
+      originCampuses.add(originCampus);
+      sourceModalities.add(sourceModality);
+    }
+
+    return {
+      byStudentCourse,
+      filters: {
+        originCampuses: this.sortAttendanceWeeklySummaryCampuses(
+          Array.from(originCampuses)
+        ),
+        sourceModalities: this.sortAttendanceWeeklySummaryModalities(
+          Array.from(sourceModalities)
+        ),
+      },
+    };
+  }
+
+  private async loadAttendanceWeeklySummaryEnrollmentRows(periodId: string) {
+    const rows: Array<any> = await this.dataSource.query(
+      `
+      SELECT
+        ssc.id AS enrollmentId,
+        ssc.studentId AS studentId,
+        sc.courseId AS courseId,
+        sc.id AS sectionCourseId,
+        c.name AS courseName,
+        s.code AS sectionCode,
+        s.name AS sectionName,
+        s.campusName AS currentCampusName,
+        s.modality AS currentModality,
+        u.careerName AS careerName
+      FROM section_student_courses ssc
+      INNER JOIN section_courses sc ON sc.id = ssc.sectionCourseId
+      INNER JOIN sections s ON s.id = sc.sectionId
+      INNER JOIN courses c ON c.id = sc.courseId
+      INNER JOIN users u ON u.id = ssc.studentId
+      WHERE sc.periodId = ?
+        AND u.role = 'ALUMNO'
+      ORDER BY ssc.updatedAt DESC, ssc.createdAt DESC, ssc.id DESC
+      `,
+      [periodId]
+    );
+
+    const dedup = new Map<
+      string,
+      {
+        studentId: string;
+        courseId: string;
+        sectionCourseId: string;
+        courseName: string;
+        sectionCode: string | null;
+        sectionName: string;
+        currentCampusName: string;
+        currentModality: string;
+        careerName: string;
+      }
+    >();
+
+    for (const row of rows) {
+      const studentId = String(row.studentId ?? '').trim();
+      const courseId = String(row.courseId ?? '').trim();
+      const sectionCourseId = String(row.sectionCourseId ?? '').trim();
+      if (!studentId || !courseId || !sectionCourseId) continue;
+      const key = `${studentId}::${courseId}`;
+      if (dedup.has(key)) continue;
+      dedup.set(key, {
+        studentId,
+        courseId,
+        sectionCourseId,
+        courseName: String(row.courseName ?? '').trim(),
+        sectionCode: row.sectionCode ? String(row.sectionCode).trim() : null,
+        sectionName: String(row.sectionName ?? '').trim(),
+        currentCampusName: this.normalizeAttendanceWeeklySummaryText(
+          row.currentCampusName
+        ),
+        currentModality: this.normalizeAttendanceWeeklySummaryModality(
+          row.currentModality
+        ),
+        careerName: this.normalizeAttendanceWeeklySummaryCareerName(
+          row.careerName
+        ),
+      });
+    }
+
+    return Array.from(dedup.values());
+  }
+
+  private buildAttendanceWeeklySummaryFilters(
+    baseFilters: {
+      originCampuses: string[];
+      sourceModalities: string[];
+    },
+    rows: Array<{ originCampus: string; sourceModality: string }>
+  ) {
+    const originCampuses = new Set(baseFilters.originCampuses);
+    const sourceModalities = new Set(baseFilters.sourceModalities);
+    for (const row of rows) {
+      originCampuses.add(this.normalizeAttendanceWeeklySummaryText(row.originCampus));
+      sourceModalities.add(
+        this.normalizeAttendanceWeeklySummaryModality(row.sourceModality)
+      );
+    }
+    return {
+      originCampuses: this.sortAttendanceWeeklySummaryCampuses(
+        Array.from(originCampuses)
+      ),
+      sourceModalities: this.sortAttendanceWeeklySummaryModalities(
+        Array.from(sourceModalities)
+      ),
+    };
+  }
+
+  private async loadAttendanceWeeklySummaryScheduleBlocks(
+    sectionCourseIds: string[]
+  ) {
+    if (sectionCourseIds.length === 0) return [];
+    const placeholders = sectionCourseIds.map(() => '?').join(', ');
+    return this.dataSource.query(
+      `
+      SELECT
+        sb.id AS scheduleBlockId,
+        sb.sectionCourseId AS sectionCourseId,
+        sb.dayOfWeek AS dayOfWeek,
+        sb.startDate AS startDate,
+        sb.endDate AS endDate
+      FROM schedule_blocks sb
+      WHERE sb.sectionCourseId IN (${placeholders})
+      ORDER BY sb.sectionCourseId ASC, sb.dayOfWeek ASC, sb.startTime ASC, sb.id ASC
+      `,
+      sectionCourseIds
+    );
+  }
+
+  private async loadAttendanceWeeklySummarySessions(sectionCourseIds: string[]) {
+    if (sectionCourseIds.length === 0) return [];
+    const placeholders = sectionCourseIds.map(() => '?').join(', ');
+    return this.dataSource.query(
+      `
+      SELECT
+        ses.scheduleBlockId AS scheduleBlockId,
+        sb.sectionCourseId AS sectionCourseId,
+        ses.sessionDate AS sessionDate
+      FROM attendance_sessions ses
+      INNER JOIN schedule_blocks sb ON sb.id = ses.scheduleBlockId
+      WHERE sb.sectionCourseId IN (${placeholders})
+      ORDER BY sb.sectionCourseId ASC, ses.sessionDate ASC, ses.createdAt ASC
+      `,
+      sectionCourseIds
+    );
+  }
+
+  private async loadAttendanceWeeklySummaryAttendanceRows(
+    sectionCourseIds: string[],
+    studentIds: string[]
+  ) {
+    if (sectionCourseIds.length === 0 || studentIds.length === 0) return [];
+    const sectionPlaceholders = sectionCourseIds.map(() => '?').join(', ');
+    const studentPlaceholders = studentIds.map(() => '?').join(', ');
+    return this.dataSource.query(
+      `
+      SELECT
+        sb.sectionCourseId AS sectionCourseId,
+        r.studentId AS studentId,
+        ses.sessionDate AS sessionDate,
+        r.status AS status
+      FROM attendance_records r
+      INNER JOIN attendance_sessions ses ON ses.id = r.attendanceSessionId
+      INNER JOIN schedule_blocks sb ON sb.id = ses.scheduleBlockId
+      WHERE sb.sectionCourseId IN (${sectionPlaceholders})
+        AND r.studentId IN (${studentPlaceholders})
+      ORDER BY sb.sectionCourseId ASC, r.studentId ASC, ses.sessionDate ASC
+      `,
+      [...sectionCourseIds, ...studentIds]
+    );
+  }
+
+  private async loadAttendanceWeeklySummaryGradeContext(
+    periodId: string,
+    sectionCourseIds: string[],
+    studentIds: string[]
+  ) {
+    const scheme = await this.getOrCreateScheme(periodId);
+    const activeComponents = this.getActiveComponents(scheme.components);
+    const gradeMap = new Map<string, number>();
+
+    if (
+      activeComponents.length === 0 ||
+      sectionCourseIds.length === 0 ||
+      studentIds.length === 0
+    ) {
+      return { activeComponents, gradeMap };
+    }
+
+    const sectionPlaceholders = sectionCourseIds.map(() => '?').join(', ');
+    const studentPlaceholders = studentIds.map(() => '?').join(', ');
+    const componentIds = activeComponents.map((component) => component.id);
+    const componentPlaceholders = componentIds.map(() => '?').join(', ');
+    const rows: Array<any> = await this.dataSource.query(
+      `
+      SELECT
+        g.studentId AS studentId,
+        g.sectionCourseId AS sectionCourseId,
+        g.componentId AS componentId,
+        g.score AS score
+      FROM section_course_grades g
+      WHERE g.sectionCourseId IN (${sectionPlaceholders})
+        AND g.studentId IN (${studentPlaceholders})
+        AND g.componentId IN (${componentPlaceholders})
+      `,
+      [...sectionCourseIds, ...studentIds, ...componentIds]
+    );
+
+    for (const row of rows) {
+      const studentId = String(row.studentId ?? '').trim();
+      const sectionCourseId = String(row.sectionCourseId ?? '').trim();
+      const componentId = String(row.componentId ?? '').trim();
+      if (!studentId || !sectionCourseId || !componentId) continue;
+      gradeMap.set(
+        this.gradeKey(studentId, sectionCourseId, componentId),
+        Number(row.score ?? 0)
+      );
+    }
+
+    return { activeComponents, gradeMap };
+  }
+
+  private buildAttendanceWeeklySummaryWeeks(
+    firstExpectedDate: string | null
+  ): AttendanceWeeklySummaryWeekRange[] {
+    return [0, 1, 2].map((weekIndex) => ({
+      label: `Semana ${weekIndex + 1}`,
+      startDate: firstExpectedDate
+        ? this.addDaysToDateOnly(firstExpectedDate, weekIndex * 7)
+        : null,
+      endDate: firstExpectedDate
+        ? this.addDaysToDateOnly(firstExpectedDate, weekIndex * 7 + 6)
+        : null,
+    }));
+  }
+
+  private resolveAttendanceWeeklySummaryFirstExpectedDate(
+    blocks: AttendanceWeeklySummaryScheduleBlock[],
+    firstSessionByScheduleBlock: Map<string, string>,
+    fallbackSessionDate: string | null
+  ) {
+    let firstExpectedDate: string | null = null;
+    for (const block of blocks) {
+      const candidate = this.resolveAttendanceWeeklySummaryBlockFirstDate(
+        block,
+        firstSessionByScheduleBlock.get(block.scheduleBlockId) ?? null
+      );
+      if (
+        candidate &&
+        (!firstExpectedDate || candidate.localeCompare(firstExpectedDate) < 0)
+      ) {
+        firstExpectedDate = candidate;
+      }
+    }
+
+    if (
+      fallbackSessionDate &&
+      (!firstExpectedDate || fallbackSessionDate.localeCompare(firstExpectedDate) < 0)
+    ) {
+      return fallbackSessionDate;
+    }
+
+    return firstExpectedDate;
+  }
+
+  private resolveAttendanceWeeklySummaryBlockFirstDate(
+    block: AttendanceWeeklySummaryScheduleBlock,
+    fallbackSessionDate: string | null
+  ) {
+    const baseDate = block.startDate || fallbackSessionDate;
+    if (!baseDate) return null;
+    const candidate = this.alignAttendanceWeeklySummaryDateToDayOfWeek(
+      baseDate,
+      block.dayOfWeek
+    );
+    if (!candidate) return null;
+    if (block.endDate && candidate.localeCompare(block.endDate) > 0) return null;
+    return candidate;
+  }
+
+  private buildAttendanceWeeklySummaryExpectedWeekFlags(
+    blocks: AttendanceWeeklySummaryScheduleBlock[],
+    firstExpectedDate: string | null,
+    todayDate: string | null,
+    recordedSessionDates: string[]
+  ): [boolean, boolean, boolean] {
+    const flags: [boolean, boolean, boolean] = [false, false, false];
+    if (!firstExpectedDate || !todayDate) return flags;
+    const firstExpectedMs = this.dateOnlyToUtcMs(firstExpectedDate);
+    if (firstExpectedMs === null) return flags;
+    const windowEndDate = this.addDaysToDateOnly(firstExpectedDate, 20);
+    if (!windowEndDate) return flags;
+
+    const expectedDates = new Set<string>();
+    for (const block of blocks) {
+      for (const sessionDate of this.expandAttendanceWeeklySummaryScheduleDates(
+        block,
+        firstExpectedDate,
+        windowEndDate
+      )) {
+        if (sessionDate.localeCompare(todayDate) <= 0) {
+          expectedDates.add(sessionDate);
+        }
+      }
+    }
+
+    for (const sessionDate of recordedSessionDates) {
+      if (!sessionDate) continue;
+      if (sessionDate.localeCompare(firstExpectedDate) < 0) continue;
+      if (sessionDate.localeCompare(windowEndDate) > 0) continue;
+      if (sessionDate.localeCompare(todayDate) > 0) continue;
+      expectedDates.add(sessionDate);
+    }
+
+    for (const sessionDate of expectedDates) {
+      const sessionMs = this.dateOnlyToUtcMs(sessionDate);
+      if (sessionMs === null) continue;
+      const diffDays = Math.floor((sessionMs - firstExpectedMs) / 86400000);
+      if (diffDays < 0) continue;
+      const weekIndex = Math.floor(diffDays / 7);
+      if (weekIndex < 0 || weekIndex > 2) continue;
+      flags[weekIndex] = true;
+    }
+
+    return flags;
+  }
+
+  private expandAttendanceWeeklySummaryScheduleDates(
+    block: AttendanceWeeklySummaryScheduleBlock,
+    rangeStart: string,
+    rangeEnd: string
+  ) {
+    const dates: string[] = [];
+    const effectiveStart =
+      block.startDate && block.startDate.localeCompare(rangeStart) > 0
+        ? block.startDate
+        : rangeStart;
+    const effectiveEnd =
+      block.endDate && block.endDate.localeCompare(rangeEnd) < 0
+        ? block.endDate
+        : rangeEnd;
+
+    if (effectiveStart.localeCompare(effectiveEnd) > 0) {
+      return dates;
+    }
+
+    let cursor = this.alignAttendanceWeeklySummaryDateToDayOfWeek(
+      effectiveStart,
+      block.dayOfWeek
+    );
+    while (cursor && cursor.localeCompare(effectiveEnd) <= 0) {
+      dates.push(cursor);
+      cursor = this.addDaysToDateOnly(cursor, 7);
+    }
+    return dates;
+  }
+
+  private alignAttendanceWeeklySummaryDateToDayOfWeek(
+    value: string,
+    targetDayOfWeek: number
+  ) {
+    if (targetDayOfWeek < 1 || targetDayOfWeek > 7) return null;
+    const currentDayOfWeek = this.attendanceWeeklySummaryDayOfWeek(value);
+    if (!currentDayOfWeek) return null;
+    const diff = (targetDayOfWeek - currentDayOfWeek + 7) % 7;
+    return this.addDaysToDateOnly(value, diff);
+  }
+
+  private attendanceWeeklySummaryDayOfWeek(value: string) {
+    const ms = this.dateOnlyToUtcMs(value);
+    if (ms === null) return null;
+    const day = new Date(ms).getUTCDay();
+    return day === 0 ? 7 : day;
+  }
+
+  private createEmptyAttendanceWeeklySummaryAggregate(): AttendanceWeeklySummaryAggregate {
+    return {
+      studentCount: 0,
+      week1: { attendedCount: 0, absentCount: 0 },
+      week2: { attendedCount: 0, absentCount: 0 },
+      week3: { attendedCount: 0, absentCount: 0 },
+      totalAttendedCount: 0,
+      totalAbsentCount: 0,
+      totalAttendancePct: 0,
+      totalAbsencePct: 0,
+      studentsWithGrades: 0,
+      approvedCount: 0,
+      failedCount: 0,
+      approvedPct: 0,
+      failedPct: 0,
+    };
+  }
+
+  private buildAttendanceWeeklySummaryAggregate(
+    rows: Array<{
+      weekFlags: boolean[];
+      weekExpectedFlags: boolean[];
+      totalAttendanceCount: number;
+      hasCompleteGrade: boolean;
+      approved: boolean;
+    }>
+  ): AttendanceWeeklySummaryAggregate {
+    if (rows.length === 0) {
+      return this.createEmptyAttendanceWeeklySummaryAggregate();
+    }
+
+    const studentCount = rows.length;
+    const week1Attended = rows.filter(
+      (row) => Boolean(row.weekExpectedFlags[0]) && Boolean(row.weekFlags[0])
+    ).length;
+    const week2Attended = rows.filter(
+      (row) => Boolean(row.weekExpectedFlags[1]) && Boolean(row.weekFlags[1])
+    ).length;
+    const week3Attended = rows.filter(
+      (row) => Boolean(row.weekExpectedFlags[2]) && Boolean(row.weekFlags[2])
+    ).length;
+    const week1Absent = rows.filter(
+      (row) => Boolean(row.weekExpectedFlags[0]) && !Boolean(row.weekFlags[0])
+    ).length;
+    const week2Absent = rows.filter(
+      (row) => Boolean(row.weekExpectedFlags[1]) && !Boolean(row.weekFlags[1])
+    ).length;
+    const week3Absent = rows.filter(
+      (row) => Boolean(row.weekExpectedFlags[2]) && !Boolean(row.weekFlags[2])
+    ).length;
+    const totalAttendedCount = rows.filter(
+      (row) => row.totalAttendanceCount >= 2
+    ).length;
+    const studentsWithGrades = rows.filter((row) => row.hasCompleteGrade).length;
+    const approvedCount = rows.filter(
+      (row) => row.hasCompleteGrade && row.approved
+    ).length;
+    const failedCount = Math.max(studentsWithGrades - approvedCount, 0);
+
+    return {
+      studentCount,
+      week1: {
+        attendedCount: week1Attended,
+        absentCount: week1Absent,
+      },
+      week2: {
+        attendedCount: week2Attended,
+        absentCount: week2Absent,
+      },
+      week3: {
+        attendedCount: week3Attended,
+        absentCount: week3Absent,
+      },
+      totalAttendedCount,
+      totalAbsentCount: Math.max(studentCount - totalAttendedCount, 0),
+      totalAttendancePct: this.toPercentage(totalAttendedCount, studentCount),
+      totalAbsencePct: this.toPercentage(
+        Math.max(studentCount - totalAttendedCount, 0),
+        studentCount
+      ),
+      studentsWithGrades,
+      approvedCount,
+      failedCount,
+      approvedPct: this.toPercentage(approvedCount, studentsWithGrades),
+      failedPct: this.toPercentage(failedCount, studentsWithGrades),
+    };
+  }
+
+  private toPercentage(value: number, total: number) {
+    if (total <= 0) return 0;
+    return this.toFixed2((Math.max(value, 0) * 100) / total);
+  }
+
+  private compareAttendanceWeeklySummaryBlocks(
+    left: {
+      courseName: string;
+      sectionCode: string | null;
+      sectionName: string;
+      currentCampusName: string;
+      currentModality: string;
+    },
+    right: {
+      courseName: string;
+      sectionCode: string | null;
+      sectionName: string;
+      currentCampusName: string;
+      currentModality: string;
+    }
+  ) {
+    return (
+      this.compareReportText(left.courseName, right.courseName) ||
+      this.compareReportText(
+        left.sectionCode || left.sectionName,
+        right.sectionCode || right.sectionName
+      ) ||
+      this.compareReportText(left.currentCampusName, right.currentCampusName) ||
+      this.compareReportText(left.currentModality, right.currentModality)
+    );
+  }
+
+  private compareReportText(
+    left: string | null | undefined,
+    right: string | null | undefined
+  ) {
+    return String(left ?? '').localeCompare(String(right ?? ''), 'es', {
+      sensitivity: 'base',
+    });
+  }
+
+  private sortAttendanceWeeklySummaryCampuses(values: string[]) {
+    return Array.from(new Set(values))
+      .filter(Boolean)
+      .sort((left, right) => {
+        if (left === 'SIN DATO' && right !== 'SIN DATO') return 1;
+        if (left !== 'SIN DATO' && right === 'SIN DATO') return -1;
+        return this.compareReportText(left, right);
+      });
+  }
+
+  private sortAttendanceWeeklySummaryModalities(values: string[]) {
+    const order = new Map([
+      ['PRESENCIAL', 0],
+      ['VIRTUAL', 1],
+      ['SIN DATO', 2],
+    ]);
+    return Array.from(new Set(values))
+      .filter(Boolean)
+      .sort((left, right) => {
+        const diff = (order.get(left) ?? 99) - (order.get(right) ?? 99);
+        return diff || this.compareReportText(left, right);
+      });
+  }
+
+  private dateOnlyToUtcMs(value: string) {
+    const match = String(value ?? '').trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return null;
+    return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  }
+
+  private addDaysToDateOnly(value: string, days: number) {
+    const base = this.dateOnlyToUtcMs(value);
+    if (base === null) return null;
+    return this.utcMsToDateOnly(base + days * 86400000);
+  }
+
+  private utcMsToDateOnly(value: number) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    const yyyy = String(date.getUTCFullYear());
+    const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(date.getUTCDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  private buildAttendanceWeeklySummaryFilterSummary(
+    filter: AttendanceWeeklySummaryFilter
+  ) {
+    const normalized = this.normalizeAttendanceWeeklySummaryFilter(filter);
+    return [
+      `Local del alumno (segun Excel): ${normalized.originCampus || 'Todas'}`,
+      `Modalidad del alumno (segun Excel): ${normalized.sourceModality || 'Todas'}`,
+    ];
+  }
+
+  private formatAttendanceWeeklySummaryCount(
+    value: AttendanceWeeklySummaryCount
+  ) {
+    return `${Math.max(Number(value?.attendedCount ?? 0), 0)}/${Math.max(
+      Number(value?.absentCount ?? 0),
+      0
+    )}`;
+  }
+
+  private formatAttendanceWeeklySummaryWeekHeader(
+    value?: AttendanceWeeklySummaryWeekRange | null
+  ) {
+    const label = String(value?.label ?? 'Semana').trim() || 'Semana';
+    const startDate = String(value?.startDate ?? '').trim();
+    const endDate = String(value?.endDate ?? '').trim();
+    if (!startDate || !endDate) return `${label}: Sin fechas programadas`;
+    if (startDate === endDate) return `${label}: ${startDate}`;
+    return `${label}: ${startDate} al ${endDate}`;
+  }
+
+  private writeAttendanceWeeklySummaryPdfTable(
+    doc: any,
+    title: string | null,
+    rows: Array<{ careerName: string } & AttendanceWeeklySummaryAggregate>,
+    footerRows: Array<{ careerName: string } & AttendanceWeeklySummaryAggregate>
+  ) {
+    if (title) {
+      this.ensurePdfSpace(doc, 28);
+      doc.font('Helvetica-Bold').fontSize(10).text(title);
+      doc.moveDown(0.3);
+    }
+
+    const header = this.buildAttendanceWeeklySummaryPdfRow({
+      careerName: 'Carrera',
+      week1: { attendedCount: 0, absentCount: 0 },
+      week2: { attendedCount: 0, absentCount: 0 },
+      week3: { attendedCount: 0, absentCount: 0 },
+      totalAttendedCount: 0,
+      totalAbsentCount: 0,
+      totalAttendancePct: 0,
+      totalAbsencePct: 0,
+      approvedPct: 0,
+      failedPct: 0,
+    });
+    const separator = '-'.repeat(header.length);
+
+    doc.font('Courier').fontSize(7);
+    for (const line of [
+      header,
+      separator,
+      ...rows.map((row) => this.buildAttendanceWeeklySummaryPdfRow(row)),
+      ...(footerRows.length > 0 ? [separator] : []),
+      ...footerRows.map((row) => this.buildAttendanceWeeklySummaryPdfRow(row)),
+    ]) {
+      this.ensurePdfSpace(doc, 12);
+      doc.text(line, { width: 760 });
+    }
+    doc.moveDown(0.7);
+  }
+
+  private buildAttendanceWeeklySummaryPdfRow(row: {
+    careerName: string;
+    week1: AttendanceWeeklySummaryCount;
+    week2: AttendanceWeeklySummaryCount;
+    week3: AttendanceWeeklySummaryCount;
+    totalAttendedCount: number;
+    totalAbsentCount: number;
+    totalAttendancePct: number;
+    totalAbsencePct: number;
+    approvedPct: number;
+    failedPct: number;
+  }) {
+    const isHeader = row.careerName === 'Carrera';
+    return [
+      this.padAttendanceWeeklySummaryPdfColumn(row.careerName, 20),
+      this.padAttendanceWeeklySummaryPdfColumn(
+        isHeader ? 'S1' : this.formatAttendanceWeeklySummaryCount(row.week1),
+        9
+      ),
+      this.padAttendanceWeeklySummaryPdfColumn(
+        isHeader ? 'S2' : this.formatAttendanceWeeklySummaryCount(row.week2),
+        9
+      ),
+      this.padAttendanceWeeklySummaryPdfColumn(
+        isHeader ? 'S3' : this.formatAttendanceWeeklySummaryCount(row.week3),
+        9
+      ),
+      this.padAttendanceWeeklySummaryPdfColumn(
+        isHeader ? 'Asist.' : String(row.totalAttendedCount),
+        8
+      ),
+      this.padAttendanceWeeklySummaryPdfColumn(
+        isHeader ? 'Falt.' : String(row.totalAbsentCount),
+        8
+      ),
+      this.padAttendanceWeeklySummaryPdfColumn(
+        isHeader ? '% Asist.' : `${this.toFixed2(row.totalAttendancePct)}%`,
+        9
+      ),
+      this.padAttendanceWeeklySummaryPdfColumn(
+        isHeader ? '% No Asist.' : `${this.toFixed2(row.totalAbsencePct)}%`,
+        10
+      ),
+      this.padAttendanceWeeklySummaryPdfColumn(
+        isHeader ? '% Aprob.' : `${this.toFixed2(row.approvedPct)}%`,
+        9
+      ),
+      this.padAttendanceWeeklySummaryPdfColumn(
+        isHeader ? '% Desap.' : `${this.toFixed2(row.failedPct)}%`,
+        9
+      ),
+    ].join(' ');
+  }
+
+  private padAttendanceWeeklySummaryPdfColumn(value: string, width: number) {
+    const text = String(value ?? '').trim();
+    if (text.length >= width) return text.slice(0, width);
+    return text.padEnd(width, ' ');
+  }
+
+  private buildAttendanceWeeklySummaryExportFileName(
+    reportType: string,
+    filter: AttendanceWeeklySummaryFilter,
+    periodCode: string,
+    extension: 'xlsx' | 'pdf'
+  ) {
+    const normalized = this.normalizeAttendanceWeeklySummaryFilter(filter);
+    const parts = [
+      this.sanitizeFilePart(reportType),
+      this.sanitizeFilePart(periodCode || 'PERIODO'),
+    ];
+    if (normalized.originCampus) {
+      parts.push(this.sanitizeFilePart(normalized.originCampus));
+    }
+    if (normalized.sourceModality) {
+      parts.push(this.sanitizeFilePart(normalized.sourceModality));
+    }
+    return `reporte_${parts.join('_')}.${extension}`;
+  }
+
   private buildFilterSummary(filter: GradesReportFilter) {
     return [
       `Facultad: ${String(filter.facultyGroup ?? '').trim() || 'Todas'}`,
@@ -2182,9 +3539,17 @@ export class GradesService {
     return start || end || '-';
   }
 
-  private createPdfDocument() {
+  private createPdfDocument(options?: {
+    margin?: number;
+    size?: string;
+    layout?: 'portrait' | 'landscape';
+  }) {
     const PDFDocument = require('pdfkit');
-    return new PDFDocument({ margin: 40, size: 'A4' });
+    return new PDFDocument({
+      margin: options?.margin ?? 40,
+      size: options?.size ?? 'A4',
+      layout: options?.layout ?? 'portrait',
+    });
   }
 
   private async finalizePdfDocument(doc: any) {
