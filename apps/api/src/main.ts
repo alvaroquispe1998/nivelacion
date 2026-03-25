@@ -2,6 +2,7 @@
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app/app.module';
+import { ConfigService } from '@nestjs/config';
 import { AllExceptionsFilter } from './app/common/filters/all-exceptions.filter';
 
 async function bootstrap() {
@@ -61,7 +62,8 @@ async function bootstrap() {
   const doc = SwaggerModule.createDocument(app, swaggerConfig);
   SwaggerModule.setup('docs', app, doc);
 
-  const port = Number(process.env.PORT ?? 3000);
+  const configService = app.get(ConfigService);
+  const port = Number(configService.get<number | string>('PORT') ?? process.env.PORT ?? 3000);
   await app.listen(port, '0.0.0.0');
   Logger.log(`API listening on http://localhost:${port}/api`);
 }
