@@ -13,7 +13,30 @@ async function bootstrap() {
     .filter(Boolean);
 
   app.enableCors({
-    origin: allowedOrigins.length > 0 ? allowedOrigins : true,
+    origin: (origin, callback) => {
+      // allow requests without origin (server-to-server, curl, postman)
+      if (!origin) return callback(null, true);
+
+      // allow explicit origins from env first
+      if (allowedOrigins.length > 0 && allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      // allow any subdomain of autonomadeica.edu.pe
+      try {
+        const hostname = new URL(origin).hostname;
+        if (
+          hostname === 'autonomadeica.edu.pe' ||
+          hostname.endsWith('.autonomadeica.edu.pe')
+        ) {
+          return callback(null, true);
+        }
+      } catch (err) {
+        return callback(new Error('Not allowed by CORS'));
+      }
+
+      return callback(new Error('Not allowed by CORS'));
+    },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-period-id'],
     credentials: true,
