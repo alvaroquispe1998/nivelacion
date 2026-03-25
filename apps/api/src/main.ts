@@ -8,10 +8,7 @@ import { AllExceptionsFilter } from './app/common/filters/all-exceptions.filter'
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  const allowedOrigins = (process.env.CORS_ORIGINS ?? '')
-    .split(',')
-    .map((o) => o.trim())
-    .filter(Boolean);
+  // CORS origins are allowed unconditionally (origin: true)
 
   app.enableCors({
     // allow any origin; when credentials=true, origin will be reflected
