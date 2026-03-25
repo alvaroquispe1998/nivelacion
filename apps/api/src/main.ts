@@ -15,11 +15,16 @@ async function bootstrap() {
 
   app.enableCors({
     origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+      Logger.log(`CORS check origin=${origin} allowedEnv=[${allowedOrigins.join(',')}]`);
       // allow requests without origin (server-to-server, curl, postman)
-      if (!origin) return callback(null, true);
+      if (!origin) {
+        Logger.log('CORS allow: no origin (server-to-server)');
+        return callback(null, true);
+      }
 
       // allow explicit origins from env first
       if (allowedOrigins.length > 0 && allowedOrigins.includes(origin)) {
+        Logger.log(`CORS allow: matched CORS_ORIGINS for ${origin}`);
         return callback(null, true);
       }
 
@@ -30,12 +35,15 @@ async function bootstrap() {
           hostname === 'autonomadeica.edu.pe' ||
           hostname.endsWith('.autonomadeica.edu.pe')
         ) {
+          Logger.log(`CORS allow: matched wildcard for ${hostname}`);
           return callback(null, true);
         }
       } catch (err) {
+        Logger.warn(`CORS check failed parsing origin: ${origin}`);
         return callback(new Error('Not allowed by CORS'));
       }
 
+      Logger.warn(`CORS reject origin=${origin}`);
       return callback(new Error('Not allowed by CORS'));
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
