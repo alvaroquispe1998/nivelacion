@@ -8,6 +8,7 @@ import {
   SectionCourseGradesResponse,
 } from '@uai/shared';
 import { firstValueFrom, Subscription } from 'rxjs';
+import { downloadCsvFile } from '../shared/csv';
 
 @Component({
   standalone: true,
@@ -452,35 +453,38 @@ export class AdminGradesPage implements OnDestroy {
     this.exportingCsv = true;
     try {
       const components = this.activeSchemeComponents;
-      const header = ['DNI', 'Codigo', 'Alumno', ...components.map((c) => c.code)];
+      const header = [
+        'DNI',
+        'Codigo',
+        'Alumno',
+        ...components.map((c) => c.code),
+        'Promedio',
+        'Aprobado',
+      ];
       const rows = this.sectionGrades.students.map((s) => [
         s.dni,
         this.studentCode(s.codigoAlumno),
         s.fullName,
         ...components.map((c) => this.editableScores[s.studentId]?.[c.id] ?? ''),
+        s.finalAverage,
+        this.exportApprovalStatus(s),
       ]);
-      const csv = [header, ...rows]
-        .map((r) => r.map((v) => `"${String(v ?? '').replace(/\"/g, '\"\"')}"`).join(','))
-        .join('\n');
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
       const opt = this.filteredSectionCourses.find(
         (x) => x.sectionCourseId === this.selectedSectionCourseId
       );
       const name = opt
         ? `${opt.sectionCode || opt.sectionName || 'seccion'}_${opt.courseName ?? ''}`
         : 'notas_seccion';
-      a.href = url;
-      a.download = `${name.replace(/\\s+/g, '_')}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
+      downloadCsvFile(`${name.replace(/\\s+/g, '_')}.csv`, [header, ...rows]);
     } finally {
       this.exportingCsv = false;
       this.cdr.detectChanges();
     }
+  }
+
+  private exportApprovalStatus(row: SectionCourseGradesResponse['students'][number]) {
+    if (!this.isRowComplete(row)) return 'PENDIENTE';
+    return row.approved ? 'SI' : 'NO';
   }
 
   private extractError(error: any, fallback: string) {
