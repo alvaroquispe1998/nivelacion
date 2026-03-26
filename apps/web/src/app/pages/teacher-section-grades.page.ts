@@ -5,6 +5,7 @@ import { FormsModule } from '@angular/forms';
 import { SectionCourseGradesResponse } from '@uai/shared';
 import { firstValueFrom } from 'rxjs';
 import { PrivateRouteContextService } from '../core/navigation/private-route-context.service';
+import { downloadCsvFile } from '../shared/csv';
 
 @Component({
   standalone: true,
@@ -18,12 +19,21 @@ import { PrivateRouteContextService } from '../core/navigation/private-route-con
             {{ sectionLabel }} | {{ courseLabel }}
           </div>
         </div>
-        <button
-          class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50"
-          (click)="load()"
-        >
-          Refrescar
-        </button>
+        <div class="flex flex-wrap gap-2">
+          <button
+            class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50 disabled:opacity-60"
+            [disabled]="!sectionGrades || exporting || sectionGrades.students.length === 0"
+            (click)="exportGradesCsv()"
+          >
+            {{ exporting ? 'Exportando...' : 'Exportar notas' }}
+          </button>
+          <button
+            class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50"
+            (click)="load()"
+          >
+            Refrescar
+          </button>
+        </div>
       </div>
     </div>
 
@@ -53,6 +63,7 @@ import { PrivateRouteContextService } from '../core/navigation/private-route-con
               <th class="px-3 py-2">DNI</th>
               <th class="px-3 py-2">Código</th>
               <th class="px-3 py-2">Alumno</th>
+              <th class="px-3 py-2">Carrera</th>
               <th class="px-3 py-2" *ngFor="let c of activeComponents; trackBy: trackComponent">{{ c.code }}</th>
               <th class="px-3 py-2">Promedio</th>
               <th class="px-3 py-2">Aprobado</th>
@@ -61,8 +72,9 @@ import { PrivateRouteContextService } from '../core/navigation/private-route-con
           <tbody>
             <tr *ngFor="let row of sectionGrades.students; trackBy: trackStudent" class="border-t border-slate-100">
               <td class="px-3 py-2">{{ row.dni }}</td>
-              <td class="px-3 py-2">{{ row.codigoAlumno || 'SIN CÓDIGO' }}</td>
+              <td class="px-3 py-2">{{ studentCode(row.codigoAlumno) }}</td>
               <td class="px-3 py-2 font-medium">{{ row.fullName }}</td>
+              <td class="px-3 py-2 text-slate-600">{{ studentCareer(row.careerName) }}</td>
               <td class="px-3 py-2" *ngFor="let c of activeComponents; trackBy: trackComponent">
                 <input
                   type="number"
@@ -123,6 +135,7 @@ export class TeacherSectionGradesPage {
   editableScores: Record<string, Record<string, string>> = {};
   saving = false;
   publishing = false;
+  exporting = false;
   error: string | null = null;
   success: string | null = null;
 
@@ -152,6 +165,16 @@ export class TeacherSectionGradesPage {
 
   trackStudent(_: number, item: { studentId: string }) {
     return item.studentId;
+  }
+
+  studentCode(code: string | null | undefined) {
+    const value = String(code ?? '').trim();
+    return value || 'SIN CODIGO';
+  }
+
+  studentCareer(careerName: string | null | undefined) {
+    const value = String(careerName ?? '').trim();
+    return value || 'SIN CARRERA';
   }
 
   isRowComplete(row: SectionCourseGradesResponse['students'][number]) {
@@ -274,6 +297,36 @@ export class TeacherSectionGradesPage {
     return grades;
   }
 
+  exportGradesCsv() {
+    if (!this.sectionGrades) return;
+    this.exporting = true;
+    try {
+      const components = this.activeComponents;
+      const header = [
+        'DNI',
+        'Codigo',
+        'Alumno',
+        'Carrera',
+        ...components.map((c) => c.code),
+        'Promedio',
+        'Aprobado',
+      ];
+      const rows = this.sectionGrades.students.map((student) => [
+        student.dni,
+        this.studentCode(student.codigoAlumno),
+        student.fullName,
+        this.studentCareer(student.careerName),
+        ...components.map((component) => this.editableScores[student.studentId]?.[component.id] ?? ''),
+        student.finalAverage,
+        this.exportApprovalStatus(student),
+      ]);
+      downloadCsvFile(this.buildGradesExportFileName(), [header, ...rows]);
+    } finally {
+      this.exporting = false;
+      this.cdr.detectChanges();
+    }
+  }
+
   private extractError(error: any, fallback: string) {
     const err = error?.error;
     if (typeof err?.message === 'string' && err.message.trim()) return err.message;
@@ -281,5 +334,24 @@ export class TeacherSectionGradesPage {
       return String(err.message.message ?? fallback);
     }
     return String(error?.message ?? fallback);
+  }
+
+  private buildGradesExportFileName() {
+    const sectionPart = this.sanitizeFileNamePart(this.sectionLabel || 'seccion');
+    const coursePart = this.sanitizeFileNamePart(this.courseLabel || 'curso');
+    return `${sectionPart}_${coursePart}_notas.csv`;
+  }
+
+  private exportApprovalStatus(row: SectionCourseGradesResponse['students'][number]) {
+    if (!this.isRowComplete(row)) return 'PENDIENTE';
+    return row.approved ? 'SI' : 'NO';
+  }
+
+  private sanitizeFileNamePart(value: string) {
+    const cleaned = String(value ?? '')
+      .trim()
+      .replace(/[\\/:*?"<>|]+/g, '')
+      .replace(/\s+/g, '_');
+    return cleaned || 'archivo';
   }
 }

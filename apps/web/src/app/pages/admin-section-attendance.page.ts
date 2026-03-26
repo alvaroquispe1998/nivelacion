@@ -7,6 +7,7 @@ import { AttendanceStatus } from '@uai/shared';
 import type { AdminAttendanceRecord, AdminAttendanceSession, AdminScheduleBlock } from '@uai/shared';
 import { combineLatest, firstValueFrom } from 'rxjs';
 import type { Subscription } from 'rxjs';
+import { downloadCsvFile } from '../shared/csv';
 import { DAYS } from '../shared/days';
 
 const COURSE_CONTEXT_STORAGE_KEY = 'admin.sections.selectedCourseName';
@@ -447,21 +448,10 @@ export class AdminSectionAttendancePage {
           return '';
         }),
       ]);
-      const csv = [header, ...rows]
-        .map((r) => r.map((v) => `"${String(v ?? '').replace(/\"/g, '\"\"')}"`).join(','))
-        .join('\n');
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
       const filenameBase = this.selectedCourseName
         ? this.selectedCourseName.replace(/\\s+/g, '_')
         : 'asistencia_seccion';
-      a.href = url;
-      a.download = `${filenameBase}_asistencia.csv`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
+      downloadCsvFile(`${filenameBase}_asistencia.csv`, [header, ...rows]);
     } finally {
       this.exporting = false;
     }

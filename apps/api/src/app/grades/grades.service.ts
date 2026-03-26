@@ -3155,7 +3155,7 @@ export class GradesService {
         ? this.addDaysToDateOnly(firstExpectedDate, weekIndex * 7)
         : null,
       endDate: firstExpectedDate
-        ? this.addDaysToDateOnly(firstExpectedDate, weekIndex * 7 + 6)
+        ? this.addDaysToDateOnly(firstExpectedDate, weekIndex * 7)
         : null,
     }));
   }
@@ -3499,10 +3499,17 @@ export class GradesService {
   ) {
     const label = String(value?.label ?? 'Semana').trim() || 'Semana';
     const startDate = String(value?.startDate ?? '').trim();
-    const endDate = String(value?.endDate ?? '').trim();
-    if (!startDate || !endDate) return `${label}: Sin fechas programadas`;
-    if (startDate === endDate) return `${label}: ${startDate}`;
-    return `${label}: ${startDate} al ${endDate}`;
+    if (!startDate) return `${label}: Sin fechas programadas`;
+    return `${label}: ${this.formatAttendanceWeeklySummaryDisplayDate(startDate)}`;
+  }
+
+  private formatAttendanceWeeklySummaryDisplayDate(value: string) {
+    const normalized = String(value ?? '').trim();
+    const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return normalized;
+    const dayOfWeek = this.attendanceWeeklySummaryDayOfWeek(normalized);
+    const weekdayLabel = dayOfWeek ? this.dayLabel(dayOfWeek) : 'Fecha';
+    return `${weekdayLabel} ${match[3]}/${match[2]}/${match[1]}`;
   }
 
   private writeAttendanceWeeklySummaryPdfTable(

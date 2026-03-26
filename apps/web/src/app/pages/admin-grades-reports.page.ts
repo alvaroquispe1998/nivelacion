@@ -750,10 +750,29 @@ export class AdminGradesReportsPage implements OnDestroy {
   formatWeekRange(value: WeeklySummaryWeekRange) {
     const label = String(value?.label ?? 'Semana').trim() || 'Semana';
     const startDate = String(value?.startDate ?? '').trim();
-    const endDate = String(value?.endDate ?? '').trim();
-    if (!startDate || !endDate) return `${label}: Sin sesiones registradas`;
-    if (startDate === endDate) return `${label}: ${startDate}`;
-    return `${label}: ${startDate} al ${endDate}`;
+    if (!startDate) return `${label}: Sin fechas programadas`;
+    return `${label}: ${this.formatWeekDisplayDate(startDate)}`;
+  }
+
+  private formatWeekDisplayDate(value: string) {
+    const normalized = String(value ?? '').trim();
+    const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return normalized;
+    const date = new Date(
+      Number(match[1]),
+      Number(match[2]) - 1,
+      Number(match[3])
+    );
+    const weekday = this.capitalizeFirstLetter(
+      date.toLocaleDateString('es-PE', { weekday: 'long' })
+    );
+    return `${weekday} ${match[3]}/${match[2]}/${match[1]}`;
+  }
+
+  private capitalizeFirstLetter(value: string) {
+    const normalized = String(value ?? '').trim();
+    if (!normalized) return '';
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
   }
 
   async loadAll() {

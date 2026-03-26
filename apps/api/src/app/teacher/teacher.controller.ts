@@ -210,13 +210,15 @@ export class TeacherController {
       dni: string;
       codigoAlumno: string | null;
       fullName: string;
+      careerName: string | null;
     }> = await this.dataSource.query(
       `
       SELECT
         u.id AS id,
         u.dni AS dni,
         u.codigoAlumno AS codigoAlumno,
-        u.fullName AS fullName
+        u.fullName AS fullName,
+        u.careerName AS careerName
       FROM section_student_courses ssc
       INNER JOIN users u ON u.id = ssc.studentId
       WHERE ssc.sectionCourseId = ?
@@ -229,6 +231,7 @@ export class TeacherController {
       dni: String(row.dni ?? ''),
       codigoAlumno: row.codigoAlumno ? String(row.codigoAlumno) : null,
       fullName: String(row.fullName ?? ''),
+      careerName: row.careerName ? String(row.careerName) : null,
     }));
   }
 

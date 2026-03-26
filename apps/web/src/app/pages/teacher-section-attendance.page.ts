@@ -5,6 +5,7 @@ import { FormsModule } from '@angular/forms';
 import { AttendanceStatus } from '@uai/shared';
 import { firstValueFrom } from 'rxjs';
 import { PrivateRouteContextService } from '../core/navigation/private-route-context.service';
+import { downloadCsvFile } from '../shared/csv';
 import { DAYS } from '../shared/days';
 
 interface TeacherAssignment {
@@ -41,6 +42,7 @@ interface TeacherStudentRow {
   dni: string;
   codigoAlumno: string | null;
   fullName: string;
+  careerName: string | null;
 }
 
 interface TeacherRecordRow {
@@ -62,12 +64,21 @@ interface TeacherRecordRow {
             {{ assignmentLabel }}
           </div>
         </div>
-        <button
-          class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50"
-          (click)="loadAll()"
-        >
-          Refrescar
-        </button>
+        <div class="flex flex-wrap gap-2">
+          <button
+            class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50 disabled:opacity-60"
+            [disabled]="exporting || students.length === 0 || weekDates.length === 0"
+            (click)="exportAttendanceCsv()"
+          >
+            {{ exporting ? 'Exportando...' : 'Exportar asistencia' }}
+          </button>
+          <button
+            class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50"
+            (click)="loadAll()"
+          >
+            Refrescar
+          </button>
+        </div>
       </div>
     </div>
 
@@ -153,6 +164,7 @@ interface TeacherRecordRow {
               <th class="sticky left-0 z-10 border-r border-slate-200 bg-slate-50 px-4 py-3">
                 Alumno
               </th>
+              <th class="border-r border-slate-200 bg-slate-50 px-3 py-3">Carrera</th>
               <th class="border-r border-slate-200 bg-slate-50 px-3 py-3">Codigo</th>
               <th class="min-w-[140px] border-r border-slate-200 px-3 py-3 text-center">
                 <div>Asistio</div>
@@ -166,6 +178,9 @@ interface TeacherRecordRow {
             <tr *ngFor="let s of students; trackBy: trackStudent" class="border-t border-slate-100">
               <td class="sticky left-0 z-10 border-r border-slate-200 bg-white px-4 py-3 font-medium">
                 {{ s.fullName }}
+              </td>
+              <td class="border-r border-slate-200 bg-white px-3 py-3 text-slate-600">
+                {{ studentCareer(s.careerName) }}
               </td>
               <td class="border-r border-slate-200 bg-white px-3 py-3 text-slate-600">
                 {{ studentCode(s.codigoAlumno) }}
@@ -182,12 +197,12 @@ interface TeacherRecordRow {
             </tr>
 
             <tr *ngIf="students.length===0" class="border-t border-slate-100">
-              <td class="px-4 py-6 text-slate-600" colspan="3">
+              <td class="px-4 py-6 text-slate-600" colspan="4">
                 No hay alumnos para este curso-seccion.
               </td>
             </tr>
             <tr *ngIf="students.length>0 && weekDates.length===0" class="border-t border-slate-100">
-              <td class="px-4 py-6 text-slate-600" colspan="3">
+              <td class="px-4 py-6 text-slate-600" colspan="4">
                 El horario no tiene rango de vigencia ni sesiones creadas para calcular semanas.
               </td>
             </tr>
@@ -215,11 +230,13 @@ export class TeacherSectionAttendancePage {
   activeDate = '';
   weekDates: string[] = [];
   statusMatrix: Record<string, Record<string, AttendanceStatus>> = {};
+  recordedStatusMatrix: Record<string, Record<string, AttendanceStatus>> = {};
   sessionsByDate = new Map<string, TeacherSession>();
 
   error: string | null = null;
   success: string | null = null;
   saving = false;
+  exporting = false;
   todayIso = this.localTodayIso();
 
   get selectedBlock() {
@@ -258,6 +275,11 @@ export class TeacherSectionAttendancePage {
     return value || 'SIN CODIGO';
   }
 
+  studentCareer(careerName: string | null | undefined) {
+    const value = String(careerName ?? '').trim();
+    return value || 'SIN CARRERA';
+  }
+
   dayLabel(dow: number) {
     return this.days.find((d) => d.dayOfWeek === dow)?.label ?? String(dow);
   }
@@ -282,6 +304,7 @@ export class TeacherSectionAttendancePage {
     this.activeDate = '';
     this.weekDates = [];
     this.statusMatrix = {};
+    this.recordedStatusMatrix = {};
     this.sessionsByDate.clear();
     this.students = [];
 
@@ -336,6 +359,7 @@ export class TeacherSectionAttendancePage {
     this.activeDate = '';
     this.weekDates = [];
     this.statusMatrix = {};
+    this.recordedStatusMatrix = {};
     this.sessionsByDate.clear();
 
     const block = this.selectedBlock;
@@ -373,8 +397,11 @@ export class TeacherSectionAttendancePage {
       for (const item of recordsBySession) {
         const dateKey = this.normalizeIsoDate(item.date);
         this.statusMatrix[dateKey] = this.statusMatrix[dateKey] ?? {};
+        this.recordedStatusMatrix[dateKey] = this.recordedStatusMatrix[dateKey] ?? {};
         for (const rec of item.records) {
-          this.statusMatrix[dateKey][rec.studentId] = this.normalizeStatus(rec.status);
+          const status = this.normalizeStatus(rec.status);
+          this.statusMatrix[dateKey][rec.studentId] = status;
+          this.recordedStatusMatrix[dateKey][rec.studentId] = status;
         }
       }
     } catch (e: any) {
@@ -388,9 +415,37 @@ export class TeacherSectionAttendancePage {
     return this.statusMatrix[date]?.[studentId] ?? AttendanceStatus.FALTO;
   }
 
+  getRecordedStatus(date: string, studentId: string) {
+    return this.recordedStatusMatrix[date]?.[studentId] ?? null;
+  }
+
   setStatus(date: string, studentId: string, status: AttendanceStatus) {
     this.statusMatrix[date] = this.statusMatrix[date] ?? {};
     this.statusMatrix[date][studentId] = status;
+  }
+
+  exportAttendanceCsv() {
+    if (this.students.length === 0 || this.weekDates.length === 0) return;
+    this.exporting = true;
+    try {
+      const header = ['DNI', 'Codigo', 'Alumno', 'Carrera', ...this.weekDates];
+      const rows = this.students.map((student) => [
+        student.dni,
+        this.studentCode(student.codigoAlumno),
+        student.fullName,
+        this.studentCareer(student.careerName),
+        ...this.weekDates.map((date) => {
+          const status = this.getRecordedStatus(date, student.id);
+          if (status === AttendanceStatus.ASISTIO) return 'ASISTIO';
+          if (status === AttendanceStatus.FALTO) return 'FALTO';
+          return '';
+        }),
+      ]);
+      downloadCsvFile(this.buildAttendanceExportFileName(), [header, ...rows]);
+    } finally {
+      this.exporting = false;
+      this.cdr.detectChanges();
+    }
   }
 
   getActiveChecked(studentId: string) {
@@ -467,6 +522,10 @@ export class TeacherSectionAttendancePage {
           })),
         ])
       );
+      this.recordedStatusMatrix[date] = this.recordedStatusMatrix[date] ?? {};
+      for (const student of this.students) {
+        this.recordedStatusMatrix[date][student.id] = this.getStatus(date, student.id);
+      }
       this.success = `Asistencia guardada para ${date}.`;
     } catch (e: any) {
       this.error = e?.error?.message ?? 'No se pudo guardar asistencia';
@@ -528,6 +587,22 @@ export class TeacherSectionAttendancePage {
       return AttendanceStatus.ASISTIO;
     }
     return AttendanceStatus.FALTO;
+  }
+
+  private buildAttendanceExportFileName() {
+    const sectionPart = this.sanitizeFileNamePart(
+      this.assignment?.sectionCode || this.assignment?.sectionName || 'seccion'
+    );
+    const coursePart = this.sanitizeFileNamePart(this.assignment?.courseName || 'curso');
+    return `${sectionPart}_${coursePart}_asistencia.csv`;
+  }
+
+  private sanitizeFileNamePart(value: string) {
+    const cleaned = String(value ?? '')
+      .trim()
+      .replace(/[\\/:*?"<>|]+/g, '')
+      .replace(/\s+/g, '_');
+    return cleaned || 'archivo';
   }
 
   private localTodayIso() {
