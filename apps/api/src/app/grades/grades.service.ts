@@ -5839,8 +5839,8 @@ export class GradesService {
   }
 
   private roundUpGrade(value: number) {
-    const safeValue = Number(value || 0);
+    const safeValue = this.toFixed2(Number(value || 0));
     if (safeValue <= 0) return 0;
-    return Math.ceil(safeValue - 1e-9);
+    return Math.floor(safeValue + 0.5 + 1e-9);
   }
 }
