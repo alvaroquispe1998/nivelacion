@@ -1,4 +1,15 @@
-import { Body, Controller, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Put,
+  Query,
+  StreamableFile,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ADMIN_BACKOFFICE_ROLES } from '@uai/shared';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -6,6 +17,7 @@ import type { JwtUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
+import { GradesService } from '../grades/grades.service';
 import { AttendanceService } from './attendance.service';
 import { CreateAttendanceSessionDto } from './dto/create-attendance-session.dto';
 import { UpdateAttendanceRecordDto } from './dto/update-attendance-record.dto';
@@ -16,7 +28,10 @@ import { UpdateAttendanceRecordDto } from './dto/update-attendance-record.dto';
 @Roles(...ADMIN_BACKOFFICE_ROLES)
 @Controller('admin/attendance-sessions')
 export class AttendanceController {
-  constructor(private readonly attendanceService: AttendanceService) {}
+  constructor(
+    private readonly attendanceService: AttendanceService,
+    private readonly gradesService: GradesService
+  ) {}
 
   @Post()
   async create(@Body() dto: CreateAttendanceSessionDto, @CurrentUser() user: JwtUser) {
@@ -46,6 +61,29 @@ export class AttendanceController {
   @Get(':id/records')
   records(@Param('id') id: string) {
     return this.attendanceService.getRecords(id);
+  }
+
+  @Get('export/pdf')
+  async exportPdf(
+    @Query('sectionCourseId') sectionCourseId?: string,
+    @Query('scheduleBlockId') scheduleBlockId?: string
+  ): Promise<StreamableFile> {
+    const safeSectionCourseId = String(sectionCourseId ?? '').trim();
+    const safeScheduleBlockId = String(scheduleBlockId ?? '').trim();
+    if (!safeSectionCourseId || !safeScheduleBlockId) {
+      throw new BadRequestException(
+        'sectionCourseId y scheduleBlockId son requeridos para exportar asistencia'
+      );
+    }
+    const { fileBuffer, fileName } =
+      await this.gradesService.buildAdminSectionCourseAttendancePdf(
+        safeSectionCourseId,
+        safeScheduleBlockId
+      );
+    return new StreamableFile(fileBuffer, {
+      type: 'application/pdf',
+      disposition: `attachment; filename="${fileName}"`,
+    });
   }
 
   @Put(':id/records')

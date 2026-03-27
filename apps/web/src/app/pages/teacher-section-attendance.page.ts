@@ -70,7 +70,21 @@ interface TeacherRecordRow {
             [disabled]="exporting || students.length === 0 || weekDates.length === 0"
             (click)="exportAttendanceCsv()"
           >
-            {{ exporting ? 'Exportando...' : 'Exportar asistencia' }}
+            {{ exporting ? 'Exportando CSV...' : 'Exportar CSV' }}
+          </button>
+          <button
+            class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50 disabled:opacity-60"
+            [disabled]="exportingPdf || !selectedBlockId || students.length === 0 || weekDates.length === 0"
+            (click)="exportAttendancePdf()"
+          >
+            {{ exportingPdf ? 'Exportando PDF...' : 'Asistencia PDF' }}
+          </button>
+          <button
+            class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50 disabled:opacity-60"
+            [disabled]="exportingXlsx || !selectedBlockId || students.length === 0 || weekDates.length === 0"
+            (click)="exportAttendanceXlsx()"
+          >
+            {{ exportingXlsx ? 'Exportando XLSX...' : 'Asistencia XLSX' }}
           </button>
           <button
             class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50"
@@ -237,6 +251,8 @@ export class TeacherSectionAttendancePage {
   success: string | null = null;
   saving = false;
   exporting = false;
+  exportingPdf = false;
+  exportingXlsx = false;
   todayIso = this.localTodayIso();
 
   get selectedBlock() {
@@ -448,6 +464,52 @@ export class TeacherSectionAttendancePage {
     }
   }
 
+  async exportAttendancePdf() {
+    if (!this.selectedBlockId || this.students.length === 0 || this.weekDates.length === 0) {
+      return;
+    }
+    this.error = null;
+    this.success = null;
+    this.exportingPdf = true;
+    try {
+      await this.downloadBlob(
+        `/api/teacher/section-courses/${encodeURIComponent(this.sectionCourseId)}/attendance/blocks/${encodeURIComponent(this.selectedBlockId)}/export/pdf`,
+        this.buildAttendanceBinaryExportFileName('asistencia', 'pdf')
+      );
+    } catch (e: any) {
+      this.error = await this.extractDownloadError(
+        e,
+        'No se pudo exportar la asistencia en PDF.'
+      );
+    } finally {
+      this.exportingPdf = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  async exportAttendanceXlsx() {
+    if (!this.selectedBlockId || this.students.length === 0 || this.weekDates.length === 0) {
+      return;
+    }
+    this.error = null;
+    this.success = null;
+    this.exportingXlsx = true;
+    try {
+      await this.downloadBlob(
+        `/api/teacher/section-courses/${encodeURIComponent(this.sectionCourseId)}/attendance/blocks/${encodeURIComponent(this.selectedBlockId)}/export/excel`,
+        this.buildAttendanceBinaryExportFileName('asistencia', 'xlsx')
+      );
+    } catch (e: any) {
+      this.error = await this.extractDownloadError(
+        e,
+        'No se pudo exportar la asistencia en Excel.'
+      );
+    } finally {
+      this.exportingXlsx = false;
+      this.cdr.detectChanges();
+    }
+  }
+
   getActiveChecked(studentId: string) {
     if (!this.activeDate) return false;
     return this.getStatus(this.activeDate, studentId) === AttendanceStatus.ASISTIO;
@@ -595,6 +657,85 @@ export class TeacherSectionAttendancePage {
     );
     const coursePart = this.sanitizeFileNamePart(this.assignment?.courseName || 'curso');
     return `${sectionPart}_${coursePart}_asistencia.csv`;
+  }
+
+  private buildAttendanceBinaryExportFileName(
+    prefix: string,
+    extension: 'pdf' | 'xlsx'
+  ) {
+    const sectionPart = this.sanitizeFileNamePart(
+      this.assignment?.sectionCode || this.assignment?.sectionName || 'seccion'
+    );
+    const coursePart = this.sanitizeFileNamePart(this.assignment?.courseName || 'curso');
+    return `${prefix}_${sectionPart}_${coursePart}.${extension}`;
+  }
+
+  private async downloadBlob(url: string, fallbackName: string) {
+    const response = await firstValueFrom(
+      this.http.get(url, {
+        observe: 'response',
+        responseType: 'blob',
+      })
+    );
+    const blob = response.body;
+    if (!blob) {
+      throw new Error('No se recibio archivo para descargar.');
+    }
+    const fileName = this.extractDownloadFileName(
+      response.headers.get('content-disposition'),
+      fallbackName
+    );
+    const objectUrl = window.URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = fileName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.URL.revokeObjectURL(objectUrl);
+  }
+
+  private async extractDownloadError(error: any, fallback: string) {
+    const blob = error?.error;
+    if (blob instanceof Blob) {
+      try {
+        const text = await blob.text();
+        if (text.trim()) {
+          try {
+            const parsed = JSON.parse(text);
+            const message = parsed?.message;
+            if (typeof message === 'string' && message.trim()) {
+              return message;
+            }
+          } catch {
+            // Fall back to raw text when the error payload is not JSON.
+          }
+          return text.trim();
+        }
+      } catch {
+        // Ignore blob parsing issues and use the generic message below.
+      }
+    }
+    return error?.error?.message ?? error?.message ?? fallback;
+  }
+
+  private extractDownloadFileName(
+    disposition: string | null,
+    fallbackName: string
+  ) {
+    const encodedMatch = disposition?.match(/filename\*=UTF-8''([^;]+)/i);
+    if (encodedMatch?.[1]) {
+      return this.cleanFileName(decodeURIComponent(encodedMatch[1]));
+    }
+    const simpleMatch = disposition?.match(/filename="?([^";]+)"?/i);
+    if (simpleMatch?.[1]) {
+      return this.cleanFileName(simpleMatch[1]);
+    }
+    return this.cleanFileName(fallbackName);
+  }
+
+  private cleanFileName(value: string) {
+    return String(value ?? '').replace(/[\\/:*?"<>|]+/g, '').trim() || 'archivo';
   }
 
   private sanitizeFileNamePart(value: string) {

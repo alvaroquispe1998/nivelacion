@@ -1,5 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import { existsSync } from 'fs';
+import { join } from 'path';
 import { Role } from '@uai/shared';
 import { DataSource } from 'typeorm';
 import * as XLSX from 'xlsx';
@@ -230,6 +232,87 @@ interface AdminStudentReportResponse {
   };
 }
 
+interface TeacherSectionGradesExportStudent {
+  studentId: string;
+  codigoAlumno: string | null;
+  fullName: string;
+  componentScores: Record<string, number | null>;
+  isComplete: boolean;
+  isRetiredLike: boolean;
+  preciseAverage: number | null;
+  finalAverage: number | null;
+  finalAverageWords: string;
+  observation: 'APROBADO' | 'DESAPROBADO' | 'PENDIENTE' | 'RETIRADO';
+}
+
+interface TeacherSectionCourseMetadata {
+  sectionCourseId: string;
+  sectionId: string;
+  periodId: string;
+  courseId: string;
+  courseName: string;
+  sectionCode: string | null;
+  sectionName: string;
+  facultyGroup: string | null;
+  facultyName: string | null;
+  campusName: string | null;
+  modality: string | null;
+}
+
+interface TeacherSectionGradesExportContext {
+  period: PeriodMetadata;
+  sectionCourse: TeacherSectionCourseMetadata;
+  publication: {
+    isPublished: boolean;
+    publishedAt: string | null;
+    publishedBy: string | null;
+  };
+  teacherName: string | null;
+  programName: string | null;
+  activeComponents: GradeSchemeComponentRow[];
+  students: TeacherSectionGradesExportStudent[];
+  summary: {
+    totalStudents: number;
+    approvedCount: number;
+    failedCount: number;
+    pendingCount: number;
+    retiredCount: number;
+  };
+}
+
+interface TeacherSectionAttendanceExportStudent {
+  studentId: string;
+  dni: string;
+  codigoAlumno: string | null;
+  fullName: string;
+  careerName: string | null;
+  attendanceByDate: Record<string, 'ASISTIO' | 'FALTO' | ''>;
+  totalAttended: number;
+}
+
+interface TeacherSectionAttendanceExportContext {
+  period: PeriodMetadata;
+  sectionCourse: TeacherSectionCourseMetadata;
+  teacherName: string | null;
+  programName: string | null;
+  block: {
+    id: string;
+    dayOfWeek: number;
+    startTime: string;
+    endTime: string;
+    startDate: string | null;
+    endDate: string | null;
+  };
+  dates: string[];
+  students: TeacherSectionAttendanceExportStudent[];
+  summary: {
+    totalStudents: number;
+    totalDates: number;
+    totalAttendances: number;
+    totalAbsences: number;
+  };
+}
+
 const COMPONENT_ORDER: GradeComponentCode[] = ['DIAGNOSTICO', 'FK1', 'FK2', 'PARCIAL'];
 const DEFAULT_COMPONENTS: Array<{
   code: GradeComponentCode;
@@ -448,6 +531,554 @@ export class GradesService {
       actorUserId,
       periodId,
     });
+  }
+
+  async buildTeacherSectionCourseConsolidatedPdf(
+    sectionCourseId: string,
+    teacherId: string
+  ) {
+    const report = await this.loadTeacherSectionGradesExportContext(
+      sectionCourseId,
+      teacherId
+    );
+    const generatedAt = new Date();
+    const doc = this.createPdfDocument({ layout: 'landscape', margin: 24 });
+
+    const columns = [
+      { title: 'N°', width: 24, align: 'center' as const, value: (_row: TeacherSectionGradesExportStudent, index: number) => String(index + 1) },
+      {
+        title: 'CODIGO',
+        width: 76,
+        value: (row: TeacherSectionGradesExportStudent) =>
+          row.codigoAlumno || 'SIN CODIGO',
+      },
+      {
+        title: 'APELLIDOS Y NOMBRES',
+        width: 208,
+        value: (row: TeacherSectionGradesExportStudent) => row.fullName,
+      },
+      ...report.activeComponents.map((component) => ({
+        title: `${component.code}\n(${this.toFixed2(component.weight)}%)`,
+        width: 52,
+        align: 'center' as const,
+        value: (row: TeacherSectionGradesExportStudent) =>
+          this.formatTeacherExportScore(row.componentScores[component.id]),
+      })),
+      {
+        title: 'PPF',
+        width: 48,
+        align: 'center' as const,
+        value: (row: TeacherSectionGradesExportStudent) =>
+          row.preciseAverage === null ? '-' : row.preciseAverage.toFixed(2),
+      },
+      {
+        title: 'PF',
+        width: 34,
+        align: 'center' as const,
+        value: (row: TeacherSectionGradesExportStudent) =>
+          row.finalAverage === null ? '-' : String(row.finalAverage).padStart(2, '0'),
+      },
+      {
+        title: 'LETRAS',
+        width: 84,
+        value: (row: TeacherSectionGradesExportStudent) =>
+          row.finalAverageWords || '-',
+      },
+      {
+        title: 'OBSERVACION',
+        width: 92,
+        value: (row: TeacherSectionGradesExportStudent) => row.observation,
+      },
+    ];
+
+    const tableState = this.drawPdfTable(doc, {
+      columns,
+      rows: report.students,
+      rowFontSize: 7,
+      headerFontSize: 7,
+      minRowHeight: 18,
+      emptyMessage: 'Sin alumnos matriculados.',
+      drawPageHeader: (tableDoc: any) =>
+        this.renderTeacherConsolidatedPageHeader(tableDoc, report, generatedAt),
+      onPageBreak: (tableDoc: any, pageNumber: number) =>
+        this.writeTeacherPageFooter(tableDoc, pageNumber),
+    });
+
+    const signatureBlocks = this.buildTeacherSignatureBlocks(report.teacherName);
+    let currentPage = tableState.pageNumber;
+    currentPage = this.ensureTeacherPageSpace(
+      doc,
+      this.measureTeacherSignatureBlocksHeight(doc, signatureBlocks),
+      currentPage
+    );
+    this.writeTeacherSignatureBlocks(doc, signatureBlocks);
+    this.writeTeacherPageFooter(doc, currentPage);
+
+    return {
+      fileBuffer: await this.finalizePdfDocument(doc),
+      fileName: this.buildTeacherSectionCourseExportFileName(
+        'consolidado_notas',
+        report.sectionCourse,
+        report.period.code,
+        'pdf'
+      ),
+    };
+  }
+
+  async buildTeacherSectionCourseConsolidatedExcel(
+    sectionCourseId: string,
+    teacherId: string
+  ) {
+    const report = await this.loadTeacherSectionGradesExportContext(
+      sectionCourseId,
+      teacherId
+    );
+    const generatedAt = new Date();
+    const infoRows: Array<[string, string?]> = [
+      [
+        `Facultad: ${report.sectionCourse.facultyName || report.sectionCourse.facultyGroup || '-'}`,
+        `Seccion: ${report.sectionCourse.sectionCode || report.sectionCourse.sectionName || '-'}`,
+      ],
+      [
+        `Escuela Profesional: ${report.programName || '-'}`,
+        `Sede: ${report.sectionCourse.campusName || '-'}`,
+      ],
+      [
+        `Curso: ${report.sectionCourse.courseName || '-'}`,
+        `Docente: ${report.teacherName || '-'}`,
+      ],
+      [
+        `Periodo: ${report.period.code} - ${report.period.name}`,
+        `Estado: ${report.publication.isPublished ? 'PUBLICADO' : 'BORRADOR'}`,
+      ],
+    ];
+    const tableHeader = [
+      'N°',
+      'CODIGO',
+      'APELLIDOS Y NOMBRES',
+      ...report.activeComponents.map(
+        (component) => `${component.code} (${this.toFixed2(component.weight)}%)`
+      ),
+      'PPF',
+      'PF',
+      'LETRAS',
+      'OBSERVACION',
+    ];
+    const tableRows = report.students.map((student, index) => [
+      index + 1,
+      student.codigoAlumno || 'SIN CODIGO',
+      student.fullName,
+      ...report.activeComponents.map((component) =>
+        this.formatTeacherExportScore(student.componentScores[component.id])
+      ),
+      student.preciseAverage === null ? '-' : student.preciseAverage.toFixed(2),
+      student.finalAverage === null ? '-' : String(student.finalAverage).padStart(2, '0'),
+      student.finalAverageWords || '-',
+      student.observation,
+    ]);
+    const widths = [6, 16, 34, ...report.activeComponents.map(() => 12), 10, 8, 16, 18];
+    const signatureBlocks = this.buildTeacherSignatureBlocks(report.teacherName);
+    return {
+      fileBuffer: await this.buildTeacherExcelWorkbook({
+        sheetName: 'Consolidado',
+        widths,
+        orientation: 'landscape',
+        officeLabel: 'Oficina de Servicios Academicos',
+        title: `CONSOLIDADO DE NOTAS ${report.period.code}`,
+        generatedAt,
+        infoRows,
+        tableHeader,
+        tableRows,
+        signatureBlocks,
+      }),
+      fileName: this.buildTeacherSectionCourseExportFileName(
+        'consolidado_notas',
+        report.sectionCourse,
+        report.period.code,
+        'xlsx'
+      ),
+    };
+  }
+
+  async buildTeacherSectionCourseOfficialRecordPdf(
+    sectionCourseId: string,
+    teacherId: string
+  ) {
+    const report = await this.loadTeacherSectionGradesExportContext(
+      sectionCourseId,
+      teacherId
+    );
+    const generatedAt = new Date();
+    const doc = this.createPdfDocument({ margin: 30 });
+
+    const columns = [
+      { title: 'N°', width: 24, align: 'center' as const, value: (_row: TeacherSectionGradesExportStudent, index: number) => String(index + 1) },
+      {
+        title: 'CODIGO',
+        width: 68,
+        value: (row: TeacherSectionGradesExportStudent) =>
+          row.codigoAlumno || 'SIN CODIGO',
+      },
+      {
+        title: 'APELLIDOS Y NOMBRES',
+        width: 208,
+        value: (row: TeacherSectionGradesExportStudent) => row.fullName,
+      },
+      {
+        title: 'PF',
+        width: 36,
+        align: 'center' as const,
+        value: (row: TeacherSectionGradesExportStudent) =>
+          row.finalAverage === null ? '-' : String(row.finalAverage).padStart(2, '0'),
+      },
+      {
+        title: 'LETRAS',
+        width: 74,
+        value: (row: TeacherSectionGradesExportStudent) =>
+          row.finalAverageWords || '-',
+      },
+      {
+        title: 'OBSERVACION',
+        width: 72,
+        value: (row: TeacherSectionGradesExportStudent) => row.observation,
+      },
+    ];
+
+    const tableState = this.drawPdfTable(doc, {
+      columns,
+      rows: report.students,
+      rowFontSize: 8,
+      headerFontSize: 8,
+      minRowHeight: 20,
+      emptyMessage: 'Sin alumnos matriculados.',
+      drawPageHeader: (tableDoc: any) =>
+        this.renderTeacherOfficialRecordPageHeader(tableDoc, report, generatedAt),
+      onPageBreak: (tableDoc: any, pageNumber: number) =>
+        this.writeTeacherPageFooter(tableDoc, pageNumber),
+    });
+
+    const signatureBlocks = this.buildTeacherSignatureBlocks(report.teacherName);
+    let currentPage = tableState.pageNumber;
+    currentPage = this.ensureTeacherPageSpace(
+      doc,
+      this.measureTeacherOfficialSummaryHeight(doc, report.summary) +
+        this.measureTeacherSignatureBlocksHeight(doc, signatureBlocks),
+      currentPage
+    );
+    this.writeTeacherOfficialSummary(doc, report.summary);
+    this.writeTeacherSignatureBlocks(doc, signatureBlocks);
+    this.writeTeacherPageFooter(doc, currentPage);
+
+    return {
+      fileBuffer: await this.finalizePdfDocument(doc),
+      fileName: this.buildTeacherSectionCourseExportFileName(
+        'acta_oficial_notas',
+        report.sectionCourse,
+        report.period.code,
+        'pdf'
+      ),
+    };
+  }
+
+  async buildTeacherSectionCourseOfficialRecordExcel(
+    sectionCourseId: string,
+    teacherId: string
+  ) {
+    const report = await this.loadTeacherSectionGradesExportContext(
+      sectionCourseId,
+      teacherId
+    );
+    const generatedAt = new Date();
+    const infoRows: Array<[string, string?]> = [
+      [
+        `Facultad: ${report.sectionCourse.facultyName || report.sectionCourse.facultyGroup || '-'}`,
+        `Modalidad: ${report.sectionCourse.sectionCode || report.sectionCourse.modality || '-'}`,
+      ],
+      [
+        `Prog. Academico: ${report.programName || '-'}`,
+        `Sede: ${report.sectionCourse.campusName || '-'}`,
+      ],
+      [
+        `Curso: ${report.sectionCourse.courseName || '-'}`,
+        `Docente: ${report.teacherName || '-'}`,
+      ],
+      [`Periodo: ${report.period.name || report.period.code}`],
+    ];
+    const tableHeader = [
+      'N°',
+      'CODIGO',
+      'APELLIDOS Y NOMBRES',
+      'PF',
+      'LETRAS',
+      'OBSERVACION',
+    ];
+    const tableRows = report.students.map((student, index) => [
+      index + 1,
+      student.codigoAlumno || 'SIN CODIGO',
+      student.fullName,
+      student.finalAverage === null ? '-' : String(student.finalAverage).padStart(2, '0'),
+      student.finalAverageWords || '-',
+      student.observation,
+    ]);
+    const widths = [6, 16, 36, 8, 16, 18];
+    const summaryRows = this.buildTeacherOfficialSummaryRows(report.summary);
+    const signatureBlocks = this.buildTeacherSignatureBlocks(report.teacherName);
+    return {
+      fileBuffer: await this.buildTeacherExcelWorkbook({
+        sheetName: 'Acta',
+        widths,
+        orientation: 'landscape',
+        officeLabel: 'Secretaria Academica',
+        title: `ACTA OFICIAL DE NOTAS ${report.period.code}`,
+        generatedAt,
+        infoRows,
+        tableHeader,
+        tableRows,
+        summaryTitle: 'Resumen academico',
+        summaryRows,
+        signatureBlocks,
+      }),
+      fileName: this.buildTeacherSectionCourseExportFileName(
+        'acta_oficial_notas',
+        report.sectionCourse,
+        report.period.code,
+        'xlsx'
+      ),
+    };
+  }
+
+  async buildTeacherSectionCourseAttendancePdf(
+    sectionCourseId: string,
+    scheduleBlockId: string,
+    teacherId: string
+  ) {
+    const report = await this.loadSectionAttendanceExportContext({
+      sectionCourseId,
+      scheduleBlockId,
+      teacherId,
+    });
+    const generatedAt = new Date();
+    const doc = this.createPdfDocument({
+      size: 'LEGAL',
+      layout: 'landscape',
+      margin: 24,
+    });
+    const contentWidth =
+      1008 - doc.page.margins.left - doc.page.margins.right;
+    const fixedWidth = 24 + 72 + 180 + 46;
+    const dateWidth = Math.max(
+      24,
+      Math.min(
+        38,
+        Math.floor((contentWidth - fixedWidth) / Math.max(report.dates.length, 1))
+      )
+    );
+    const nameWidth = Math.max(
+      140,
+      contentWidth - (24 + 72 + 46 + dateWidth * report.dates.length)
+    );
+    const columns = [
+      { title: 'N°', width: 24, align: 'center' as const, value: (_row: TeacherSectionAttendanceExportStudent, index: number) => String(index + 1) },
+      {
+        title: 'CODIGO',
+        width: 72,
+        value: (row: TeacherSectionAttendanceExportStudent) =>
+          row.codigoAlumno || 'SIN CODIGO',
+      },
+      {
+        title: 'APELLIDOS Y NOMBRES',
+        width: nameWidth,
+        value: (row: TeacherSectionAttendanceExportStudent) => row.fullName,
+      },
+      ...report.dates.map((date) => ({
+        title: `${this.shortDateLabel(date)}\n${this.shortDayLabel(date)}`,
+        width: dateWidth,
+        align: 'center' as const,
+        value: (row: TeacherSectionAttendanceExportStudent) =>
+          row.attendanceByDate[date] || '-',
+      })),
+      {
+        title: 'TOTAL',
+        width: 46,
+        align: 'center' as const,
+        value: (row: TeacherSectionAttendanceExportStudent) =>
+          String(row.totalAttended),
+      },
+    ];
+
+    const tableState = this.drawPdfTable(doc, {
+      columns,
+      rows: report.students,
+      rowFontSize: 7,
+      headerFontSize: 7,
+      minRowHeight: 18,
+      emptyMessage: 'Sin alumnos matriculados.',
+      drawPageHeader: (tableDoc: any) =>
+        this.renderTeacherAttendancePageHeader(tableDoc, report, generatedAt),
+      onPageBreak: (tableDoc: any, pageNumber: number) =>
+        this.writeTeacherPageFooter(tableDoc, pageNumber),
+    });
+
+    const currentPage = tableState.pageNumber;
+    this.writeTeacherPageFooter(doc, currentPage);
+
+    return {
+      fileBuffer: await this.finalizePdfDocument(doc),
+      fileName: this.buildTeacherAttendanceExportFileName(
+        report.sectionCourse,
+        report.period.code,
+        'pdf'
+      ),
+    };
+  }
+
+  async buildTeacherSectionCourseAttendanceExcel(
+    sectionCourseId: string,
+    scheduleBlockId: string,
+    teacherId: string
+  ) {
+    const report = await this.loadSectionAttendanceExportContext({
+      sectionCourseId,
+      scheduleBlockId,
+      teacherId,
+    });
+    const generatedAt = new Date();
+    const infoRows: Array<[string, string]> = [
+      [
+        `Facultad: ${report.sectionCourse.facultyName || report.sectionCourse.facultyGroup || '-'}`,
+        `Seccion: ${report.sectionCourse.sectionCode || report.sectionCourse.sectionName || '-'}`,
+      ],
+      [
+        `Escuela Profesional: ${report.programName || '-'}`,
+        `Sede: ${report.sectionCourse.campusName || '-'}`,
+      ],
+      [
+        `Curso: ${report.sectionCourse.courseName || '-'}`,
+        `Docente: ${report.teacherName || '-'}`,
+      ],
+      [
+        `Horario: ${this.dayLabel(report.block.dayOfWeek)} ${report.block.startTime}-${report.block.endTime}`,
+        `Vigencia: ${this.formatScheduleDateRange(report.block.startDate, report.block.endDate)}`,
+      ],
+    ];
+    const tableHeader = [
+      'N°',
+      'CODIGO',
+      'APELLIDOS Y NOMBRES',
+      ...report.dates.map(
+        (date) => `${this.shortDateLabel(date)} ${this.shortDayLabel(date)}`
+      ),
+      'TOTAL',
+    ];
+    const tableRows = report.students.map((student, index) => [
+      index + 1,
+      student.codigoAlumno || 'SIN CODIGO',
+      student.fullName,
+      ...report.dates.map((date) => student.attendanceByDate[date] || '-'),
+      student.totalAttended,
+    ]);
+    const widths = [6, 16, 36, ...report.dates.map(() => 12), 10];
+    return {
+      fileBuffer: await this.buildTeacherExcelWorkbook({
+        sheetName: 'Asistencia',
+        widths,
+        orientation: 'landscape',
+        officeLabel: 'Oficina de Servicios Academicos',
+        title: `CONTROL DE ASISTENCIA ${report.period.code}`,
+        generatedAt,
+        infoRows,
+        tableHeader,
+        tableRows,
+      }),
+      fileName: this.buildTeacherAttendanceExportFileName(
+        report.sectionCourse,
+        report.period.code,
+        'xlsx'
+      ),
+    };
+  }
+
+  async buildAdminSectionCourseAttendancePdf(
+    sectionCourseId: string,
+    scheduleBlockId: string
+  ) {
+    const report = await this.loadSectionAttendanceExportContext({
+      sectionCourseId,
+      scheduleBlockId,
+    });
+    const generatedAt = new Date();
+    const doc = this.createPdfDocument({
+      size: 'LEGAL',
+      layout: 'landscape',
+      margin: 24,
+    });
+    const contentWidth =
+      1008 - doc.page.margins.left - doc.page.margins.right;
+    const fixedWidth = 24 + 72 + 180 + 46;
+    const dateWidth = Math.max(
+      24,
+      Math.min(
+        38,
+        Math.floor((contentWidth - fixedWidth) / Math.max(report.dates.length, 1))
+      )
+    );
+    const nameWidth = Math.max(
+      140,
+      contentWidth - (24 + 72 + 46 + dateWidth * report.dates.length)
+    );
+    const columns = [
+      { title: 'NÂ°', width: 24, align: 'center' as const, value: (_row: TeacherSectionAttendanceExportStudent, index: number) => String(index + 1) },
+      {
+        title: 'CODIGO',
+        width: 72,
+        value: (row: TeacherSectionAttendanceExportStudent) =>
+          row.codigoAlumno || 'SIN CODIGO',
+      },
+      {
+        title: 'APELLIDOS Y NOMBRES',
+        width: nameWidth,
+        value: (row: TeacherSectionAttendanceExportStudent) => row.fullName,
+      },
+      ...report.dates.map((date) => ({
+        title: `${this.shortDateLabel(date)}\n${this.shortDayLabel(date)}`,
+        width: dateWidth,
+        align: 'center' as const,
+        value: (row: TeacherSectionAttendanceExportStudent) =>
+          row.attendanceByDate[date] || '-',
+      })),
+      {
+        title: 'TOTAL',
+        width: 46,
+        align: 'center' as const,
+        value: (row: TeacherSectionAttendanceExportStudent) =>
+          String(row.totalAttended),
+      },
+    ];
+
+    const tableState = this.drawPdfTable(doc, {
+      columns,
+      rows: report.students,
+      rowFontSize: 7,
+      headerFontSize: 7,
+      minRowHeight: 18,
+      emptyMessage: 'Sin alumnos matriculados.',
+      drawPageHeader: (tableDoc: any) =>
+        this.renderTeacherAttendancePageHeader(tableDoc, report, generatedAt),
+      onPageBreak: (tableDoc: any, pageNumber: number) =>
+        this.writeTeacherPageFooter(tableDoc, pageNumber),
+    });
+
+    const currentPage = tableState.pageNumber;
+    this.writeTeacherPageFooter(doc, currentPage);
+
+    return {
+      fileBuffer: await this.finalizePdfDocument(doc),
+      fileName: this.buildTeacherAttendanceExportFileName(
+        report.sectionCourse,
+        report.period.code,
+        'pdf'
+      ),
+    };
   }
 
   async getStudentGrades(studentId: string) {
@@ -1754,6 +2385,310 @@ export class GradesService {
       },
       students: resultStudents,
     };
+  }
+
+  private async loadTeacherSectionGradesExportContext(
+    sectionCourseId: string,
+    teacherId: string,
+    requirePublished = false
+  ): Promise<TeacherSectionGradesExportContext> {
+    const periodId = await this.periodsService.getActivePeriodIdOrThrow();
+    const [sectionGrades, period, teacherInfo, programName] = await Promise.all([
+      this.getSectionCourseGrades({
+        sectionCourseId,
+        periodId,
+        actorRole: Role.DOCENTE,
+        actorUserId: teacherId,
+      }),
+      this.loadPeriodMetadata(periodId),
+      this.loadTeacherInfoForSectionCourse(sectionCourseId),
+      this.loadProgramNameForSectionCourse(sectionCourseId),
+    ]);
+
+    if (requirePublished && !sectionGrades.publication.isPublished) {
+      throw new BadRequestException(
+        'Debes publicar las notas antes de exportar el acta oficial.'
+      );
+    }
+
+    const activeComponents = this.getActiveComponents(sectionGrades.scheme.components);
+    const students = sectionGrades.students.map((student) => {
+      const componentScores: Record<string, number | null> = {};
+      for (const component of activeComponents) {
+        const rawScore = student.scores?.[component.id];
+        componentScores[component.id] =
+          typeof rawScore === 'number' ? this.toFixed2(rawScore) : null;
+      }
+      const allScores = activeComponents.map(
+        (component) => componentScores[component.id]
+      );
+      const isRetiredLike =
+        student.isComplete &&
+        allScores.length > 0 &&
+        allScores.every((score) => Number(score ?? 0) === 0);
+      const preciseAverage =
+        student.isComplete && !isRetiredLike
+          ? this.computePreciseAverage(activeComponents, componentScores)
+          : student.isComplete
+            ? 0
+            : null;
+      const finalAverage = student.isComplete ? student.finalAverage : null;
+      const observation = isRetiredLike
+        ? 'RETIRADO'
+        : !student.isComplete
+          ? 'PENDIENTE'
+          : student.approved
+            ? 'APROBADO'
+            : 'DESAPROBADO';
+      return {
+        studentId: student.studentId,
+        codigoAlumno: student.codigoAlumno,
+        fullName: student.fullName,
+        componentScores,
+        isComplete: Boolean(student.isComplete),
+        isRetiredLike,
+        preciseAverage,
+        finalAverage,
+        finalAverageWords:
+          finalAverage === null ? '' : this.numberToSpanishGradeWords(finalAverage),
+        observation,
+      } satisfies TeacherSectionGradesExportStudent;
+    });
+
+    const summary = students.reduce(
+      (acc, student) => {
+        acc.totalStudents += 1;
+        if (student.isRetiredLike) {
+          acc.retiredCount += 1;
+        } else if (!student.isComplete) {
+          acc.pendingCount += 1;
+        } else if (student.observation === 'APROBADO') {
+          acc.approvedCount += 1;
+        } else {
+          acc.failedCount += 1;
+        }
+        return acc;
+      },
+      {
+        totalStudents: 0,
+        approvedCount: 0,
+        failedCount: 0,
+        pendingCount: 0,
+        retiredCount: 0,
+      }
+    );
+
+    return {
+      period,
+      sectionCourse: sectionGrades.sectionCourse,
+      publication: sectionGrades.publication,
+      teacherName: teacherInfo.teacherName,
+      programName,
+      activeComponents,
+      students,
+      summary,
+    };
+  }
+
+  private async loadTeacherInfoForSectionCourse(sectionCourseId: string) {
+    const rows: Array<any> = await this.dataSource.query(
+      `
+      SELECT
+        MAX(COALESCE(tc.fullName, ts.fullName)) AS teacherName
+      FROM section_courses sc
+      INNER JOIN sections s ON s.id = sc.sectionId
+      LEFT JOIN section_course_teachers sct ON sct.sectionCourseId = sc.id
+      LEFT JOIN users tc ON tc.id = sct.teacherId
+      LEFT JOIN users ts ON ts.id = s.teacherId
+      WHERE sc.id = ?
+      GROUP BY sc.id
+      `,
+      [sectionCourseId]
+    );
+    return {
+      teacherName: rows[0]?.teacherName ? String(rows[0].teacherName) : null,
+    };
+  }
+
+  private async loadProgramNameForSectionCourse(sectionCourseId: string) {
+    const rows: Array<any> = await this.dataSource.query(
+      `
+      SELECT
+        u.careerName AS careerName,
+        COUNT(*) AS total
+      FROM section_student_courses ssc
+      INNER JOIN users u ON u.id = ssc.studentId
+      WHERE ssc.sectionCourseId = ?
+        AND COALESCE(NULLIF(TRIM(u.careerName), ''), '') <> ''
+      GROUP BY u.careerName
+      ORDER BY total DESC, u.careerName ASC
+      LIMIT 1
+      `,
+      [sectionCourseId]
+    );
+    return rows[0]?.careerName ? String(rows[0].careerName) : null;
+  }
+
+  private async loadSectionAttendanceExportContext(params: {
+    sectionCourseId: string;
+    scheduleBlockId: string;
+    teacherId?: string | null;
+  }): Promise<TeacherSectionAttendanceExportContext> {
+    const periodId = await this.periodsService.getActivePeriodIdOrThrow();
+    const sectionCourse = await this.getSectionCourseContextOrThrow(params.sectionCourseId);
+    if (sectionCourse.periodId !== periodId) {
+      throw new NotFoundException('La seccion-curso no pertenece al periodo actual');
+    }
+    const teacherId = String(params.teacherId ?? '').trim();
+    if (teacherId) {
+      await this.assertTeacherAssignmentOrThrow(teacherId, params.sectionCourseId);
+    }
+
+    const [period, teacherInfo, programName, blockRows, students] = await Promise.all([
+      this.loadPeriodMetadata(periodId),
+      this.loadTeacherInfoForSectionCourse(params.sectionCourseId),
+      this.loadProgramNameForSectionCourse(params.sectionCourseId),
+      this.dataSource.query(
+        `
+        SELECT id, dayOfWeek, startTime, endTime, startDate, endDate
+        FROM schedule_blocks
+        WHERE id = ? AND sectionCourseId = ?
+        LIMIT 1
+        `,
+        [params.scheduleBlockId, params.sectionCourseId]
+      ),
+      this.loadEnrolledStudents(params.sectionCourseId),
+    ]);
+
+    const block = blockRows[0];
+    if (!block?.id) {
+      throw new NotFoundException('Horario no encontrado para esta seccion-curso');
+    }
+
+    const sessionRows: Array<any> = await this.dataSource.query(
+      `
+      SELECT id, sessionDate
+      FROM attendance_sessions
+      WHERE scheduleBlockId = ?
+      ORDER BY sessionDate ASC
+      `,
+      [params.scheduleBlockId]
+    );
+    const dates = this.computeAttendanceExportDates(
+      {
+        dayOfWeek: Number(block.dayOfWeek ?? 0),
+        startDate: block.startDate ? this.toIsoDateOnly(block.startDate) : null,
+        endDate: block.endDate ? this.toIsoDateOnly(block.endDate) : null,
+      },
+      sessionRows.map((row) => this.toIsoDateOnly(row.sessionDate)).filter(Boolean)
+    );
+
+    const sessionIds = sessionRows
+      .map((row) => String(row.id ?? '').trim())
+      .filter(Boolean);
+    const recordRows: Array<any> =
+      sessionIds.length > 0
+        ? await this.dataSource.query(
+            `
+            SELECT
+              ses.sessionDate AS sessionDate,
+              r.studentId AS studentId,
+              r.status AS status
+            FROM attendance_records r
+            INNER JOIN attendance_sessions ses ON ses.id = r.attendanceSessionId
+            WHERE r.attendanceSessionId IN (${sessionIds.map(() => '?').join(', ')})
+            `,
+            sessionIds
+          )
+        : [];
+
+    const statusByStudentDate = new Map<string, 'ASISTIO' | 'FALTO'>();
+    for (const row of recordRows) {
+      const date = this.toIsoDateOnly(row.sessionDate);
+      const studentId = String(row.studentId ?? '').trim();
+      if (!date || !studentId) continue;
+      statusByStudentDate.set(
+        `${studentId}::${date}`,
+        this.normalizeAttendanceStatus(row.status)
+      );
+    }
+
+    const mappedStudents = students.map((student) => {
+      const attendanceByDate: Record<string, 'ASISTIO' | 'FALTO' | ''> = {};
+      let totalAttended = 0;
+      for (const date of dates) {
+        const status = statusByStudentDate.get(`${student.studentId}::${date}`) ?? '';
+        attendanceByDate[date] = status;
+        if (status === 'ASISTIO') totalAttended += 1;
+      }
+      return {
+        studentId: student.studentId,
+        dni: student.dni,
+        codigoAlumno: student.codigoAlumno,
+        fullName: student.fullName,
+        careerName: student.careerName,
+        attendanceByDate,
+        totalAttended,
+      } satisfies TeacherSectionAttendanceExportStudent;
+    });
+
+    const totalAttendances = mappedStudents.reduce(
+      (acc, student) => acc + student.totalAttended,
+      0
+    );
+    const totalAbsences =
+      mappedStudents.length * dates.length - totalAttendances;
+
+    return {
+      period,
+      sectionCourse,
+      teacherName: teacherInfo.teacherName,
+      programName,
+      block: {
+        id: String(block.id),
+        dayOfWeek: Number(block.dayOfWeek ?? 0),
+        startTime: String(block.startTime ?? ''),
+        endTime: String(block.endTime ?? ''),
+        startDate: block.startDate ? this.toIsoDateOnly(block.startDate) : null,
+        endDate: block.endDate ? this.toIsoDateOnly(block.endDate) : null,
+      },
+      dates,
+      students: mappedStudents,
+      summary: {
+        totalStudents: mappedStudents.length,
+        totalDates: dates.length,
+        totalAttendances,
+        totalAbsences,
+      },
+    };
+  }
+
+  private computeAttendanceExportDates(
+    block: { dayOfWeek: number; startDate: string | null; endDate: string | null },
+    sessionDates: string[]
+  ) {
+    const start = String(block.startDate ?? '').trim();
+    const end = String(block.endDate ?? '').trim();
+    if (start && end && block.dayOfWeek >= 1 && block.dayOfWeek <= 7) {
+      const dates: string[] = [];
+      let current = new Date(`${start}T00:00:00`);
+      const endDate = new Date(`${end}T00:00:00`);
+      const currentDow = current.getDay() === 0 ? 7 : current.getDay();
+      const delta = (block.dayOfWeek - currentDow + 7) % 7;
+      current.setDate(current.getDate() + delta);
+      while (current <= endDate) {
+        dates.push(this.toIsoDateOnly(current));
+        current = new Date(
+          current.getFullYear(),
+          current.getMonth(),
+          current.getDate() + 7
+        );
+      }
+      return dates;
+    }
+    return Array.from(new Set(sessionDates)).sort((left, right) =>
+      left.localeCompare(right)
+    );
   }
 
   private async saveSectionCourseGrades(params: {
@@ -3341,13 +4276,13 @@ export class GradesService {
       (row) => Boolean(row.weekExpectedFlags[2]) && Boolean(row.weekFlags[2])
     ).length;
     const week1Absent = rows.filter(
-      (row) => Boolean(row.weekExpectedFlags[0]) && !Boolean(row.weekFlags[0])
+      (row) => row.weekExpectedFlags[0] && !row.weekFlags[0]
     ).length;
     const week2Absent = rows.filter(
-      (row) => Boolean(row.weekExpectedFlags[1]) && !Boolean(row.weekFlags[1])
+      (row) => row.weekExpectedFlags[1] && !row.weekFlags[1]
     ).length;
     const week3Absent = rows.filter(
-      (row) => Boolean(row.weekExpectedFlags[2]) && !Boolean(row.weekFlags[2])
+      (row) => row.weekExpectedFlags[2] && !row.weekFlags[2]
     ).length;
     const totalAttendedCount = rows.filter(
       (row) => row.totalAttendanceCount >= 2
@@ -3688,6 +4623,1090 @@ export class GradesService {
       parts.push(this.sanitizeFilePart(String(filter.careerName)));
     }
     return `reporte_${parts.join('_')}.${extension}`;
+  }
+
+  private buildTeacherSectionCourseExportFileName(
+    reportType: string,
+    sectionCourse: {
+      sectionCode?: string | null;
+      sectionName: string;
+      courseName: string;
+    },
+    periodCode: string,
+    extension: 'xlsx' | 'pdf'
+  ) {
+    const sectionRef =
+      String(sectionCourse.sectionCode ?? '').trim() ||
+      String(sectionCourse.sectionName ?? '').trim() ||
+      'SECCION';
+    const courseRef = String(sectionCourse.courseName ?? '').trim() || 'CURSO';
+    const periodRef = String(periodCode ?? '').trim() || 'PERIODO';
+    return `${this.sanitizeFilePart(reportType)}_${this.sanitizeFilePart(sectionRef)}_${this.sanitizeFilePart(courseRef)}_${this.sanitizeFilePart(periodRef)}.${extension}`;
+  }
+
+  private buildTeacherAttendanceExportFileName(
+    sectionCourse: TeacherSectionCourseMetadata,
+    periodCode: string,
+    extension: 'xlsx' | 'pdf'
+  ) {
+    return this.buildTeacherSectionCourseExportFileName(
+      'control_asistencia',
+      sectionCourse,
+      periodCode,
+      extension
+    );
+  }
+
+  private async buildTeacherExcelWorkbook(params: {
+    sheetName: string;
+    widths: number[];
+    orientation?: 'portrait' | 'landscape';
+    officeLabel: string;
+    title: string;
+    generatedAt: Date;
+    infoRows: Array<[string, string?]>;
+    tableHeader: Array<string | number>;
+    tableRows: Array<Array<string | number>>;
+    summaryTitle?: string;
+    summaryRows?: Array<[string, string?]>;
+    signatureBlocks?: Array<{ primaryText: string; secondaryText?: string }>;
+  }) {
+    const ExcelJS = require('exceljs');
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'UAI';
+    const worksheet = workbook.addWorksheet(params.sheetName);
+    worksheet.views = [{ showGridLines: false }];
+    worksheet.pageSetup = {
+      orientation: params.orientation ?? 'portrait',
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 0,
+      margins: {
+        left: 0.25,
+        right: 0.25,
+        top: 0.3,
+        bottom: 0.35,
+        header: 0.1,
+        footer: 0.1,
+      },
+    };
+    worksheet.headerFooter.oddFooter = '&RPag. &P';
+    worksheet.columns = params.widths.map((width) => ({ width }));
+
+    const lastCol = Math.max(params.widths.length, 1);
+    let nextRow = this.writeTeacherExcelHeader(worksheet, workbook, {
+      lastCol,
+      officeLabel: params.officeLabel,
+      title: params.title,
+      generatedAt: params.generatedAt,
+      infoRows: params.infoRows,
+    });
+    nextRow = this.writeTeacherExcelTable(worksheet, {
+      startRow: nextRow,
+      tableHeader: params.tableHeader,
+      tableRows: params.tableRows,
+    });
+
+    if (params.summaryTitle && params.summaryRows?.length) {
+      nextRow = this.writeTeacherExcelSummarySection(worksheet, {
+        startRow: nextRow,
+        lastCol,
+        title: params.summaryTitle,
+        rows: params.summaryRows,
+      });
+    }
+
+    if (params.signatureBlocks?.length) {
+      this.writeTeacherExcelSignatureBlocks(worksheet, {
+        startRow: nextRow,
+        lastCol,
+        blocks: params.signatureBlocks,
+      });
+    }
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    return Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+  }
+
+  private writeTeacherExcelHeader(
+    worksheet: any,
+    workbook: any,
+    params: {
+      lastCol: number;
+      officeLabel: string;
+      title: string;
+      generatedAt: Date;
+      infoRows: Array<[string, string?]>;
+    }
+  ) {
+    worksheet.getRow(1).height = 42;
+    worksheet.getRow(2).height = 12;
+
+    const logoPath = this.resolveApiAssetPath('logo-uai.png');
+    if (logoPath) {
+      try {
+        const imageId = workbook.addImage({
+          filename: logoPath,
+          extension: 'png',
+        });
+        const col = Math.max(params.lastCol / 2 - 0.7, 0);
+        worksheet.addImage(imageId, {
+          tl: { col, row: 0.1 },
+          ext: { width: 54, height: 62 },
+        });
+      } catch {
+        // Ignore image issues and continue generating the workbook.
+      }
+    }
+
+    let nextRow = 3;
+    this.writeTeacherExcelMergedRow(worksheet, nextRow++, 1, params.lastCol, 'UNIVERSIDAD AUTONOMA DE ICA', {
+      font: { name: 'Arial', size: 11, bold: true },
+      alignment: { horizontal: 'center', vertical: 'middle' },
+      rowHeight: 18,
+    });
+    this.writeTeacherExcelMergedRow(
+      worksheet,
+      nextRow++,
+      1,
+      params.lastCol,
+      'Av. Alva Maurtua 489, Chincha Alta, Ica',
+      {
+        font: { name: 'Arial', size: 8 },
+        alignment: { horizontal: 'center', vertical: 'middle' },
+        rowHeight: 16,
+      }
+    );
+    this.writeTeacherExcelMergedRow(
+      worksheet,
+      nextRow++,
+      1,
+      params.lastCol,
+      params.officeLabel,
+      {
+        font: { name: 'Arial', size: 8 },
+        alignment: { horizontal: 'center', vertical: 'middle' },
+        rowHeight: 16,
+      }
+    );
+    this.writeTeacherExcelMergedRow(
+      worksheet,
+      nextRow++,
+      1,
+      params.lastCol,
+      this.formatPdfTimestamp(params.generatedAt),
+      {
+        font: { name: 'Arial', size: 8 },
+        alignment: { horizontal: 'right', vertical: 'middle' },
+        rowHeight: 16,
+      }
+    );
+    this.writeTeacherExcelMergedRow(worksheet, nextRow++, 1, params.lastCol, params.title, {
+      font: { name: 'Arial', size: 14, bold: true },
+      alignment: { horizontal: 'center', vertical: 'middle' },
+      rowHeight: 24,
+    });
+
+    nextRow = this.writeTeacherExcelDualColumnRows(worksheet, {
+      startRow: nextRow,
+      lastCol: params.lastCol,
+      rows: params.infoRows,
+      font: { name: 'Arial', size: 9 },
+      alignment: { horizontal: 'left', vertical: 'middle', wrapText: true },
+      rowHeight: 18,
+    });
+
+    return nextRow + 1;
+  }
+
+  private writeTeacherExcelMergedRow(
+    worksheet: any,
+    rowNumber: number,
+    startCol: number,
+    endCol: number,
+    value: string,
+    options?: {
+      font?: Record<string, unknown>;
+      alignment?: Record<string, unknown>;
+      rowHeight?: number;
+    }
+  ) {
+    if (endCol > startCol) {
+      worksheet.mergeCells(rowNumber, startCol, rowNumber, endCol);
+    }
+    const cell = worksheet.getCell(rowNumber, startCol);
+    cell.value = value;
+    cell.font = options?.font ?? { name: 'Arial', size: 9 };
+    cell.alignment = options?.alignment ?? {
+      horizontal: 'left',
+      vertical: 'middle',
+      wrapText: true,
+    };
+    if (options?.rowHeight) {
+      worksheet.getRow(rowNumber).height = options.rowHeight;
+    }
+  }
+
+  private writeTeacherExcelDualColumnRows(
+    worksheet: any,
+    params: {
+      startRow: number;
+      lastCol: number;
+      rows: Array<[string, string?]>;
+      font?: Record<string, unknown>;
+      alignment?: Record<string, unknown>;
+      rowHeight?: number;
+    }
+  ) {
+    const leftEnd = Math.max(1, Math.floor(params.lastCol / 2));
+    const rightStart = Math.min(params.lastCol, leftEnd + 1);
+    let nextRow = params.startRow;
+
+    for (const [leftText, rightText] of params.rows) {
+      if (params.lastCol <= 1 || !rightText) {
+        this.writeTeacherExcelMergedRow(
+          worksheet,
+          nextRow,
+          1,
+          params.lastCol,
+          leftText,
+          {
+            font: params.font,
+            alignment: params.alignment,
+            rowHeight: params.rowHeight,
+          }
+        );
+        nextRow += 1;
+        continue;
+      }
+
+      this.writeTeacherExcelMergedRow(worksheet, nextRow, 1, leftEnd, leftText, {
+        font: params.font,
+        alignment: params.alignment,
+        rowHeight: params.rowHeight,
+      });
+      this.writeTeacherExcelMergedRow(
+        worksheet,
+        nextRow,
+        rightStart,
+        params.lastCol,
+        rightText,
+        {
+          font: params.font,
+          alignment: params.alignment,
+          rowHeight: params.rowHeight,
+        }
+      );
+      nextRow += 1;
+    }
+
+    return nextRow;
+  }
+
+  private writeTeacherExcelTable(
+    worksheet: any,
+    params: {
+      startRow: number;
+      tableHeader: Array<string | number>;
+      tableRows: Array<Array<string | number>>;
+    }
+  ) {
+    const border = this.buildTeacherExcelThinBorder();
+    const headerRow = worksheet.getRow(params.startRow);
+    headerRow.height = 24;
+    params.tableHeader.forEach((value, index) => {
+      const cell = headerRow.getCell(index + 1);
+      cell.value = value;
+      cell.font = { name: 'Arial', size: 8, bold: true };
+      cell.alignment = {
+        horizontal: 'center',
+        vertical: 'middle',
+        wrapText: true,
+      };
+      cell.border = border;
+    });
+
+    let nextRow = params.startRow + 1;
+    for (const rowValues of params.tableRows) {
+      const row = worksheet.getRow(nextRow);
+      row.height = 20;
+      rowValues.forEach((value, index) => {
+        const header = String(params.tableHeader[index] ?? '');
+        const cell = row.getCell(index + 1);
+        cell.value = value;
+        cell.font = { name: 'Arial', size: 8 };
+        cell.alignment = this.getTeacherExcelDataAlignment(header);
+        cell.border = border;
+      });
+      nextRow += 1;
+    }
+
+    if (params.tableRows.length === 0) {
+      const row = worksheet.getRow(nextRow);
+      row.height = 20;
+      const cell = row.getCell(1);
+      cell.value = 'Sin datos.';
+      cell.font = { name: 'Arial', size: 8 };
+      cell.alignment = { horizontal: 'left', vertical: 'middle' };
+      cell.border = border;
+      nextRow += 1;
+    }
+
+    return nextRow;
+  }
+
+  private getTeacherExcelDataAlignment(header: string) {
+    const normalized = header.toUpperCase();
+    const isLeftAligned =
+      normalized.includes('APELLIDOS') ||
+      normalized.includes('OBSERVACION') ||
+      normalized.includes('LETRAS');
+    return {
+      horizontal: isLeftAligned ? 'left' : 'center',
+      vertical: 'middle',
+      wrapText: true,
+    };
+  }
+
+  private writeTeacherExcelSummarySection(
+    worksheet: any,
+    params: {
+      startRow: number;
+      lastCol: number;
+      title: string;
+      rows: Array<[string, string?]>;
+    }
+  ) {
+    let nextRow = params.startRow + 1;
+    this.writeTeacherExcelMergedRow(worksheet, nextRow++, 1, params.lastCol, params.title, {
+      font: { name: 'Arial', size: 10, bold: true },
+      alignment: { horizontal: 'left', vertical: 'middle' },
+      rowHeight: 18,
+    });
+    return this.writeTeacherExcelDualColumnRows(worksheet, {
+      startRow: nextRow,
+      lastCol: params.lastCol,
+      rows: params.rows,
+      font: { name: 'Arial', size: 9 },
+      alignment: { horizontal: 'left', vertical: 'middle', wrapText: true },
+      rowHeight: 18,
+    });
+  }
+
+  private writeTeacherExcelSignatureBlocks(
+    worksheet: any,
+    params: {
+      startRow: number;
+      lastCol: number;
+      blocks: Array<{ primaryText: string; secondaryText?: string }>;
+    }
+  ) {
+    const ranges = this.getTeacherExcelSignatureRanges(params.lastCol, params.blocks.length);
+    const hasSecondaryText = params.blocks.some((block) => Boolean(block.secondaryText));
+    const lineRowNumber = params.startRow + 2;
+    worksheet.getRow(lineRowNumber).height = 28;
+
+    params.blocks.forEach((block, index) => {
+      const range = ranges[index];
+      if (!range) return;
+
+      if (range.endCol > range.startCol) {
+        worksheet.mergeCells(lineRowNumber, range.startCol, lineRowNumber, range.endCol);
+      }
+      for (let col = range.startCol; col <= range.endCol; col += 1) {
+        worksheet.getCell(lineRowNumber, col).border = this.buildTeacherExcelBottomBorder();
+      }
+
+      const primaryRow = lineRowNumber + 1;
+      this.writeTeacherExcelMergedRow(
+        worksheet,
+        primaryRow,
+        range.startCol,
+        range.endCol,
+        block.primaryText,
+        {
+          font: { name: 'Arial', size: 9 },
+          alignment: { horizontal: 'center', vertical: 'middle', wrapText: true },
+          rowHeight: 18,
+        }
+      );
+
+      if (block.secondaryText) {
+        this.writeTeacherExcelMergedRow(
+          worksheet,
+          primaryRow + 1,
+          range.startCol,
+          range.endCol,
+          block.secondaryText,
+          {
+            font: { name: 'Arial', size: 8 },
+            alignment: { horizontal: 'center', vertical: 'middle', wrapText: true },
+            rowHeight: 16,
+          }
+        );
+      }
+    });
+
+    return lineRowNumber + (hasSecondaryText ? 3 : 2);
+  }
+
+  private getTeacherExcelSignatureRanges(lastCol: number, count: number) {
+    if (count <= 1) {
+      const span = Math.min(Math.max(4, Math.ceil(lastCol * 0.35)), lastCol);
+      const startCol = Math.max(1, Math.floor((lastCol - span) / 2) + 1);
+      return [{ startCol, endCol: startCol + span - 1 }];
+    }
+
+    const gap = 1;
+    const usableCols = Math.max(lastCol - gap * (count - 1), count);
+    const span = Math.max(1, Math.floor(usableCols / count));
+    const usedCols = span * count + gap * (count - 1);
+    let currentCol = Math.max(1, Math.floor((lastCol - usedCols) / 2) + 1);
+    return Array.from({ length: count }, () => {
+      const range = { startCol: currentCol, endCol: currentCol + span - 1 };
+      currentCol = range.endCol + gap + 1;
+      return range;
+    });
+  }
+
+  private buildTeacherExcelThinBorder() {
+    return {
+      top: { style: 'thin' },
+      left: { style: 'thin' },
+      bottom: { style: 'thin' },
+      right: { style: 'thin' },
+    };
+  }
+
+  private buildTeacherExcelBottomBorder() {
+    return {
+      bottom: { style: 'thin' },
+    };
+  }
+
+  private renderTeacherConsolidatedPageHeader(
+    doc: any,
+    report: TeacherSectionGradesExportContext,
+    generatedAt: Date
+  ) {
+    doc.y = doc.page.margins.top;
+    this.drawTeacherReportLogo(doc);
+    doc.font('Helvetica-Bold').fontSize(11).text('UNIVERSIDAD AUTONOMA DE ICA', {
+      align: 'center',
+    });
+    doc
+      .font('Helvetica')
+      .fontSize(8)
+      .text('Av. Alva Maurtua 489, Chincha Alta, Ica', { align: 'center' });
+    doc.text('Oficina de Servicios Academicos', { align: 'center' });
+    doc.text(this.formatPdfTimestamp(generatedAt), { align: 'right' });
+    doc.moveDown(0.25);
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(15)
+      .text(`CONSOLIDADO DE NOTAS ${report.period.code}`, { align: 'center' });
+    doc.moveDown(0.4);
+    this.writePdfDualColumnLines(
+      doc,
+      [
+        [
+          `Facultad: ${report.sectionCourse.facultyName || report.sectionCourse.facultyGroup || '-'}`,
+          `Seccion: ${report.sectionCourse.sectionCode || report.sectionCourse.sectionName || '-'}`,
+        ],
+        [
+          `Escuela Profesional: ${report.programName || '-'}`,
+          `Sede: ${report.sectionCourse.campusName || '-'}`,
+        ],
+        [
+          `Curso: ${report.sectionCourse.courseName || '-'}`,
+          `Docente: ${report.teacherName || '-'}`,
+        ],
+        [
+          `Periodo: ${report.period.code} - ${report.period.name}`,
+          `Estado: ${report.publication.isPublished ? 'PUBLICADO' : 'BORRADOR'}`,
+        ],
+      ],
+      { fontSize: 9 }
+    );
+    doc.moveDown(0.2);
+    return doc.y;
+  }
+
+  private renderTeacherAttendancePageHeader(
+    doc: any,
+    report: TeacherSectionAttendanceExportContext,
+    generatedAt: Date
+  ) {
+    doc.y = doc.page.margins.top;
+    this.drawTeacherReportLogo(doc);
+    doc.font('Helvetica-Bold').fontSize(11).text('UNIVERSIDAD AUTONOMA DE ICA', {
+      align: 'center',
+    });
+    doc
+      .font('Helvetica')
+      .fontSize(8)
+      .text('Av. Alva Maurtua 489, Chincha Alta, Ica', { align: 'center' });
+    doc.text('Oficina de Servicios Academicos', { align: 'center' });
+    doc.text(this.formatPdfTimestamp(generatedAt), { align: 'right' });
+    doc.moveDown(0.25);
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(15)
+      .text(`CONTROL DE ASISTENCIA ${report.period.code}`, { align: 'center' });
+    doc.moveDown(0.4);
+    this.writePdfDualColumnLines(
+      doc,
+      [
+        [
+          `Facultad: ${report.sectionCourse.facultyName || report.sectionCourse.facultyGroup || '-'}`,
+          `Seccion: ${report.sectionCourse.sectionCode || report.sectionCourse.sectionName || '-'}`,
+        ],
+        [
+          `Escuela Profesional: ${report.programName || '-'}`,
+          `Sede: ${report.sectionCourse.campusName || '-'}`,
+        ],
+        [
+          `Curso: ${report.sectionCourse.courseName || '-'}`,
+          `Docente: ${report.teacherName || '-'}`,
+        ],
+        [
+          `Horario: ${this.dayLabel(report.block.dayOfWeek)} ${report.block.startTime}-${report.block.endTime}`,
+          `Vigencia: ${this.formatScheduleDateRange(report.block.startDate, report.block.endDate)}`,
+        ],
+      ],
+      { fontSize: 9 }
+    );
+    doc.moveDown(0.2);
+    return doc.y;
+  }
+
+  private renderTeacherOfficialRecordPageHeader(
+    doc: any,
+    report: TeacherSectionGradesExportContext,
+    generatedAt: Date
+  ) {
+    doc.y = doc.page.margins.top;
+    this.drawTeacherReportLogo(doc);
+    doc.font('Helvetica-Bold').fontSize(11).text('UNIVERSIDAD AUTONOMA DE ICA', {
+      align: 'center',
+    });
+    doc
+      .font('Helvetica')
+      .fontSize(8)
+      .text('Av. Alva Maurtua 489, Chincha Alta, Ica', { align: 'center' });
+    doc.text('Secretaria Academica', { align: 'center' });
+    doc.text(this.formatPdfTimestamp(generatedAt), { align: 'right' });
+    doc.moveDown(0.25);
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(15)
+      .text(`ACTA OFICIAL DE NOTAS ${report.period.code}`, { align: 'center' });
+    doc.moveDown(0.4);
+    this.writePdfDualColumnLines(
+      doc,
+      [
+        [
+          `Facultad: ${report.sectionCourse.facultyName || report.sectionCourse.facultyGroup || '-'}`,
+          `Modalidad: ${report.sectionCourse.sectionCode || report.sectionCourse.modality || '-'}`,
+        ],
+        [
+          `Prog. Academico: ${report.programName || '-'}`,
+          `Sede: ${report.sectionCourse.campusName || '-'}`,
+        ],
+        [
+          `Curso: ${report.sectionCourse.courseName || '-'}`,
+          `Docente: ${report.teacherName || '-'}`,
+        ],
+        [`Periodo: ${report.period.name || report.period.code}`],
+      ],
+      { fontSize: 9 }
+    );
+    doc.moveDown(0.2);
+    return doc.y;
+  }
+
+  private drawPdfTable<T>(
+    doc: any,
+    params: {
+      columns: Array<{
+        title: string;
+        width: number;
+        align?: 'left' | 'center' | 'right';
+        value: (row: T, index: number) => string;
+      }>;
+      rows: T[];
+      drawPageHeader: (doc: any) => number | void;
+      onPageBreak?: (doc: any, pageNumber: number) => void;
+      rowFontSize?: number;
+      headerFontSize?: number;
+      minRowHeight?: number;
+      emptyMessage?: string;
+      padding?: number;
+    }
+  ) {
+    const padding = Math.max(Number(params.padding ?? 4), 2);
+    const rowFontSize = Math.max(Number(params.rowFontSize ?? 8), 6);
+    const headerFontSize = Math.max(Number(params.headerFontSize ?? 8), 6);
+    const minRowHeight = Math.max(Number(params.minRowHeight ?? 18), 14);
+    const startX = doc.page.margins.left;
+    const tableWidth = params.columns.reduce(
+      (acc, column) => acc + Number(column.width ?? 0),
+      0
+    );
+    const bottomY = () => doc.page.height - 34;
+    let pageNumber = 1;
+    let currentY = doc.y;
+
+    const drawHeaderRow = () => {
+      doc.font('Helvetica-Bold').fontSize(headerFontSize);
+      const headerHeight =
+        Math.max(
+          ...params.columns.map((column) =>
+            doc.heightOfString(column.title, {
+              width: Math.max(column.width - padding * 2, 10),
+              align: column.align ?? 'left',
+            })
+          ),
+          minRowHeight - padding * 2
+        ) +
+        padding * 2;
+      let currentX = startX;
+      for (const column of params.columns) {
+        doc.rect(currentX, currentY, column.width, headerHeight).stroke();
+        doc.text(column.title, currentX + padding, currentY + padding, {
+          width: Math.max(column.width - padding * 2, 10),
+          align: column.align ?? 'left',
+        });
+        currentX += column.width;
+      }
+      currentY += headerHeight;
+      doc.y = currentY;
+    };
+
+    const startPage = () => {
+      const nextY = params.drawPageHeader(doc);
+      currentY = typeof nextY === 'number' ? nextY : doc.y;
+      doc.y = currentY;
+      drawHeaderRow();
+    };
+
+    startPage();
+
+    doc.font('Helvetica').fontSize(rowFontSize);
+    if (params.rows.length === 0) {
+      const rowHeight = minRowHeight;
+      if (currentY + rowHeight > bottomY()) {
+        params.onPageBreak?.(doc, pageNumber);
+        doc.addPage();
+        pageNumber += 1;
+        startPage();
+      }
+      doc.rect(startX, currentY, tableWidth, rowHeight).stroke();
+      doc.text(params.emptyMessage || 'Sin datos.', startX + padding, currentY + padding, {
+        width: Math.max(tableWidth - padding * 2, 10),
+      });
+      currentY += rowHeight;
+      doc.y = currentY;
+      return { pageNumber, y: currentY };
+    }
+
+    params.rows.forEach((row, index) => {
+      doc.font('Helvetica').fontSize(rowFontSize);
+      const values = params.columns.map((column) =>
+        String(column.value(row, index) ?? '')
+      );
+      const rowHeight =
+        Math.max(
+          minRowHeight,
+          ...values.map((value, valueIndex) =>
+            doc.heightOfString(value, {
+              width: Math.max(params.columns[valueIndex].width - padding * 2, 10),
+              align: params.columns[valueIndex].align ?? 'left',
+            }) +
+              padding * 2
+          )
+        );
+
+      if (currentY + rowHeight > bottomY()) {
+        params.onPageBreak?.(doc, pageNumber);
+        doc.addPage();
+        pageNumber += 1;
+        startPage();
+        doc.font('Helvetica').fontSize(rowFontSize);
+      }
+
+      let currentX = startX;
+      values.forEach((value, valueIndex) => {
+        const column = params.columns[valueIndex];
+        doc.rect(currentX, currentY, column.width, rowHeight).stroke();
+        doc.text(value, currentX + padding, currentY + padding, {
+          width: Math.max(column.width - padding * 2, 10),
+          align: column.align ?? 'left',
+        });
+        currentX += column.width;
+      });
+      currentY += rowHeight;
+      doc.y = currentY;
+    });
+
+    return { pageNumber, y: currentY };
+  }
+
+  private writeTeacherPageFooter(doc: any, pageNumber: number) {
+    doc.font('Helvetica').fontSize(8);
+    const lineHeight = doc.currentLineHeight(true);
+    const y = doc.page.height - doc.page.margins.bottom - lineHeight - 2;
+    doc.text(
+      `Pag. ${pageNumber}`,
+      doc.page.margins.left,
+      y,
+      {
+        width: doc.page.width - doc.page.margins.left - doc.page.margins.right,
+        align: 'right',
+        lineBreak: false,
+      }
+    );
+  }
+
+  private ensureTeacherPageSpace(doc: any, minHeight: number, pageNumber: number) {
+    const maxY = doc.page.height - 34;
+    if (doc.y + minHeight <= maxY) return pageNumber;
+    this.writeTeacherPageFooter(doc, pageNumber);
+    doc.addPage();
+    return pageNumber + 1;
+  }
+
+  private buildTeacherSignatureBlocks(teacherName: string | null) {
+    const teacherLabel = String(teacherName ?? '').trim() || 'Docente';
+    return [{ primaryText: teacherLabel }];
+  }
+
+  private getTeacherSignatureBlockLayout(doc: any, count: number) {
+    const totalWidth =
+      doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    if (count <= 1) {
+      const itemWidth = Math.min(280, totalWidth);
+      return {
+        startX: doc.page.margins.left + (totalWidth - itemWidth) / 2,
+        gap: 0,
+        itemWidth,
+      };
+    }
+    const gap = 28;
+    return {
+      startX: doc.page.margins.left,
+      gap,
+      itemWidth: (totalWidth - gap * (count - 1)) / count,
+    };
+  }
+
+  private writeTeacherSignatureBlocks(
+    doc: any,
+    blocks: Array<{ primaryText: string; secondaryText?: string }>
+  ) {
+    const count = Math.max(blocks.length, 1);
+    const { startX, gap, itemWidth } = this.getTeacherSignatureBlockLayout(doc, count);
+    const topSpacing = 16;
+    const signatureSpace = 54;
+    const labelGap = 8;
+    const secondaryGap = 3;
+    const bottomSpacing = 12;
+    const lineY = doc.y + topSpacing + signatureSpace;
+    const labelY = lineY + labelGap;
+    doc.font('Helvetica').fontSize(8);
+    const blockHeight = Math.max(
+      ...blocks.map((block) => {
+        const primaryHeight = doc.heightOfString(block.primaryText, {
+          width: itemWidth,
+          align: 'center',
+        });
+        if (!block.secondaryText) {
+          return primaryHeight;
+        }
+        const secondaryHeight = doc.heightOfString(block.secondaryText, {
+          width: itemWidth,
+          align: 'center',
+        });
+        return primaryHeight + secondaryGap + secondaryHeight;
+      }),
+      10
+    );
+    blocks.forEach((block, index) => {
+      const x = startX + index * (itemWidth + gap);
+      doc.moveTo(x, lineY).lineTo(x + itemWidth, lineY).stroke();
+      doc.text(block.primaryText, x, labelY, {
+        width: itemWidth,
+        align: 'center',
+      });
+      if (block.secondaryText) {
+        const primaryHeight = doc.heightOfString(block.primaryText, {
+          width: itemWidth,
+          align: 'center',
+        });
+        doc.text(block.secondaryText, x, labelY + primaryHeight + secondaryGap, {
+          width: itemWidth,
+          align: 'center',
+        });
+      }
+    });
+    doc.y = labelY + blockHeight + bottomSpacing;
+  }
+
+  private writeTeacherOfficialSummary(
+    doc: any,
+    summary: TeacherSectionGradesExportContext['summary']
+  ) {
+    const startX = doc.page.margins.left;
+    const totalWidth =
+      doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    doc.y += 8;
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(10)
+      .text('Resumen academico', startX, doc.y, { width: totalWidth });
+    doc.y += 3;
+    this.writePdfDualColumnLines(doc, this.buildTeacherOfficialSummaryRows(summary), {
+      fontSize: 9,
+      gap: 24,
+    });
+  }
+
+  private buildTeacherOfficialSummaryRows(
+    summary: TeacherSectionGradesExportContext['summary']
+  ): Array<[string, string]> {
+    return [
+      [
+        `Total Matriculados: ${summary.totalStudents}`,
+        `Numero de Aprobados: ${summary.approvedCount}`,
+      ],
+      [
+        `Numero de Desaprobados: ${summary.failedCount}`,
+        `Numero de Retirados/Pendientes: ${summary.retiredCount + summary.pendingCount}`,
+      ],
+    ];
+  }
+
+  private measureTeacherOfficialSummaryHeight(
+    doc: any,
+    summary: TeacherSectionGradesExportContext['summary']
+  ) {
+    return this.measureTeacherSummaryHeight(
+      doc,
+      'Resumen academico',
+      this.buildTeacherOfficialSummaryRows(summary)
+    );
+  }
+
+  private measureTeacherSummaryHeight(
+    doc: any,
+    title: string,
+    rows: Array<[string, string?]>
+  ) {
+    const totalWidth =
+      doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    doc.font('Helvetica-Bold').fontSize(10);
+    const titleHeight = doc.heightOfString(title, {
+      width: totalWidth,
+    });
+    const rowsHeight = this.measurePdfDualColumnLinesHeight(doc, rows, {
+      fontSize: 9,
+      gap: 24,
+    });
+    return 8 + titleHeight + 3 + rowsHeight;
+  }
+
+  private measureTeacherSignatureBlocksHeight(
+    doc: any,
+    blocks: Array<{ primaryText: string; secondaryText?: string }>
+  ) {
+    const count = Math.max(blocks.length, 1);
+    const { itemWidth } = this.getTeacherSignatureBlockLayout(doc, count);
+    doc.font('Helvetica').fontSize(8);
+    const secondaryGap = 3;
+    const blockHeight = Math.max(
+      ...blocks.map((block) => {
+        const primaryHeight = doc.heightOfString(block.primaryText, {
+          width: itemWidth,
+          align: 'center',
+        });
+        if (!block.secondaryText) {
+          return primaryHeight;
+        }
+        const secondaryHeight = doc.heightOfString(block.secondaryText, {
+          width: itemWidth,
+          align: 'center',
+        });
+        return primaryHeight + secondaryGap + secondaryHeight;
+      }),
+      10
+    );
+    return 16 + 54 + 8 + blockHeight + 12;
+  }
+
+  private measurePdfDualColumnLinesHeight(
+    doc: any,
+    rows: Array<[string, string?]>,
+    options?: { fontSize?: number; gap?: number }
+  ) {
+    const fontSize = Math.max(Number(options?.fontSize ?? 9), 7);
+    const gap = Math.max(Number(options?.gap ?? 18), 10);
+    const totalWidth =
+      doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    const columnWidth = (totalWidth - gap) / 2;
+    doc.font('Helvetica').fontSize(fontSize);
+    return rows.reduce((acc, [leftText, rightText]) => {
+      const leftHeight = doc.heightOfString(leftText, { width: columnWidth });
+      const rightHeight = rightText
+        ? doc.heightOfString(rightText, { width: columnWidth })
+        : 0;
+      return acc + Math.max(leftHeight, rightHeight, fontSize + 2) + 2;
+    }, 0);
+  }
+
+  private drawTeacherReportLogo(doc: any) {
+    const logoPath = this.resolveApiAssetPath('logo-uai.png');
+    if (!logoPath) return;
+    try {
+      const image = doc.openImage(logoPath);
+      const totalWidth =
+        doc.page.width - doc.page.margins.left - doc.page.margins.right;
+      const maxWidth = 72;
+      const maxHeight = 52;
+      const scale = Math.min(maxWidth / image.width, maxHeight / image.height);
+      const width = Math.max(1, image.width * scale);
+      const height = Math.max(1, image.height * scale);
+      const x = doc.page.margins.left + (totalWidth - width) / 2;
+      doc.image(image, x, doc.y, { width, height });
+      doc.y += height + 4;
+    } catch {
+      return;
+    }
+  }
+
+  private resolveApiAssetPath(fileName: string) {
+    const candidates = [
+      join(process.cwd(), 'apps', 'api', 'src', 'assets', fileName),
+      join(process.cwd(), 'apps', 'api', 'dist', 'assets', fileName),
+      join(__dirname, '..', 'assets', fileName),
+      join(__dirname, 'assets', fileName),
+    ];
+    const uniqueCandidates = Array.from(new Set(candidates));
+    return uniqueCandidates.find((candidate) => existsSync(candidate)) ?? null;
+  }
+
+  private writePdfDualColumnLines(
+    doc: any,
+    rows: Array<[string, string?]>,
+    options?: { fontSize?: number; gap?: number }
+  ) {
+    const fontSize = Math.max(Number(options?.fontSize ?? 9), 7);
+    const gap = Math.max(Number(options?.gap ?? 18), 10);
+    const startX = doc.page.margins.left;
+    const totalWidth =
+      doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    const columnWidth = (totalWidth - gap) / 2;
+    const rightX = startX + columnWidth + gap;
+    doc.font('Helvetica').fontSize(fontSize);
+    for (const [leftText, rightText] of rows) {
+      const y = doc.y;
+      const leftHeight = doc.heightOfString(leftText, { width: columnWidth });
+      const rightHeight = rightText
+        ? doc.heightOfString(rightText, { width: columnWidth })
+        : 0;
+      doc.text(leftText, startX, y, { width: columnWidth });
+      if (rightText) {
+        doc.text(rightText, rightX, y, { width: columnWidth });
+      }
+      doc.y = y + Math.max(leftHeight, rightHeight, fontSize + 2) + 2;
+    }
+  }
+
+  private formatTeacherExportScore(value: number | null | undefined) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
+    return this.toFixed2(value).toFixed(2);
+  }
+
+  private shortDateLabel(value: string) {
+    const iso = this.toIsoDateOnly(value);
+    if (!iso) return value;
+    const [, month, day] = iso.split('-');
+    return `${day}/${month}`;
+  }
+
+  private shortDayLabel(value: string) {
+    const date = new Date(`${this.toIsoDateOnly(value)}T00:00:00`);
+    const jsDay = date.getDay();
+    const dayOfWeek = jsDay === 0 ? 7 : jsDay;
+    const label = this.dayLabel(dayOfWeek);
+    return label.slice(0, 3).toUpperCase();
+  }
+
+  private computePreciseAverage(
+    components: GradeSchemeComponentRow[],
+    componentScores: Record<string, number | null>
+  ) {
+    const weightedComponents = components.filter((component) => component.weight > 0);
+    if (weightedComponents.length === 0) return 0;
+    const totalWeight = weightedComponents.reduce(
+      (acc, component) => acc + Number(component.weight ?? 0),
+      0
+    );
+    if (totalWeight <= 0) return 0;
+    const weightedSum = weightedComponents.reduce((acc, component) => {
+      const score = Number(componentScores[component.id] ?? 0);
+      return acc + score * Number(component.weight ?? 0);
+    }, 0);
+    return this.toFixed2(weightedSum / totalWeight);
+  }
+
+  private numberToSpanishGradeWords(value: number) {
+    const dictionary: Record<number, string> = {
+      0: 'CERO',
+      1: 'UNO',
+      2: 'DOS',
+      3: 'TRES',
+      4: 'CUATRO',
+      5: 'CINCO',
+      6: 'SEIS',
+      7: 'SIETE',
+      8: 'OCHO',
+      9: 'NUEVE',
+      10: 'DIEZ',
+      11: 'ONCE',
+      12: 'DOCE',
+      13: 'TRECE',
+      14: 'CATORCE',
+      15: 'QUINCE',
+      16: 'DIECISEIS',
+      17: 'DIECISIETE',
+      18: 'DIECIOCHO',
+      19: 'DIECINUEVE',
+      20: 'VEINTE',
+    };
+    const safeValue = Math.max(0, Math.min(20, Number(value ?? 0)));
+    return dictionary[safeValue] || String(safeValue);
+  }
+
+  private formatPdfTimestamp(date: Date) {
+    const safeDate = date instanceof Date ? date : new Date();
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Lima',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    }).formatToParts(safeDate);
+    const getPart = (type: Intl.DateTimeFormatPartTypes) =>
+      parts.find((part) => part.type === type)?.value ?? '';
+    const day = getPart('day');
+    const month = getPart('month');
+    const year = getPart('year');
+    const hour = getPart('hour');
+    const minutes = getPart('minute');
+    const suffix = getPart('dayPeriod').toUpperCase() || 'AM';
+    return `${day}/${month}/${year} ${hour}:${minutes} ${suffix}`;
   }
 
   private sanitizeFilePart(value: string) {

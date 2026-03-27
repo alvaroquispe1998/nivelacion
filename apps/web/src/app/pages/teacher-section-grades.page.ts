@@ -25,7 +25,35 @@ import { downloadCsvFile } from '../shared/csv';
             [disabled]="!sectionGrades || exporting || sectionGrades.students.length === 0"
             (click)="exportGradesCsv()"
           >
-            {{ exporting ? 'Exportando...' : 'Exportar notas' }}
+            {{ exporting ? 'Exportando CSV...' : 'Exportar CSV' }}
+          </button>
+          <button
+            class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50 disabled:opacity-60"
+            [disabled]="!sectionGrades || exportingConsolidated || sectionGrades.students.length === 0"
+            (click)="exportConsolidatedPdf()"
+          >
+            {{ exportingConsolidated ? 'Exportando PDF...' : 'Consolidado PDF' }}
+          </button>
+          <button
+            class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50 disabled:opacity-60"
+            [disabled]="!sectionGrades || exportingConsolidatedXlsx || sectionGrades.students.length === 0"
+            (click)="exportConsolidatedXlsx()"
+          >
+            {{ exportingConsolidatedXlsx ? 'Exportando XLSX...' : 'Consolidado XLSX' }}
+          </button>
+          <button
+            class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50 disabled:opacity-60"
+            [disabled]="!sectionGrades || exportingOfficial || sectionGrades.students.length === 0"
+            (click)="exportOfficialRecordPdf()"
+          >
+            {{ exportingOfficial ? 'Exportando PDF...' : 'Acta PDF' }}
+          </button>
+          <button
+            class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50 disabled:opacity-60"
+            [disabled]="!sectionGrades || exportingOfficialXlsx || sectionGrades.students.length === 0"
+            (click)="exportOfficialRecordXlsx()"
+          >
+            {{ exportingOfficialXlsx ? 'Exportando XLSX...' : 'Acta XLSX' }}
           </button>
           <button
             class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50"
@@ -136,6 +164,10 @@ export class TeacherSectionGradesPage {
   saving = false;
   publishing = false;
   exporting = false;
+  exportingConsolidated = false;
+  exportingConsolidatedXlsx = false;
+  exportingOfficial = false;
+  exportingOfficialXlsx = false;
   error: string | null = null;
   success: string | null = null;
 
@@ -327,6 +359,90 @@ export class TeacherSectionGradesPage {
     }
   }
 
+  async exportConsolidatedPdf() {
+    if (!this.sectionGrades) return;
+    this.error = null;
+    this.success = null;
+    this.exportingConsolidated = true;
+    try {
+      await this.downloadBlob(
+        `/api/teacher/grades/section-courses/${encodeURIComponent(this.sectionCourseId)}/export/consolidated/pdf`,
+        this.buildPdfExportFileName('consolidado_notas')
+      );
+    } catch (e: any) {
+      this.error = await this.extractDownloadError(
+        e,
+        'No se pudo exportar el consolidado de notas.'
+      );
+    } finally {
+      this.exportingConsolidated = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  async exportConsolidatedXlsx() {
+    if (!this.sectionGrades) return;
+    this.error = null;
+    this.success = null;
+    this.exportingConsolidatedXlsx = true;
+    try {
+      await this.downloadBlob(
+        `/api/teacher/grades/section-courses/${encodeURIComponent(this.sectionCourseId)}/export/consolidated/excel`,
+        this.buildExcelExportFileName('consolidado_notas')
+      );
+    } catch (e: any) {
+      this.error = await this.extractDownloadError(
+        e,
+        'No se pudo exportar el consolidado en Excel.'
+      );
+    } finally {
+      this.exportingConsolidatedXlsx = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  async exportOfficialRecordPdf() {
+    if (!this.sectionGrades) return;
+    this.error = null;
+    this.success = null;
+    this.exportingOfficial = true;
+    try {
+      await this.downloadBlob(
+        `/api/teacher/grades/section-courses/${encodeURIComponent(this.sectionCourseId)}/export/official-record/pdf`,
+        this.buildPdfExportFileName('acta_oficial_notas')
+      );
+    } catch (e: any) {
+      this.error = await this.extractDownloadError(
+        e,
+        'No se pudo exportar el acta oficial.'
+      );
+    } finally {
+      this.exportingOfficial = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  async exportOfficialRecordXlsx() {
+    if (!this.sectionGrades) return;
+    this.error = null;
+    this.success = null;
+    this.exportingOfficialXlsx = true;
+    try {
+      await this.downloadBlob(
+        `/api/teacher/grades/section-courses/${encodeURIComponent(this.sectionCourseId)}/export/official-record/excel`,
+        this.buildExcelExportFileName('acta_oficial_notas')
+      );
+    } catch (e: any) {
+      this.error = await this.extractDownloadError(
+        e,
+        'No se pudo exportar el acta oficial en Excel.'
+      );
+    } finally {
+      this.exportingOfficialXlsx = false;
+      this.cdr.detectChanges();
+    }
+  }
+
   private extractError(error: any, fallback: string) {
     const err = error?.error;
     if (typeof err?.message === 'string' && err.message.trim()) return err.message;
@@ -340,6 +456,94 @@ export class TeacherSectionGradesPage {
     const sectionPart = this.sanitizeFileNamePart(this.sectionLabel || 'seccion');
     const coursePart = this.sanitizeFileNamePart(this.courseLabel || 'curso');
     return `${sectionPart}_${coursePart}_notas.csv`;
+  }
+
+  private buildPdfExportFileName(prefix: string) {
+    const sectionPart = this.sanitizeFileNamePart(this.sectionLabel || 'seccion');
+    const coursePart = this.sanitizeFileNamePart(this.courseLabel || 'curso');
+    return `${prefix}_${sectionPart}_${coursePart}.pdf`;
+  }
+
+  private buildExcelExportFileName(prefix: string) {
+    const sectionPart = this.sanitizeFileNamePart(this.sectionLabel || 'seccion');
+    const coursePart = this.sanitizeFileNamePart(this.courseLabel || 'curso');
+    return `${prefix}_${sectionPart}_${coursePart}.xlsx`;
+  }
+
+  private async downloadBlob(url: string, fallbackName: string) {
+    const response = await firstValueFrom(
+      this.http.get(url, {
+        observe: 'response',
+        responseType: 'blob',
+      })
+    );
+    const blob = response.body;
+    if (!blob) {
+      throw new Error('No se recibio archivo para descargar.');
+    }
+    const fileName = this.extractDownloadFileName(
+      response.headers.get('content-disposition'),
+      fallbackName
+    );
+    const objectUrl = window.URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = fileName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.URL.revokeObjectURL(objectUrl);
+  }
+
+  private async extractDownloadError(error: any, fallback: string) {
+    const blob = error?.error;
+    if (blob instanceof Blob) {
+      try {
+        const text = await blob.text();
+        if (text.trim()) {
+          try {
+            const parsed = JSON.parse(text);
+            const message = parsed?.message;
+            if (typeof message === 'string' && message.trim()) {
+              return message;
+            }
+            if (
+              message &&
+              typeof message === 'object' &&
+              typeof message.message === 'string' &&
+              message.message.trim()
+            ) {
+              return message.message;
+            }
+          } catch {
+            // Fall back to raw text when the error payload is not JSON.
+          }
+          return text.trim();
+        }
+      } catch {
+        // Ignore blob parsing issues and use the generic extractor below.
+      }
+    }
+    return this.extractError(error, fallback);
+  }
+
+  private extractDownloadFileName(
+    disposition: string | null,
+    fallbackName: string
+  ) {
+    const encodedMatch = disposition?.match(/filename\*=UTF-8''([^;]+)/i);
+    if (encodedMatch?.[1]) {
+      return this.cleanFileName(decodeURIComponent(encodedMatch[1]));
+    }
+    const simpleMatch = disposition?.match(/filename="?([^";]+)"?/i);
+    if (simpleMatch?.[1]) {
+      return this.cleanFileName(simpleMatch[1]);
+    }
+    return this.cleanFileName(fallbackName);
+  }
+
+  private cleanFileName(value: string) {
+    return String(value ?? '').replace(/[\\/:*?"<>|]+/g, '').trim() || 'archivo.pdf';
   }
 
   private exportApprovalStatus(row: SectionCourseGradesResponse['students'][number]) {
