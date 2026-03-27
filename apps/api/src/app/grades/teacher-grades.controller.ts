@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Put,
+  StreamableFile,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Role } from '@uai/shared';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -48,5 +57,68 @@ export class TeacherGradesController {
       user.sub
     );
   }
-}
 
+  @Get('section-courses/:sectionCourseId/export/consolidated/pdf')
+  async exportSectionCourseConsolidatedPdf(
+    @Param('sectionCourseId') sectionCourseId: string,
+    @CurrentUser() user: JwtUser
+  ): Promise<StreamableFile> {
+    const { fileBuffer, fileName } =
+      await this.gradesService.buildTeacherSectionCourseConsolidatedPdf(
+        sectionCourseId,
+        user.sub
+      );
+    return new StreamableFile(fileBuffer, {
+      type: 'application/pdf',
+      disposition: `attachment; filename="${fileName}"`,
+    });
+  }
+
+  @Get('section-courses/:sectionCourseId/export/consolidated/excel')
+  async exportSectionCourseConsolidatedExcel(
+    @Param('sectionCourseId') sectionCourseId: string,
+    @CurrentUser() user: JwtUser
+  ): Promise<StreamableFile> {
+    const { fileBuffer, fileName } =
+      await this.gradesService.buildTeacherSectionCourseConsolidatedExcel(
+        sectionCourseId,
+        user.sub
+      );
+    return new StreamableFile(fileBuffer, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="${fileName}"`,
+    });
+  }
+
+  @Get('section-courses/:sectionCourseId/export/official-record/pdf')
+  async exportSectionCourseOfficialRecordPdf(
+    @Param('sectionCourseId') sectionCourseId: string,
+    @CurrentUser() user: JwtUser
+  ): Promise<StreamableFile> {
+    const { fileBuffer, fileName } =
+      await this.gradesService.buildTeacherSectionCourseOfficialRecordPdf(
+        sectionCourseId,
+        user.sub
+      );
+    return new StreamableFile(fileBuffer, {
+      type: 'application/pdf',
+      disposition: `attachment; filename="${fileName}"`,
+    });
+  }
+
+  @Get('section-courses/:sectionCourseId/export/official-record/excel')
+  async exportSectionCourseOfficialRecordExcel(
+    @Param('sectionCourseId') sectionCourseId: string,
+    @CurrentUser() user: JwtUser
+  ): Promise<StreamableFile> {
+    const { fileBuffer, fileName } =
+      await this.gradesService.buildTeacherSectionCourseOfficialRecordExcel(
+        sectionCourseId,
+        user.sub
+      );
+    return new StreamableFile(fileBuffer, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="${fileName}"`,
+    });
+  }
+}

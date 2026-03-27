@@ -7,6 +7,7 @@ import {
   Post,
   Put,
   Query,
+  StreamableFile,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -22,6 +23,7 @@ import { CreateAttendanceSessionDto } from '../attendance/dto/create-attendance-
 import { UpdateAttendanceRecordDto } from '../attendance/dto/update-attendance-record.dto';
 import { ScheduleBlocksService } from '../schedule-blocks/schedule-blocks.service';
 import { SectionsService } from '../sections/sections.service';
+import { GradesService } from '../grades/grades.service';
 import { WorkshopsService } from '../workshops/workshops.service';
 
 @ApiTags('teacher')
@@ -35,6 +37,7 @@ export class TeacherController {
     private readonly attendanceService: AttendanceService,
     private readonly scheduleBlocksService: ScheduleBlocksService,
     private readonly sectionsService: SectionsService,
+    private readonly gradesService: GradesService,
     private readonly workshopsService: WorkshopsService
   ) {}
 
@@ -376,6 +379,42 @@ export class TeacherController {
       })),
       user.sub
     );
+  }
+
+  @Get('section-courses/:sectionCourseId/attendance/blocks/:scheduleBlockId/export/pdf')
+  async exportAttendancePdf(
+    @Param('sectionCourseId') sectionCourseId: string,
+    @Param('scheduleBlockId') scheduleBlockId: string,
+    @CurrentUser() user: JwtUser
+  ): Promise<StreamableFile> {
+    const { fileBuffer, fileName } =
+      await this.gradesService.buildTeacherSectionCourseAttendancePdf(
+        sectionCourseId,
+        scheduleBlockId,
+        user.sub
+      );
+    return new StreamableFile(fileBuffer, {
+      type: 'application/pdf',
+      disposition: `attachment; filename="${fileName}"`,
+    });
+  }
+
+  @Get('section-courses/:sectionCourseId/attendance/blocks/:scheduleBlockId/export/excel')
+  async exportAttendanceExcel(
+    @Param('sectionCourseId') sectionCourseId: string,
+    @Param('scheduleBlockId') scheduleBlockId: string,
+    @CurrentUser() user: JwtUser
+  ): Promise<StreamableFile> {
+    const { fileBuffer, fileName } =
+      await this.gradesService.buildTeacherSectionCourseAttendanceExcel(
+        sectionCourseId,
+        scheduleBlockId,
+        user.sub
+      );
+    return new StreamableFile(fileBuffer, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="${fileName}"`,
+    });
   }
 
   private async assertTeacherAssignmentOrThrow(teacherId: string, sectionCourseId: string) {

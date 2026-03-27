@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuditModule } from '../audit/audit.module';
+import { GradesModule } from '../grades/grades.module';
 import { PeriodsModule } from '../periods/periods.module';
 import { ScheduleBlockEntity } from '../schedule-blocks/schedule-block.entity';
 import { UsersModule } from '../users/users.module';
@@ -19,6 +20,7 @@ import { AttendanceService } from './attendance.service';
     PeriodsModule,
     UsersModule,
     AuditModule,
+    GradesModule,
   ],
   controllers: [AttendanceController],
   providers: [AttendanceService],
