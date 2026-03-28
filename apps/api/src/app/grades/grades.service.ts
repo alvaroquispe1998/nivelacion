@@ -919,7 +919,14 @@ export class GradesService {
         this.writeTeacherPageFooter(tableDoc, pageNumber),
     });
 
-    const currentPage = tableState.pageNumber;
+    const signatureBlocks = this.buildTeacherSignatureBlocks(report.teacherName);
+    let currentPage = tableState.pageNumber;
+    currentPage = this.ensureTeacherPageSpace(
+      doc,
+      this.measureTeacherSignatureBlocksHeight(doc, signatureBlocks),
+      currentPage
+    );
+    this.writeTeacherSignatureBlocks(doc, signatureBlocks);
     this.writeTeacherPageFooter(doc, currentPage);
 
     return {
@@ -978,6 +985,7 @@ export class GradesService {
       student.totalAttended,
     ]);
     const widths = [6, 16, 36, ...report.dates.map(() => 12), 10];
+    const signatureBlocks = this.buildTeacherSignatureBlocks(report.teacherName);
     return {
       fileBuffer: await this.buildTeacherExcelWorkbook({
         sheetName: 'Asistencia',
@@ -989,6 +997,7 @@ export class GradesService {
         infoRows,
         tableHeader,
         tableRows,
+        signatureBlocks,
       }),
       fileName: this.buildTeacherAttendanceExportFileName(
         report.sectionCourse,
